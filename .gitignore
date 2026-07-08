@@ -1,0 +1,33 @@
+# Python cache and virtual environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# Local IDE/editor files
+.vscode/
+.idea/
+
+# Generated simulation outputs
+dataset/
+probe_runs/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+
+# Large model/data artifacts
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.zip
+*.tar
+*.tar.gz
+*.7z
+
+# OS metadata
+.DS_Store
+Thumbs.db

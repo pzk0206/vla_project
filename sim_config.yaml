@@ -1,0 +1,100 @@
+# =====================================================================
+# 具身智能物理仿真环境 - 工业级外部场景配置文件 (sim_config.yaml)
+# 所有经常调参的内容统一放在这里，control_arm.py 只负责执行逻辑。
+#
+# 使用建议：
+# - 想看机械臂窗口：connection_mode 写 GUI，enable_time_sleep 写 true。
+# - 想快速批量采集：connection_mode 写 DIRECT，enable_time_sleep 写 false。
+# - 想让图片变化更明显：提高 max_velocity，或降低 capture_interval_steps。
+# - 想减少静止垃圾帧：降低 force_terminal_after_step，或适当放宽 success_distance。
+# =====================================================================
+
+# 1. 引擎连接模式：
+# [场景 A] 本地调测看画面：写 GUI
+# [场景 B] 云端服务器超频训练：写 DIRECT
+# GUI 会打开可视化窗口，便于观察；DIRECT 没窗口，但采集速度更快。
+connection_mode: "DIRECT"
+
+# 2. 物理世界重力配置 [X, Y, Z]：
+# [场景 A] 地面标准实验室：[0, 0, -9.8]
+# [场景 B] 天花板倒装流水线：[0, 0, 9.8]
+# [场景 C] 太空微重力卫星抓取：[0, 0, 0]
+# 单位近似按 m/s^2 理解。正常桌面机械臂任务一般保持 [0, 0, -9.8]。
+gravity: [0, 0, -9.8]
+
+# 3. 时间流速与时间锁：
+# [场景 A] 人类调试看画面：写 true
+# [场景 B] 云端高速采集数据：写 false
+# enable_time_sleep=true 时，每个仿真 step 后 sleep 1/simulation_hz 秒，
+# 这样 GUI 里看起来接近真实时间；false 时会尽可能快地跑。
+enable_time_sleep: false
+simulation_hz: 240                  # PyBullet 常用物理频率，240 表示每秒 240 个仿真 step。
+
+# 4. 机器人资产与控制参数：
+robot:
+  urdf_path: "kuka_iiwa/model.urdf"  # 机器人模型路径；换机器人时优先改这里。
+  base_position: [0, 0, 0]           # 机械臂底座位置；一般保持原点。
+  use_fixed_base: true               # true 表示机械臂底座固定，不会被物理碰撞推走。
+  ee_link_index: 6                   # 末端执行器 link 编号；如果换机器人必须重新确认。
+  controlled_joints: 7               # KUKA iiwa 有 7 个主关节，所以这里是 7。
+  max_force: 100                     # 电机最大输出力；太小会推不动，太大可能动作硬。
+  max_velocity: 0.6                  # 电机最大速度(rad/s)；太小图片变化慢，太大轨迹不平滑。
+  ik_residual_threshold: 0.001       # IK 求解精度；0.001 约等于 1 mm 级别。
+  target_orientation_euler: [0, 3.141592653589793, 0]  # 末端朝下姿态
+
+# 5. 数据集采集配置：
+dataset:
+  output_dir: "dataset"              # 图片和 JSONL 的输出目录。
+  jsonl_name: "trajectory_expert.jsonl"  # 训练标签文件，一行对应一张图片。
+  summary_jsonl_name: "episode_summary.jsonl"  # 每条轨迹的诊断摘要，一行对应一个 episode。
+  clean_before_run: true             # true 会删除旧 dataset；想追加数据时改 false。
+  num_episodes: 50                   # 当前这版参数已验证有效，恢复到常规采集规模。
+  max_steps_per_episode: 1000        # 单条轨迹最多跑多少个仿真 step。
+  capture_interval_steps: 24         # 每隔多少 step 保存一帧；越小图片越密、数据越大。
+  instruction: "悬停在红色积木上方"  # 写入 JSONL 的语言指令。
+  default_gripper_state: 1.0         # 当前没有真实夹爪控制，先用固定值占位。
+
+# 6. 任务与目标物配置：
+task:
+  block_urdf_path: "cube.urdf"       # 目标物 URDF；当前用 PyBullet 自带方块。
+  block_position:
+    x_range: [-0.2, 0.2]             # 积木 x 轴随机范围；加大可增强泛化。
+    y_range: [0.38, 0.5]             # 积木 y 轴随机范围；先收窄到当前更稳定的可达区域。
+    z: 0.1                           # 积木初始高度；cube 缩放后放在桌面附近。
+  block_global_scaling: 0.1          # 先略微放大目标物，提高图片里的可见性和学习信号。
+  block_color_rgba: [1, 0, 0, 1]     # RGBA：红、绿、蓝、透明度；当前是纯红不透明。
+  hover_height: 0.15                 # 目标点比积木中心高多少米；太低会撞物体。
+  success_distance: 0.03             # Baseline 1 先用 3cm 验收悬停稳定性，再逐步收紧。
+  force_terminal_after_step: 976     # 防止失败轨迹无限保存；到这个 step 强制结束。
+  initial_settle_steps: 30           # 积木加载后先让物理稳定一小段时间，避免未落稳就开始录制。
+  stuck_window_steps: 120            # 最近多少个 step 用来判断机械臂是否卡住。
+  stuck_min_improvement: 0.0005      # 在窗口期内如果总改善小于该值，就认为基本没有继续靠近目标。
+
+# 7. 摄像机配置：
+camera:
+  workspace_center: [0.0, 0.4, 0.0] # 相机始终看向的工作区中心。
+  eye_offset_base: [1.05, 0.0, 1.65] # 稍微拉近并降低相机，让红块和末端在图中更大。
+  eye_offset_random_range: [-0.1, 0.1]  # 每个 episode 给相机加一点随机扰动。
+  up_vector: [0, 0, 1]               # 哪个方向算画面上方；通常保持 z 轴向上。
+  image_width: 224                   # 图片宽度；训练常用 224，也可改 320/448。
+  image_height: 224                  # 图片高度；宽高保持一致最简单。
+  fov: 50                            # 缩小视场角，让目标区域在图中占比更大。
+  near_val: 0.1                      # 近裁剪面；距离相机太近的东西会被裁掉。
+  far_val: 100.0                     # 远裁剪面；当前场景很小，100 足够。
+
+# 8. 阶段三最小闭环探路配置：
+probe:
+  mode: "heuristic"                  # heuristic 先离线验闭环；api 时走真实多模态模型。
+  output_dir: "probe_runs"           # 保存阶段三探路图片和日志。
+  save_trace_images: true            # 是否保存每一步的观测图，方便复盘模型判断。
+  max_control_steps: 20              # 一次闭环最多让模型决策多少步。
+  sim_steps_per_action: 12           # 每次决策后，在物理世界里执行多少个子 step。
+  move_step_xy: 0.03                 # left/right/front/back 每次移动的平面步长。
+  hover_height: 0.15                 # 闭环控制时仍然保持在积木上方的悬停高度。
+  stop_distance_xy: 0.02             # 末端与目标在 xy 平面足够接近时，判定 stop。
+  api:
+    base_url_env: "VLA_API_BASE_URL" # 例如 http://host:port/v1
+    api_key_env: "VLA_API_KEY"       # 多模态 API Key 环境变量名。
+    model_env: "VLA_MODEL_NAME"      # 模型名环境变量名。
+    endpoint_path: "/chat/completions" # OpenAI 兼容接口路径。
+    temperature: 0.0                 # 探路阶段尽量让输出稳定。
