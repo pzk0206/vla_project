@@ -214,12 +214,25 @@ API 多模态模型
 
 ## 10. 下一步方向
 
+在修复单次方向执行后，我新增了 `evaluate_probe.py`，用固定种子 42 连续评估 20 个随机 episode。配置为 `max_control_steps=80`、`sim_steps_per_action=60`、`move_step_xy=0.03`，结果是：
+
+```text
+success: 5/20
+success_rate: 25%
+max_control_steps: 15
+error: 0
+final_distance mean / median / max: 0.4989 / 0.5948 / 0.8137 m
+control_steps mean / median: 72.05 / 80
+```
+
+这说明批量评估系统已经跑通，但 heuristic 还不稳定。失败 trace 中存在 left/front 往复切换和距离反复增大的现象；下一步应该先按失败位置与动作序列分析振荡原因，再做单变量控制调优，而不是直接进入 VLM。
+
 当前项目阶段可以这样总结：
 
 - Baseline 0 已完成：采集闭环已经跑通。
 - Baseline 1 基本可用：数据能读、图片能看、episode 全部成功。
 - 阶段三已经开始产生有效闭环结果：修复后的单次方向 probe 能从远距离接近到目标附近。
-- 当前还缺少批量评估：不能只凭一次 trace 判断系统稳定。
+- 首批 20 次批量评估已完成，但 25% 成功率尚未达到 80% 门槛。
 
 下一步我应该优先做：
 

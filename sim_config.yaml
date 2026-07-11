@@ -98,3 +98,10 @@ probe:
     model_env: "VLA_MODEL_NAME"      # 模型名环境变量名。
     endpoint_path: "/chat/completions" # OpenAI 兼容接口路径。
     temperature: 0.0                 # 探路阶段尽量让输出稳定。
+
+# 9. Stage 3 批量评估配置：
+probe_evaluation:
+  num_episodes: 20                   # 先完成 20 次首批评估，稳定后改为 50。
+  output_dir: "probe_eval_runs"       # 每次评估会在这里创建带时间戳的批次目录。
+  save_failure_images_only: true     # 成功只留 trace，失败保留图片用于复盘。
+  random_seed: 42                    # episode i 使用 random_seed + i，保证可复现。

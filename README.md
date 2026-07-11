@@ -127,6 +127,18 @@ export VLA_MODEL_NAME="your_model_name"
 python stage3_probe.py
 ```
 
+## Stage 3 批量评估
+
+批量评估使用固定随机种子运行 heuristic probe，并为每个 episode 保存独立 trace：
+
+```bash
+conda run -n vla_env python evaluate_probe.py
+```
+
+运行次数、输出目录和失败图片策略由 `sim_config.yaml` 的 `probe_evaluation` 控制。结果写入 `probe_eval_runs/run_*/`；成功 episode 只保留 trace，失败 episode 保留 trace 和步骤图片。
+
+当前首批 20 次结果为 5 成功、15 次 `max_control_steps`，成功率 25%。这说明评估系统已经可用，但 heuristic 控制尚未达到 80% 的阶段门槛。
+
 ## 数据格式
 
 `trajectory_expert.jsonl` 每行是一个样本，核心字段包括：

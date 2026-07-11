@@ -18,9 +18,16 @@ class ConfigContractTests(unittest.TestCase):
                 "task",
                 "camera",
                 "probe",
+                "probe_evaluation",
             }
             <= self.config.keys()
         )
+
+    def test_probe_evaluation_config_is_valid(self):
+        evaluation = self.config["probe_evaluation"]
+        self.assertGreater(evaluation["num_episodes"], 0)
+        self.assertTrue(evaluation["output_dir"])
+        self.assertIsInstance(evaluation["random_seed"], int)
 
     def test_probe_distances_and_steps_are_positive(self):
         probe = self.config["probe"]

@@ -1,10 +1,12 @@
 import base64
 import json
 import os
+import random
 import re
 import time
 import urllib.error
 import urllib.request
+from collections import Counter
 
 import cv2
 import pybullet as p
@@ -267,7 +269,28 @@ def write_probe_trace(trace_jsonl_path, row):
         trace_file.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
-def main():
+def summarize_probe_trace(rows, episode_idx, random_seed, trace_path):
+    """把一条 probe trace 汇总为 episode 级诊断结果。"""
+    if not rows:
+        raise ValueError("probe trace 不能为空")
+    last = rows[-1]
+    return {
+        "episode_idx": episode_idx,
+        "random_seed": random_seed,
+        "success": last["termination_reason"] == "success",
+        "termination_reason": last["termination_reason"],
+        "num_control_steps": len(rows),
+        "initial_distance": rows[0]["distance_before"],
+        "final_distance": last["distance_after"],
+        "final_block_pos": list(last["block_pos"]),
+        "direction_counts": dict(Counter(row["direction"] for row in rows)),
+        "distance_increase_steps": sum(row["distance_delta"] < 0 for row in rows),
+        "trace_path": str(trace_path),
+        "error": None,
+    }
+
+
+def run_probe_episode(config, episode_idx, episode_dir, random_seed=None):
     """阶段三最小闭环探路主流程。
 
     一次运行只放一个红色积木，最多执行 max_control_steps 次控制：
@@ -278,7 +301,8 @@ def main():
     5. 推进若干物理仿真 step。
     6. 写 probe_trace.jsonl 方便复盘。
     """
-    config = load_config(CONFIG_PATH)
+    if random_seed is not None:
+        random.seed(random_seed)
     probe_config = config["probe"]
     robot_config = config["robot"]
     task_config = config["task"]
@@ -292,7 +316,7 @@ def main():
 
     # probe_runs/ 是阶段三探路输出，不进入 Git 仓库。
     # 每次运行会覆盖旧 trace，图片文件名按 step 编号重写。
-    output_dir = probe_config["output_dir"]
+    output_dir = str(episode_dir)
     ensure_dir(output_dir)
     trace_jsonl_path = os.path.join(output_dir, "probe_trace.jsonl")
     if os.path.exists(trace_jsonl_path):
@@ -306,6 +330,7 @@ def main():
         f"X:{camera_eye[0]:.2f}, Y:{camera_eye[1]:.2f}, Z:{camera_eye[2]:.2f}"
     )
 
+    trace_rows = []
     try:
         for control_step in range(probe_config["max_control_steps"]):
             # 读取当前红块位置，构造“红块正上方”的悬停目标点。
@@ -372,9 +397,7 @@ def main():
             )
             # 记录这一控制步的完整上下文，后续可用来排查：
             # 模型判断错了、方向映射错了、还是 IK/物理控制没跟上。
-            write_probe_trace(
-                trace_jsonl_path,
-                {
+            trace_row = {
                     "control_step": control_step,
                     "decision_source": decision_source,
                     "direction": direction,
@@ -391,8 +414,9 @@ def main():
                     "distance_delta": distance_delta,
                     "termination_reason": termination_reason,
                     "image_path": image_filename if probe_config["save_trace_images"] else None,
-                },
-            )
+                }
+            write_probe_trace(trace_jsonl_path, trace_row)
+            trace_rows.append(trace_row)
 
             # 终止依据真实动作结果，不强依赖方向词是否已经输出 stop。
             if termination_reason == "success":
@@ -403,10 +427,22 @@ def main():
                     "⚠️ [PROBE] 已达到最大控制步数，"
                     f"最终距离 {distance_after:.3f}m。"
                 )
+        return summarize_probe_trace(
+            trace_rows,
+            episode_idx,
+            random_seed,
+            trace_jsonl_path,
+        )
     finally:
         # 不管中途是否报错，都清理 PyBullet 资源，避免下次运行残留物体。
         p.removeBody(block_id)
         p.disconnect()
+
+
+def main():
+    """保持单次 probe 命令兼容。"""
+    config = load_config(CONFIG_PATH)
+    run_probe_episode(config, 0, config["probe"]["output_dir"])
 
 
 if __name__ == "__main__":

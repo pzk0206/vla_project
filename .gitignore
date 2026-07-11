@@ -12,6 +12,7 @@ env/
 # Generated simulation outputs
 dataset/
 probe_runs/
+probe_eval_runs/
 
 # Logs and temporary files
 *.log

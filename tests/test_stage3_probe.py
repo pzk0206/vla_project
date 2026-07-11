@@ -4,6 +4,7 @@ from stage3_probe import (
     decide_direction,
     determine_probe_termination,
     direction_to_target,
+    summarize_probe_trace,
 )
 
 
@@ -67,6 +68,21 @@ class DetermineProbeTerminationTests(unittest.TestCase):
             determine_probe_termination(0.5, 10, 80, 0.03),
             "running",
         )
+
+
+class SummarizeProbeTraceTests(unittest.TestCase):
+    def test_builds_episode_summary(self):
+        rows = [
+            {"direction": "front", "distance_before": 1.0, "distance_after": 0.8, "distance_delta": 0.2, "termination_reason": "running", "block_pos": [0.1, 0.4, 0.05]},
+            {"direction": "left", "distance_before": 0.8, "distance_after": 0.9, "distance_delta": -0.1, "termination_reason": "max_control_steps", "block_pos": [0.1, 0.4, 0.05]},
+        ]
+        summary = summarize_probe_trace(rows, 3, 45, "run/trace.jsonl")
+        self.assertEqual(summary["num_control_steps"], 2)
+        self.assertEqual(summary["initial_distance"], 1.0)
+        self.assertEqual(summary["final_distance"], 0.9)
+        self.assertEqual(summary["direction_counts"], {"front": 1, "left": 1})
+        self.assertEqual(summary["distance_increase_steps"], 1)
+        self.assertFalse(summary["success"])
 
 
 if __name__ == "__main__":
