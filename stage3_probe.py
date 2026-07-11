@@ -47,6 +47,36 @@ DIRECTION_TO_DELTA = {
 }
 
 
+def direction_to_target(direction, ee_pos, hover_height, move_step_xy):
+    """把世界坐标方向转换成单步末端目标位置。
+
+    heuristic 和 API 都必须经过这个函数，确保日志里的方向词就是
+    机械臂实际执行的 x/y 位移，而不是被某个决策来源的特殊分支绕过。
+    """
+    if direction not in DIRECTION_TO_DELTA:
+        raise ValueError(f"未知方向: {direction}")
+    delta_x, delta_y = DIRECTION_TO_DELTA[direction]
+    return [
+        ee_pos[0] + delta_x * move_step_xy,
+        ee_pos[1] + delta_y * move_step_xy,
+        hover_height,
+    ]
+
+
+def determine_probe_termination(
+    distance_after,
+    control_step,
+    max_control_steps,
+    success_distance,
+):
+    """返回当前 probe 控制步的终止状态。"""
+    if distance_after <= success_distance:
+        return "success"
+    if control_step >= max_control_steps - 1:
+        return "max_control_steps"
+    return "running"
+
+
 def ensure_dir(path):
     """确保输出目录存在。
 
@@ -214,12 +244,16 @@ def decide_direction(probe_config, image_bgr, ee_pos, block_pos):
     if mode == "api":
         direction, raw_response = call_openai_compatible_api(image_bgr, probe_config["api"])
         return direction, raw_response, "api"
-    direction, raw_response = heuristic_direction(
-        ee_pos,
-        block_pos,
-        probe_config["stop_distance_xy"],
+    if mode == "heuristic":
+        direction, raw_response = heuristic_direction(
+            ee_pos,
+            block_pos,
+            probe_config["stop_distance_xy"],
+        )
+        return direction, raw_response, "heuristic"
+    raise ValueError(
+        f"probe.mode 只能是 heuristic 或 api，当前值: {probe_config['mode']}"
     )
-    return direction, raw_response, "heuristic"
 
 
 def write_probe_trace(trace_jsonl_path, row):
@@ -281,9 +315,9 @@ def main():
                 block_pos[1],
                 block_pos[2] + probe_config["hover_height"],
             ]
-            # 读取机械臂末端位置，用来判断离目标还有多远。
-            ee_pos = get_link_position(robot_id, robot_config["ee_link_index"])
-            distance_to_hover = euclidean_distance(ee_pos, hover_target)
+            # 读取动作前的末端位置和距离，后面再和动作后距离对比。
+            ee_pos_before = get_link_position(robot_id, robot_config["ee_link_index"])
+            distance_before = euclidean_distance(ee_pos_before, hover_target)
 
             # 采集当前相机图片。API 模式会把这张图发给多模态模型；
             # heuristic 模式虽然不靠图片决策，但保存图片便于人肉复盘。
@@ -297,22 +331,18 @@ def main():
             direction, raw_response, decision_source = decide_direction(
                 probe_config,
                 image_bgr,
-                ee_pos,
+                ee_pos_before,
                 block_pos,
             )
 
-            # 把离散方向词转换成 PyBullet 世界坐标里的下一步目标点。
-            # stop 时直接把目标设为红块上方悬停点；
-            # 其他方向则从当前末端位置出发，在 x/y 平面移动一个小步长。
-            if direction == "stop":
-                target_pos = hover_target
-            else:
-                delta_x, delta_y = DIRECTION_TO_DELTA[direction]
-                target_pos = [
-                    ee_pos[0] + delta_x * probe_config["move_step_xy"],
-                    ee_pos[1] + delta_y * probe_config["move_step_xy"],
-                    hover_target[2],
-                ]
+            # heuristic 和 API 共用同一条执行路径：方向词决定真实的单步位移。
+            # 这里的方向属于 PyBullet 世界坐标，不等同于相机图像中的左右前后。
+            target_pos = direction_to_target(
+                direction,
+                ee_pos_before,
+                hover_target[2],
+                probe_config["move_step_xy"],
+            )
 
             # IK 把“末端应该去哪里”转换成“7 个关节应该转到什么角度”。
             target_joint_angles = calculate_target_joints(robot_id, robot_config, target_pos)
@@ -324,9 +354,21 @@ def main():
                 if config["enable_time_sleep"]:
                     time.sleep(1.0 / config["simulation_hz"])
 
+            # 动作执行后重新读末端位置，用真实结果判断这一步是否有效。
+            ee_pos_after = get_link_position(robot_id, robot_config["ee_link_index"])
+            distance_after = euclidean_distance(ee_pos_after, hover_target)
+            distance_delta = distance_before - distance_after
+            termination_reason = determine_probe_termination(
+                distance_after=distance_after,
+                control_step=control_step,
+                max_control_steps=probe_config["max_control_steps"],
+                success_distance=task_config["success_distance"],
+            )
+
             print(
                 f"🧭 [PROBE] step={control_step} source={decision_source} "
-                f"direction={direction} distance={distance_to_hover:.3f}"
+                f"direction={direction} before={distance_before:.3f} "
+                f"after={distance_after:.3f} delta={distance_delta:.3f}"
             )
             # 记录这一控制步的完整上下文，后续可用来排查：
             # 模型判断错了、方向映射错了、还是 IK/物理控制没跟上。
@@ -337,20 +379,30 @@ def main():
                     "decision_source": decision_source,
                     "direction": direction,
                     "raw_response": raw_response,
-                    "ee_pos": list(ee_pos),
+                    "ee_pos": list(ee_pos_after),
+                    "ee_pos_before": list(ee_pos_before),
+                    "ee_pos_after": list(ee_pos_after),
                     "block_pos": list(block_pos),
                     "hover_target": list(hover_target),
                     "target_pos": list(target_pos),
-                    "distance_to_hover": distance_to_hover,
+                    "distance_to_hover": distance_after,
+                    "distance_before": distance_before,
+                    "distance_after": distance_after,
+                    "distance_delta": distance_delta,
+                    "termination_reason": termination_reason,
                     "image_path": image_filename if probe_config["save_trace_images"] else None,
                 },
             )
 
-            # 只有模型/规则说 stop，并且真实距离也满足 success_distance，
-            # 才认为这次闭环探路成功结束。
-            if direction == "stop" and distance_to_hover <= task_config["success_distance"]:
-                print("✅ [PROBE] 模型已判定 stop，且末端已接近悬停目标。")
+            # 终止依据真实动作结果，不强依赖方向词是否已经输出 stop。
+            if termination_reason == "success":
+                print("✅ [PROBE] 末端已接近悬停目标。")
                 break
+            if termination_reason == "max_control_steps":
+                print(
+                    "⚠️ [PROBE] 已达到最大控制步数，"
+                    f"最终距离 {distance_after:.3f}m。"
+                )
     finally:
         # 不管中途是否报错，都清理 PyBullet 资源，避免下次运行残留物体。
         p.removeBody(block_id)

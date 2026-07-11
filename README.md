@@ -12,7 +12,9 @@
 
 ## 当前阶段
 
-项目处在 Baseline 1：提升“悬停到红色积木上方”的数据质量。
+当前主线是：Baseline 1 数据基线基本可用，正在推进 Stage 3 闭环评估。
+
+也就是说，离线专家采集已经能生成可诊断的悬停数据；下一步重点不是继续盲目采图，而是验证在线闭环控制在多次随机目标位置下是否稳定。
 
 已经具备：
 
@@ -23,6 +25,7 @@
 - RGB 图像、语言指令、动作标签的 JSONL 数据输出。
 - `termination_reason`、`distance_to_target`、episode 摘要等基础可观测性。
 - 阶段三最小闭环探路脚本，可用启发式或 OpenAI 兼容多模态 API 输出方向控制。
+- heuristic 和 API 共用同一条世界坐标方向执行路径，trace 会记录 `running`、`success` 或 `max_control_steps`。
 
 暂时不做：
 
@@ -40,6 +43,7 @@
 ├── sim_config.yaml      # 仿真、相机、任务、数据集配置
 ├── requirements.txt     # Python 依赖
 ├── README.md            # 项目说明
+├── WORKLOG.md           # 从零开始的项目工作日志
 └── .gitignore           # Git 忽略规则
 ```
 
@@ -145,6 +149,8 @@ python stage3_probe.py
 - 失败轨迹是否集中在某些积木位置范围。
 
 ## Baseline 路线
+
+更细的推进过程、调参原因、数据质量判断和阶段三 probe 细节，记录在 `WORKLOG.md`。
 
 ### Baseline 0：跑通悬停闭环
 

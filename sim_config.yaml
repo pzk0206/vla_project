@@ -87,8 +87,8 @@ probe:
   mode: "heuristic"                  # heuristic 先离线验闭环；api 时走真实多模态模型。
   output_dir: "probe_runs"           # 保存阶段三探路图片和日志。
   save_trace_images: true            # 是否保存每一步的观测图，方便复盘模型判断。
-  max_control_steps: 20              # 一次闭环最多让模型决策多少步。
-  sim_steps_per_action: 12           # 每次决策后，在物理世界里执行多少个子 step。
+  max_control_steps: 80              # 一次闭环最多让模型决策多少步。
+  sim_steps_per_action: 60           # 每次决策后，在物理世界里执行多少个子 step。
   move_step_xy: 0.03                 # left/right/front/back 每次移动的平面步长。
   hover_height: 0.15                 # 闭环控制时仍然保持在积木上方的悬停高度。
   stop_distance_xy: 0.02             # 末端与目标在 xy 平面足够接近时，判定 stop。

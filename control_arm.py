@@ -81,6 +81,19 @@ def prepare_dataset(dataset_config):
     return dataset_dir, jsonl_path, summary_jsonl_path
 
 
+def next_episode_index(summary_jsonl_path):
+    """根据已有摘要返回追加采集应使用的下一个 episode 编号。"""
+    if not os.path.exists(summary_jsonl_path):
+        return 0
+
+    episode_indices = []
+    with open(summary_jsonl_path, "r", encoding="utf-8") as summary_file:
+        for line in summary_file:
+            if line.strip():
+                episode_indices.append(json.loads(line)["episode_idx"])
+    return max(episode_indices, default=-1) + 1
+
+
 def setup_world(config):
     """加载物理世界、地面和机器人主体。
 
@@ -371,6 +384,30 @@ def should_capture(step_idx, capture_interval, terminate_episode):
     return step_idx % capture_interval == 0 or terminate_episode == 1
 
 
+def determine_termination(
+    distance_to_target,
+    recent_distances,
+    step_idx,
+    success_distance,
+    stuck_window_steps,
+    stuck_min_improvement,
+    force_terminal_after_step,
+):
+    """按成功、卡住、最大步数的优先级返回 episode 状态。"""
+    if distance_to_target <= success_distance:
+        return "success"
+
+    if len(recent_distances) == stuck_window_steps:
+        improvement = recent_distances[0] - recent_distances[-1]
+        if improvement < stuck_min_improvement:
+            return "stuck"
+
+    # 最大步数必须独立判断，不能被“窗口已满但仍在改善”的分支遮住。
+    if step_idx >= force_terminal_after_step:
+        return "max_steps"
+    return "running"
+
+
 def run_episode(episode_idx, robot_id, config, dataset_dir, jsonl_path, summary_jsonl_path):
     """执行一条任务轨迹并写入图片/JSONL 数据。
 
@@ -435,19 +472,16 @@ def run_episode(episode_idx, robot_id, config, dataset_dir, jsonl_path, summary_
                 recent_distances.pop(0)
 
             # 成功优先级最高；其次是卡住；最后才是最大步数兜底。
-            terminate_episode = 0
-            termination_reason = "running"
-            if distance_to_target < task_cfg["success_distance"]:
-                terminate_episode = 1
-                termination_reason = "success"
-            elif len(recent_distances) == task_cfg["stuck_window_steps"]:
-                improvement = recent_distances[0] - recent_distances[-1]
-                if improvement < task_cfg["stuck_min_improvement"]:
-                    terminate_episode = 1
-                    termination_reason = "stuck"
-            elif step_idx >= task_cfg["force_terminal_after_step"]:
-                terminate_episode = 1
-                termination_reason = "max_steps"
+            termination_reason = determine_termination(
+                distance_to_target=distance_to_target,
+                recent_distances=recent_distances,
+                step_idx=step_idx,
+                success_distance=task_cfg["success_distance"],
+                stuck_window_steps=task_cfg["stuck_window_steps"],
+                stuck_min_improvement=task_cfg["stuck_min_improvement"],
+                force_terminal_after_step=task_cfg["force_terminal_after_step"],
+            )
+            terminate_episode = int(termination_reason != "running")
 
             if terminate_episode:
                 print(
@@ -516,7 +550,9 @@ def main():
     dataset_dir, jsonl_path, summary_jsonl_path = prepare_dataset(config["dataset"])
     _, robot_id = setup_world(config)
 
-    for episode_idx in range(config["dataset"]["num_episodes"]):
+    start_episode_idx = next_episode_index(summary_jsonl_path)
+    end_episode_idx = start_episode_idx + config["dataset"]["num_episodes"]
+    for episode_idx in range(start_episode_idx, end_episode_idx):
         run_episode(
             episode_idx,
             robot_id,
