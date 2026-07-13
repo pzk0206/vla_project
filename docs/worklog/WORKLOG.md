@@ -212,14 +212,14 @@ API 多模态模型
 
 只有先有统一接口和统一评估指标，后面的 VLM 接入才不是简单 API 拼接，而是一个真正可比较、可复盘的 VLA 闭环实验。
 
-## 10. 下一步方向
+## 10. 首批批量评估与失败诊断
 
 在修复单次方向执行后，我新增了 `evaluate_probe.py`，用固定种子 42 连续评估 20 个随机 episode。配置为 `max_control_steps=80`、`sim_steps_per_action=60`、`move_step_xy=0.03`，结果是：
 
 ```text
 success: 5/20
 success_rate: 25%
-max_control_steps: 15
+termination_reason=max_control_steps: 15 个 episode
 error: 0
 final_distance mean / median / max: 0.4989 / 0.5948 / 0.8137 m
 control_steps mean / median: 72.05 / 80
@@ -227,20 +227,55 @@ control_steps mean / median: 72.05 / 80
 
 这说明批量评估系统已经跑通，但 heuristic 还不稳定。失败 trace 中存在 left/front 往复切换和距离反复增大的现象；下一步应该先按失败位置与动作序列分析振荡原因，再做单变量控制调优，而不是直接进入 VLM。
 
+关节级 trace 最终把问题定位到 IK：失败振荡阶段，第 4 个关节的 IK 目标约为
+`2.1713rad`，但 KUKA URDF 上限只有 `2.0944rad`。其他 6 个关节最大跟踪
+误差约 `0.00018rad`，只有第 4 关节持续撞限位。于是期望的单轴 `left` 动作
+产生额外 y 偏移，heuristic 再用 `front` 纠偏，形成往复振荡。
+
+我没有继续放宽阈值，而是在 IK 中传入关节上下限、活动范围以及当前关节角
+`restPoses`，让 7 自由度机械臂沿连续、靠近当前姿态的冗余解移动。完整诊断
+过程记录在 `../debugging/BUGLOG.md`。
+
+## 11. Stage 3 heuristic 稳定性验收
+
+修复后先用相同 20 个固定种子回归，结果从 `5/20` 提升为 `20/20`。随后按
+学习计划把评估扩大到固定种子 42-91，共 50 个 episode，配置保持：
+
+```text
+max_control_steps = 80
+sim_steps_per_action = 60
+move_step_xy = 0.03m
+success_distance = 0.03m
+```
+
+正式验收结果来自 `probe_eval_runs/run_20260712_221135/`：
+
+```text
+success: 50/50
+success_rate: 100%
+failure / error: 0 / 0
+final_distance mean / median / max: 0.0193 / 0.0197 / 0.0291m
+control_steps mean / median: 37.58 / 37
+direction: front 243 次，right 1636 次
+```
+
+这个结果达到“至少 50 个随机 episode、成功率 80% 以上、失败可诊断”的
+Stage 3 门槛。当前可以把 heuristic 看作稳定的控制基线，不需要继续盲目调
+步长或仿真执行时间。
+
 当前项目阶段可以这样总结：
 
 - Baseline 0 已完成：采集闭环已经跑通。
 - Baseline 1 基本可用：数据能读、图片能看、episode 全部成功。
-- 阶段三已经开始产生有效闭环结果：修复后的单次方向 probe 能从远距离接近到目标附近。
-- 首批 20 次批量评估已完成，但 25% 成功率尚未达到 80% 门槛。
+- 阶段三 heuristic 稳定性验收完成：50 个固定种子全部成功。
+- 关节限位故障已经形成“现象、单变量排除、关节级证据、修复、回归”的完整案例。
 
 下一步我应该优先做：
 
-- 新增 Stage 3 自动化评估脚本，批量运行 probe。
-- 输出 success rate、平均最终距离、平均步数和失败原因。
-- 保存失败 episode 的 trace 和图片，做 failure mode analysis。
-- 保留 heuristic 作为默认决策器，同时整理可替换的 VLM 决策接口。
-- 等启发式评估稳定后，再接入 API 多模态模型做对比实验。
+- 保留 heuristic 作为稳定基线和故障排查用 sanity check。
+- 让 VLM 只根据相机图像和语言指令输出离散方向，不读取红块真实坐标。
+- 保持现有 PyBullet 控制层和 50 种子评估口径不变，公平比较 heuristic 与 VLM。
+- 记录 VLM 原始回复、非法输出、方向分布、成功率和失败 trace。
 
 这条路线符合我现在的项目原则：
 
@@ -248,7 +283,7 @@ control_steps mean / median: 72.05 / 80
 先跑通，再优化；进入下一阶段前，先保证系统可诊断。
 ```
 
-## 11. 更新后的学习路线：工程成果 + 模型深度平衡
+## 12. 更新后的学习路线：工程成果 + 模型深度平衡
 
 我选择的路线不是最快做 demo，也不是马上冲大模型训练，而是先把项目做成可复现、可评估、可解释的闭环系统，再逐步加入 VLM 决策和动作 tokenization。
 
@@ -263,7 +298,7 @@ Stage 3 probe 稳定化
 -> 轻量 LoRA/QLoRA 微调验证
 ```
 
-短期重点是前两步。只有当启发式 probe 的成功率、最终距离和失败类型都能被稳定统计后，接入 VLM 才有意义。否则模型输出好坏无法评价，项目也容易退化成“调用大模型 API 控制机械臂”的浅层 demo。
+前两步现在已经完成：heuristic probe 通过 50 次稳定性验收，成功率、最终距离和控制步数都能被统一统计。接下来可以进入 VLM 决策替换，因为现在已经有可靠基线判断模型输出到底带来了提升还是退化。
 
 中期重点是 VLM 决策替换接口。这个接口的价值是让项目结构接近真正的 Vision-Language-Action：
 
@@ -275,7 +310,7 @@ Stage 3 probe 稳定化
 
 长期深度点是 action tokenization 和轻量微调。即使不一开始训练完整 VLA，也要能说明如何把连续动作离散成 token，如何构造 image-instruction-action 数据格式，以及如何用 LoRA/QLoRA 做小规模验证。
 
-## 12. 简历复盘可提炼点
+## 13. 简历复盘可提炼点
 
 这份项目日志后续可以直接服务简历和面试复盘。当前最值得提炼的点不是“我调用了某个库”，而是我如何把一个模糊的 VLA 项目拆成可验证的工程系统。
 

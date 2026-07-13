@@ -1,6 +1,6 @@
 # VLA 具身智能项目学习计划
 
-这份计划是基于 `vla_robotic_study_plan.pdf` 重新整理后的项目版路线。原 PDF 更像从零开始的通用 12 周指南；当前仓库已经完成了 PyBullet 数据采集基线和阶段三 probe 雏形，所以这里不再重复基础环境扫盲，而是按当前进度重排为“工程成果 + 模型深度平衡”的路线。
+这份计划是基于同目录的 `vla_robotic_study_plan.pdf` 重新整理后的项目版路线。原 PDF 更像从零开始的通用 12 周指南；当前仓库已经完成了 PyBullet 数据采集基线和阶段三 probe 雏形，所以这里不再重复基础环境扫盲，而是按当前进度重排为“工程成果 + 模型深度平衡”的路线。
 
 ## 当前项目定位
 
@@ -25,17 +25,22 @@ final_distance: min 0.0098m, median 0.0293m, max 0.0300m
 当前 probe 状态：
 
 ```text
-probe_runs/probe_trace.jsonl: 63 步
-distance_to_hover: 1.1524m -> 0.0241m
-termination_reason: success
-世界坐标 direction 分布: front 23 次, left 40 次
+50 个固定种子 episode（42-91）
+success: 50/50，success_rate: 100%
+failure / error: 0 / 0
+final_distance mean / median / max: 0.0193 / 0.0197 / 0.0291m
+control_steps mean / median: 37.58 / 37
 ```
 
-旧版 13 步 trace 虽然成功接近目标，但 heuristic 分支实际绕过了方向词，直接把完整悬停坐标交给 IK，不能作为离散方向闭环证据。修复后 heuristic 和 API 共用 `direction -> 世界坐标单步位移 -> IK` 执行路径；上面的 63 步结果才是当前有效的单次闭环证据。
+旧版 13 步 trace 虽然成功接近目标，但 heuristic 分支实际绕过了方向词，直接把完整悬停坐标交给 IK，不能作为离散方向闭环证据。修复后 heuristic 和 API 共用 `direction -> 世界坐标单步位移 -> IK` 执行路径；当前 50 次批量结果才是 Stage 3 的正式稳定性证据。
 
-这说明 Baseline 0 已完成，Baseline 1 基本可用，Stage 3 已经从“框架搭好”进入“真实离散方向闭环可运行、需要批量评估稳定性”的阶段。
+这说明 Baseline 0 已完成，Baseline 1 可用，Stage 3 heuristic 已通过稳定性验收。
 
-首批批量评估已经覆盖 20 个固定种子 episode：5 次成功、15 次达到 `max_control_steps`，成功率 25%，无运行异常；最终距离 mean / median / max 为 0.4989 / 0.5948 / 0.8137m。当前阶段应描述为“评估系统已完成首版，heuristic 稳定化进行中”，仍未达到 50 次且成功率 80% 的验收门槛。
+首批 20 次批量评估曾只有 5 次成功。关节级诊断发现无约束 IK 将 KUKA 第 4
+关节推到 `2.0944rad` 物理上限，造成 x/y 串扰和方向振荡。IK 加入关节限位、
+活动范围和当前姿态 `restPoses` 后，相同 20 种子提升到 20/20；继续扩大到
+50 个固定种子后仍为 50/50。当前阶段应描述为“heuristic 闭环稳定性验收
+完成，准备进入 VLM 决策替换与对比”。
 
 ## 总路线
 
@@ -54,7 +59,7 @@ termination_reason: success
 -> 轻量 LoRA/QLoRA 微调验证
 ```
 
-## 第 1-2 周：Stage 3 probe 稳定化
+## 第 1-2 周：Stage 3 probe 稳定化（已完成）
 
 目标：让启发式闭环在随机红块位置下稳定接近目标，而不是只展示单次成功。
 
@@ -64,7 +69,7 @@ termination_reason: success
 - 统计每次最终 `distance_to_hover`、控制步数、是否到达停止阈值。
 - 检查 `left/right/front/back/stop` 的方向映射是否持续让距离下降。
 - 保存失败 trace，单独分析失败时的红块位置、末端位置和动作序列。
-- 更新 `WORKLOG.md`，把旧的 probe 失败判断改成当前真实状态。
+- 更新 `../worklog/WORKLOG.md`，把旧的 probe 失败判断改成当前真实状态。
 
 重点学习：
 
@@ -78,7 +83,7 @@ termination_reason: success
 - 启发式 probe 成功率达到 80% 以上。
 - 每种失败都有明确的日志和解释。
 
-## 第 3-4 周：自动化评估系统
+## 第 3-4 周：自动化评估系统（已完成）
 
 目标：把项目从“能跑”升级为“能评估”。
 
@@ -93,7 +98,7 @@ termination_reason: success
   - failure reason
   - direction 分布
 - 输出 `probe_eval_summary.json` 或 `probe_eval_summary.jsonl`。
-- 在 `WORKLOG.md` 中记录第一版评估结果。
+- 在 `../worklog/WORKLOG.md` 中记录第一版评估结果。
 
 重点学习：
 

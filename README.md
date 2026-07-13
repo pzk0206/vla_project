@@ -12,9 +12,9 @@
 
 ## 当前阶段
 
-当前主线是：Baseline 1 数据基线基本可用，正在推进 Stage 3 闭环评估。
+当前主线是：Baseline 1 数据基线可用，Stage 3 heuristic 闭环稳定性验收已经通过，准备进入 VLM 决策对比。
 
-也就是说，离线专家采集已经能生成可诊断的悬停数据；下一步重点不是继续盲目采图，而是验证在线闭环控制在多次随机目标位置下是否稳定。
+也就是说，离线专家采集已经能生成可诊断的悬停数据；在线 heuristic 闭环也已在 50 个固定随机种子下稳定运行。下一步重点是让 VLM 根据图像和语言输出离散方向，并在同一套评估框架中与 heuristic 比较。
 
 已经具备：
 
@@ -43,7 +43,11 @@
 ├── sim_config.yaml      # 仿真、相机、任务、数据集配置
 ├── requirements.txt     # Python 依赖
 ├── README.md            # 项目说明
-├── WORKLOG.md           # 从零开始的项目工作日志
+├── docs/
+│   ├── worklog/         # 项目推进和实验复盘
+│   ├── planning/        # 学习计划及原始 PDF
+│   ├── debugging/       # Bug 证据、实验和结论
+│   └── superpowers/     # 设计规格与实施计划
 └── .gitignore           # Git 忽略规则
 ```
 
@@ -137,7 +141,11 @@ conda run -n vla_env python evaluate_probe.py
 
 运行次数、输出目录和失败图片策略由 `sim_config.yaml` 的 `probe_evaluation` 控制。结果写入 `probe_eval_runs/run_*/`；成功 episode 只保留 trace，失败 episode 保留 trace 和步骤图片。
 
-当前首批 20 次结果为 5 成功、15 次 `max_control_steps`，成功率 25%。这说明评估系统已经可用，但 heuristic 控制尚未达到 80% 的阶段门槛。
+修复 IK 冗余解未使用关节限位和当前姿态的问题后，Stage 3 使用固定种子
+42-91 完成 50 次 heuristic 回归：50 次全部成功，成功率 100%，无失败和运行
+异常；最终距离 mean / median / max 为 0.0193 / 0.0197 / 0.0291m，平均控制
+步数为 37.58。结果保存在 `probe_eval_runs/run_20260712_221135/`，已经达到
+“至少 50 次且成功率不低于 80%”的阶段门槛。
 
 ## 数据格式
 
@@ -162,7 +170,11 @@ conda run -n vla_env python evaluate_probe.py
 
 ## Baseline 路线
 
-更细的推进过程、调参原因、数据质量判断和阶段三 probe 细节，记录在 `WORKLOG.md`。
+项目文档：
+
+- [工作日志](docs/worklog/WORKLOG.md)：推进过程、调参原因和阶段判断。
+- [学习计划](docs/planning/vla_robotic_study_plan.md)：当前路线和验收门槛。
+- [Bug 日志](docs/debugging/BUGLOG.md)：故障证据、根因假设和单变量实验。
 
 ### Baseline 0：跑通悬停闭环
 
