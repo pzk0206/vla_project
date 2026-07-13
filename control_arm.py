@@ -206,11 +206,27 @@ def calculate_target_joints(robot_id, robot_config, target_pos):
     含义是让末端朝下，符合从上方靠近积木的任务。
     """
     target_quat = p.getQuaternionFromEuler(robot_config["target_orientation_euler"])
+    controlled_joints = robot_config["controlled_joints"]
+    lower_limits = []
+    upper_limits = []
+    rest_poses = []
+    for joint_idx in range(controlled_joints):
+        joint_info = p.getJointInfo(robot_id, joint_idx)
+        lower_limits.append(joint_info[8])
+        upper_limits.append(joint_info[9])
+        rest_poses.append(p.getJointState(robot_id, joint_idx)[0])
+    joint_ranges = [
+        upper - lower for lower, upper in zip(lower_limits, upper_limits)
+    ]
     return p.calculateInverseKinematics(
         bodyUniqueId=robot_id,
         endEffectorLinkIndex=robot_config["ee_link_index"],
         targetPosition=target_pos,
         targetOrientation=target_quat,
+        lowerLimits=lower_limits,
+        upperLimits=upper_limits,
+        jointRanges=joint_ranges,
+        restPoses=rest_poses,
         residualThreshold=robot_config["ik_residual_threshold"],
     )
 

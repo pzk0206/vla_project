@@ -1,3 +1,10 @@
+"""Stage 3 单次在线闭环探路。
+
+本文件负责一条 episode 内的“观察 -> 决策 -> 世界坐标小步目标 -> IK
+-> 物理执行 -> 再观察”。run_probe_episode() 同时服务单次命令和批量评估，
+避免 evaluate_probe.py 复制控制循环后产生行为漂移。
+"""
+
 import base64
 import json
 import os
@@ -77,6 +84,16 @@ def determine_probe_termination(
     if control_step >= max_control_steps - 1:
         return "max_control_steps"
     return "running"
+
+
+def joint_angle_errors(target_angles, actual_angles):
+    """计算每个关节的目标误差，正负号定义为 target - actual。"""
+    return [target - actual for target, actual in zip(target_angles, actual_angles)]
+
+
+def get_controlled_joint_angles(robot_id, controlled_joints):
+    """读取受控关节的实际角度，单位为弧度。"""
+    return [p.getJointState(robot_id, joint_idx)[0] for joint_idx in range(controlled_joints)]
 
 
 def ensure_dir(path):
@@ -270,7 +287,12 @@ def write_probe_trace(trace_jsonl_path, row):
 
 
 def summarize_probe_trace(rows, episode_idx, random_seed, trace_path):
-    """把一条 probe trace 汇总为 episode 级诊断结果。"""
+    """把逐步 trace 压缩成一行 episode 摘要。
+
+    rows 保存每个控制步的完整上下文；摘要只保留批量统计需要的信息：
+    首末距离、终止原因、方向分布和距离变差次数。这样评估器无需再次理解
+    PyBullet 控制细节，也能比较大量 episode。
+    """
     if not rows:
         raise ValueError("probe trace 不能为空")
     last = rows[-1]
@@ -291,7 +313,16 @@ def summarize_probe_trace(rows, episode_idx, random_seed, trace_path):
 
 
 def run_probe_episode(config, episode_idx, episode_dir, random_seed=None):
-    """阶段三最小闭环探路主流程。
+    """运行一次可复现的 Stage 3 闭环并返回 episode 摘要。
+
+    Args:
+        config: sim_config.yaml 加载后的完整配置。
+        episode_idx: 当前 episode 编号，只用于输出和汇总定位。
+        episode_dir: 本 episode 独立保存图片与 trace 的目录。
+        random_seed: 控制红块位置和相机扰动；None 表示不固定随机性。
+
+    Returns:
+        summarize_probe_trace() 生成的字典，可直接写入 episode_summary.jsonl。
 
     一次运行只放一个红色积木，最多执行 max_control_steps 次控制：
     1. 拍一张当前相机图。
@@ -301,6 +332,7 @@ def run_probe_episode(config, episode_idx, episode_dir, random_seed=None):
     5. 推进若干物理仿真 step。
     6. 写 probe_trace.jsonl 方便复盘。
     """
+    # 固定种子后，相同 episode 可以在不同参数下复现，形成公平对照实验。
     if random_seed is not None:
         random.seed(random_seed)
     probe_config = config["probe"]
@@ -330,6 +362,7 @@ def run_probe_episode(config, episode_idx, episode_dir, random_seed=None):
         f"X:{camera_eye[0]:.2f}, Y:{camera_eye[1]:.2f}, Z:{camera_eye[2]:.2f}"
     )
 
+    # 内存中的 rows 用于最后生成摘要；同时每一步立即落盘，防止中途异常丢证据。
     trace_rows = []
     try:
         for control_step in range(probe_config["max_control_steps"]):
@@ -371,6 +404,13 @@ def run_probe_episode(config, episode_idx, episode_dir, random_seed=None):
 
             # IK 把“末端应该去哪里”转换成“7 个关节应该转到什么角度”。
             target_joint_angles = calculate_target_joints(robot_id, robot_config, target_pos)
+            target_joint_angles = list(
+                target_joint_angles[: robot_config["controlled_joints"]]
+            )
+            actual_joint_angles_before = get_controlled_joint_angles(
+                robot_id,
+                robot_config["controlled_joints"],
+            )
             apply_joint_targets(robot_id, robot_config, target_joint_angles)
 
             # 每次决策后推进多个物理 step，让机械臂有时间朝目标运动。
@@ -381,6 +421,14 @@ def run_probe_episode(config, episode_idx, episode_dir, random_seed=None):
 
             # 动作执行后重新读末端位置，用真实结果判断这一步是否有效。
             ee_pos_after = get_link_position(robot_id, robot_config["ee_link_index"])
+            actual_joint_angles_after = get_controlled_joint_angles(
+                robot_id,
+                robot_config["controlled_joints"],
+            )
+            joint_error_after = joint_angle_errors(
+                target_joint_angles,
+                actual_joint_angles_after,
+            )
             distance_after = euclidean_distance(ee_pos_after, hover_target)
             distance_delta = distance_before - distance_after
             termination_reason = determine_probe_termination(
@@ -398,23 +446,27 @@ def run_probe_episode(config, episode_idx, episode_dir, random_seed=None):
             # 记录这一控制步的完整上下文，后续可用来排查：
             # 模型判断错了、方向映射错了、还是 IK/物理控制没跟上。
             trace_row = {
-                    "control_step": control_step,
-                    "decision_source": decision_source,
-                    "direction": direction,
-                    "raw_response": raw_response,
-                    "ee_pos": list(ee_pos_after),
-                    "ee_pos_before": list(ee_pos_before),
-                    "ee_pos_after": list(ee_pos_after),
-                    "block_pos": list(block_pos),
-                    "hover_target": list(hover_target),
-                    "target_pos": list(target_pos),
-                    "distance_to_hover": distance_after,
-                    "distance_before": distance_before,
-                    "distance_after": distance_after,
-                    "distance_delta": distance_delta,
-                    "termination_reason": termination_reason,
-                    "image_path": image_filename if probe_config["save_trace_images"] else None,
-                }
+                "control_step": control_step,
+                "decision_source": decision_source,
+                "direction": direction,
+                "raw_response": raw_response,
+                "ee_pos": list(ee_pos_after),
+                "ee_pos_before": list(ee_pos_before),
+                "ee_pos_after": list(ee_pos_after),
+                "block_pos": list(block_pos),
+                "hover_target": list(hover_target),
+                "target_pos": list(target_pos),
+                "target_joint_angles": target_joint_angles,
+                "actual_joint_angles_before": actual_joint_angles_before,
+                "actual_joint_angles_after": actual_joint_angles_after,
+                "joint_error_after": joint_error_after,
+                "distance_to_hover": distance_after,
+                "distance_before": distance_before,
+                "distance_after": distance_after,
+                "distance_delta": distance_delta,
+                "termination_reason": termination_reason,
+                "image_path": image_filename if probe_config["save_trace_images"] else None,
+            }
             write_probe_trace(trace_jsonl_path, trace_row)
             trace_rows.append(trace_row)
 
@@ -434,13 +486,16 @@ def run_probe_episode(config, episode_idx, episode_dir, random_seed=None):
             trace_jsonl_path,
         )
     finally:
-        # 不管中途是否报错，都清理 PyBullet 资源，避免下次运行残留物体。
+        # 每个批量 episode 都独立清理，防止前一次物体或连接污染后续结果。
         p.removeBody(block_id)
         p.disconnect()
 
 
 def main():
-    """保持单次 probe 命令兼容。"""
+    """保持 `python stage3_probe.py` 单次运行方式兼容。
+
+    批量入口也调用 run_probe_episode，因此两种运行方式的控制行为完全一致。
+    """
     config = load_config(CONFIG_PATH)
     run_probe_episode(config, 0, config["probe"]["output_dir"])
 
