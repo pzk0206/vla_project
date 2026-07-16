@@ -17,6 +17,7 @@ probe_eval_runs/
 vlm_eval_samples/
 vlm_eval_samples_448/
 vlm_eval_samples_448_multiseed_d020/
+vlm_eval_samples_448_calibration_validation_d020/
 vlm_eval_runs/
 
 # Logs and temporary files
