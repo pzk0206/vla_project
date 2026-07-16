@@ -54,6 +54,8 @@ class GroundingBackprojectionEvaluationTests(unittest.TestCase):
             {
                 "sample_id": "sample-1",
                 "boxes": {"red_block": self.box_around_world_point(target)},
+                "expected_direction": "left",
+                "random_seed": 42,
                 "latency_seconds": 1.2,
                 "error_type": None,
                 "error_message": None,
@@ -67,6 +69,8 @@ class GroundingBackprojectionEvaluationTests(unittest.TestCase):
             result["predicted_target_world"], target, atol=1e-6
         )
         self.assertAlmostEqual(result["localization_error_xy"], 0.0, places=6)
+        self.assertEqual(result["expected_direction"], "left")
+        self.assertEqual(result["random_seed"], 42)
         self.assertIsNone(result["error_type"])
 
     def test_keeps_invalid_grounding_as_sample_error(self):
@@ -97,18 +101,27 @@ class GroundingBackprojectionEvaluationTests(unittest.TestCase):
     def test_summarizes_valid_errors_and_failure_types(self):
         results = [
             {
+                "expected_direction": "left",
+                "random_seed": 42,
+                "box_center_pixel": [250.0, 190.0],
                 "localization_error_xy": 0.01,
                 "signed_error_x": 0.006,
                 "signed_error_y": -0.008,
                 "error_type": None,
             },
             {
+                "expected_direction": "right",
+                "random_seed": 42,
+                "box_center_pixel": [254.0, 193.0],
                 "localization_error_xy": 0.03,
                 "signed_error_x": -0.018,
                 "signed_error_y": 0.024,
                 "error_type": None,
             },
             {
+                "expected_direction": "left",
+                "random_seed": 43,
+                "box_center_pixel": None,
                 "localization_error_xy": None,
                 "signed_error_x": None,
                 "signed_error_y": None,
@@ -126,6 +139,55 @@ class GroundingBackprojectionEvaluationTests(unittest.TestCase):
         self.assertAlmostEqual(summary["localization_error_xy_max"], 0.03)
         self.assertEqual(
             summary["error_type_counts"], {"InvalidModelResponseError": 1}
+        )
+
+    def test_summarizes_by_direction_and_seed_with_pixel_jitter(self):
+        results = [
+            {
+                "expected_direction": "left",
+                "random_seed": 42,
+                "box_center_pixel": [250.0, 190.0],
+                "localization_error_xy": 0.01,
+                "signed_error_x": -0.006,
+                "signed_error_y": 0.008,
+                "error_type": None,
+            },
+            {
+                "expected_direction": "right",
+                "random_seed": 42,
+                "box_center_pixel": [254.0, 193.0],
+                "localization_error_xy": 0.03,
+                "signed_error_x": -0.018,
+                "signed_error_y": 0.024,
+                "error_type": None,
+            },
+            {
+                "expected_direction": "left",
+                "random_seed": 43,
+                "box_center_pixel": None,
+                "localization_error_xy": None,
+                "signed_error_x": None,
+                "signed_error_y": None,
+                "error_type": "InvalidModelResponseError",
+            },
+        ]
+
+        summary = summarize_results(results)
+
+        self.assertEqual(summary["per_direction"]["left"]["num_samples"], 2)
+        self.assertEqual(summary["per_direction"]["left"]["num_failed"], 1)
+        self.assertAlmostEqual(
+            summary["per_random_seed"]["42"]["box_center_pixel_span_x"],
+            4.0,
+        )
+        self.assertAlmostEqual(
+            summary["per_random_seed"]["42"]["box_center_pixel_span_y"],
+            3.0,
+        )
+        self.assertAlmostEqual(
+            summary["per_random_seed"]["42"]
+            ["box_center_pixel_max_distance"],
+            5.0,
         )
 
 

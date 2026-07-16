@@ -45,6 +45,8 @@ def evaluate_rows(predictions, diagnostics, plane_z=0.0):
         boxes = prediction.get("boxes")
         base_result = {
             "sample_id": sample_id,
+            "expected_direction": prediction.get("expected_direction"),
+            "random_seed": prediction.get("random_seed"),
             "red_block_box": boxes.get("red_block") if boxes else None,
             "box_center_pixel": None,
             "predicted_target_world": None,
@@ -100,18 +102,19 @@ def evaluate_rows(predictions, diagnostics, plane_z=0.0):
     return results
 
 
-def summarize_results(results):
-    """汇总有效率、xy 误差和系统性有符号偏差。"""
-    valid = [row for row in results if row["localization_error_xy"] is not None]
+def _summarize_subset(rows, include_pixel_jitter=False):
+    """对一组结果计算统一误差指标，并可选统计框中心抖动。"""
+    rows = list(rows)
+    valid = [row for row in rows if row["localization_error_xy"] is not None]
     errors = [row["localization_error_xy"] for row in valid]
     error_counts = Counter(
-        row["error_type"] for row in results if row["error_type"]
+        row["error_type"] for row in rows if row["error_type"]
     )
-    return {
-        "num_samples": len(results),
+    summary = {
+        "num_samples": len(rows),
         "num_valid": len(valid),
-        "num_failed": len(results) - len(valid),
-        "valid_rate": len(valid) / len(results) if results else 0.0,
+        "num_failed": len(rows) - len(valid),
+        "valid_rate": len(valid) / len(rows) if rows else 0.0,
         "localization_error_xy_mean": statistics.fmean(errors) if errors else None,
         "localization_error_xy_median": (
             statistics.median(errors) if errors else None
@@ -129,6 +132,69 @@ def summarize_results(results):
         ),
         "error_type_counts": dict(sorted(error_counts.items())),
     }
+    if include_pixel_jitter:
+        pixels = [
+            row["box_center_pixel"]
+            for row in valid
+            if row.get("box_center_pixel")
+        ]
+        summary["box_center_pixel_span_x"] = (
+            max(point[0] for point in pixels)
+            - min(point[0] for point in pixels)
+            if pixels
+            else None
+        )
+        summary["box_center_pixel_span_y"] = (
+            max(point[1] for point in pixels)
+            - min(point[1] for point in pixels)
+            if pixels
+            else None
+        )
+        if len(pixels) >= 2:
+            summary["box_center_pixel_max_distance"] = max(
+                math.dist(first, second)
+                for index, first in enumerate(pixels)
+                for second in pixels[index + 1 :]
+            )
+        else:
+            summary["box_center_pixel_max_distance"] = 0.0 if pixels else None
+    return summary
+
+
+def summarize_results(results):
+    """汇总整体、逐方向和逐 seed 的定位误差与像素抖动。"""
+    results = list(results)
+    summary = _summarize_subset(results)
+    directions = sorted(
+        {
+            row["expected_direction"]
+            for row in results
+            if row.get("expected_direction")
+        }
+    )
+    seeds = sorted(
+        {
+            row["random_seed"]
+            for row in results
+            if row.get("random_seed") is not None
+        }
+    )
+    summary["per_direction"] = {
+        direction: _summarize_subset(
+            row
+            for row in results
+            if row.get("expected_direction") == direction
+        )
+        for direction in directions
+    }
+    summary["per_random_seed"] = {
+        str(seed): _summarize_subset(
+            (row for row in results if row.get("random_seed") == seed),
+            include_pixel_jitter=True,
+        )
+        for seed in seeds
+    }
+    return summary
 
 
 def write_jsonl(path, rows):
