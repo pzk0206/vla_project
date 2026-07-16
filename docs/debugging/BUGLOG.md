@@ -626,8 +626,28 @@ PyBullet segmentation 真值显示，15 张 left/right/front 的红块可见率�
 - 不直接使用本轮均值补偿。本轮清晰数据减均值后的 1.17cm 平均残差属于同集拟合，
   只能说明校准有潜力，不能作为泛化证据。
 
-下一步建立独立校准集/验证集：校准集估计固定偏差，验证集验收 `<3cm`；严重遮挡
-单独测试双视角、历史帧或主动避让。两条路径完成前不接入在线控制。
+据此后续建立独立校准集/验证集：校准集估计固定偏差，验证集验收 `<3cm`；严重
+遮挡继续单独测试双视角、历史帧或主动避让。两条路径完成前不接入在线控制。
+
+### 独立验证结果
+
+固定 seeds 42–46 为校准集，只用 15 条 clear 记录得到冻结补偿
+`(+2.492cm, -1.947cm)`；全新的 seeds 47–51 作为验证集，共 20 张，校准 ID 与验证
+ID 交集为零，验证阶段没有重新拟合。
+
+20/20 grounding 和反投影有效。验证集 clear/partial/severe 为 `15/4/1`：
+
+```text
+clear raw mean/median/max:       2.99/3.13/3.92cm
+clear corrected mean/median/max: 0.77/0.79/1.46cm，15/15 <=3cm
+partial corrected max:           2.64cm，4/4 <=3cm
+severe corrected error:          3.27cm，0/1 <=3cm
+```
+
+状态：固定系统偏差在独立 clear 样本上通过离线验证，排除了“只在拟合集上变好”的
+数据泄漏解释；但在线控制尚未验证，BUG-003 也不能对 severe 遮挡关闭。下一步只为
+clear 场景设计可中止闭环 smoke test，并为 severe 场景保留拒绝、双视角、历史帧或
+主动避让路径。
 
 证据目录：
 
@@ -635,4 +655,7 @@ PyBullet segmentation 真值显示，15 张 left/right/front 的红块可见率�
 vlm_eval_samples_448_multiseed_d020/
 vlm_eval_runs/grounding_qwen3_vl_flash_distance20_448_multiseed_v4/
 vlm_eval_runs/grounding_qwen3_vl_flash_distance20_448_multiseed_v4/backprojection/
+vlm_eval_samples_448_calibration_validation_d020/
+vlm_eval_runs/grounding_qwen3_vl_flash_distance20_448_calibration_validation_v1/
+vlm_eval_runs/grounding_qwen3_vl_flash_distance20_448_calibration_validation_v1/calibration_validation/
 ```

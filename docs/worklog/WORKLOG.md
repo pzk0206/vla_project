@@ -646,3 +646,50 @@ severe:   3/3  valid, mean/median/max = 6.92/6.50/10.06cm
 结论：先建立独立校准集与验证集，只用校准集估计清晰样本偏差，再在验证集检查
 是否稳定低于 3cm。严重遮挡不参与固定偏差拟合，后续单独测试双视角、历史帧或
 主动避让。在这两类问题分开验收前，不进入在线控制。
+
+## 19. Grounding 固定偏差独立验证（2026-07-16）
+
+上一轮 seeds 42–46 的同集残差只能说明固定补偿值得测试，不能证明泛化。本轮把
+旧结果固定为校准集，只用其中 15 条 clear 记录拟合一次 XY 补偿：
+
+```text
+correction_x = +0.02492227406480192 m
+correction_y = -0.019467343494422532 m
+```
+
+然后使用完全独立的 seeds 47–51；每个位置仍拍 left/right/front/back，共 20 张。
+验证脚本先检查校准 ID 和验证 ID 的交集为空，再只读应用冻结补偿，禁止从验证结果
+重新估计参数。新数据的可见率分组为 clear/partial/severe=`15/4/1`，Qwen 为 20/20
+图片返回合法框，反投影也为 20/20 有效。
+
+输出目录：
+
+```text
+样本：vlm_eval_samples_448_calibration_validation_d020/
+grounding：vlm_eval_runs/grounding_qwen3_vl_flash_distance20_448_calibration_validation_v1/
+反投影：vlm_eval_runs/grounding_qwen3_vl_flash_distance20_448_calibration_validation_v1/backprojection/
+校准验证：vlm_eval_runs/grounding_qwen3_vl_flash_distance20_448_calibration_validation_v1/calibration_validation/
+```
+
+独立验证指标：
+
+```text
+overall raw mean/median/max:       3.32/3.39/5.31cm
+overall corrected mean/median/max: 1.07/0.87/3.27cm（19/20 <=3cm）
+
+clear raw mean/median/max:          2.99/3.13/3.92cm
+clear corrected mean/median/max:    0.77/0.79/1.46cm（15/15 <=3cm）
+
+partial corrected mean/median/max:  1.66/1.63/2.64cm（4/4 <=3cm）
+severe corrected error:             3.27cm（0/1 <=3cm）
+```
+
+因此预先定义的验收结果是 `passed=true`：固定偏差确实能泛化到新的清晰红块位置，
+不是同集数据泄漏造成的假改善。最差 clear 样本 `seed_50_d020_right` 也只有
+`1.46cm`。但唯一 severe 样本仍超过 3cm，所以这轮解决的是固定相机、清晰视野下的
+系统偏差，不是遮挡问题。
+
+下一步不扩大付费离线样本，而是先设计一个小规模、可中止的闭环 smoke test：运行时
+只允许 VLM grounding、相机反投影、冻结补偿和机械臂本体状态参与控制，PyBullet
+红块真值继续只做事后评分；同时对 severe 可见率保留拒绝或恢复策略，不把本轮
+`passed=true` 外推到遮挡场景。
