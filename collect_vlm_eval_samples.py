@@ -272,6 +272,17 @@ def build_stratified_balanced_cases(offsets_xy):
     return cases
 
 
+def validate_stratified_seeds(value):
+    """返回显式分层 seeds，并拒绝空值、重复值、布尔值和非整数。"""
+    if not isinstance(value, list) or not value:
+        raise ValueError("vlm_evaluation.stratified_seeds 必须是非空列表")
+    if any(type(seed) is not int for seed in value):
+        raise ValueError("vlm_evaluation.stratified_seeds 只能包含整数")
+    if len(set(value)) != len(value):
+        raise ValueError("vlm_evaluation.stratified_seeds 不能重复")
+    return list(value)
+
+
 def reset_robot_to_target(
     robot_id,
     robot_config,
@@ -448,7 +459,7 @@ def collect_vlm_eval_samples(config):
             cases = build_stratified_balanced_cases(
                 evaluation["balanced_pose_offsets_xy"]
             )
-            num_seeds = evaluation["stratified_num_seeds"]
+            seeds = validate_stratified_seeds(evaluation["stratified_seeds"])
         else:
             cases = [
                 {
@@ -458,10 +469,12 @@ def collect_vlm_eval_samples(config):
                 }
                 for direction in BALANCED_DIRECTION_ORDER
             ]
-            num_seeds = evaluation["offline_num_episodes"]
+            seeds = [
+                base_seed + episode_idx
+                for episode_idx in range(evaluation["offline_num_episodes"])
+            ]
 
-        for episode_idx in range(num_seeds):
-            seed = base_seed + episode_idx
+        for seed in seeds:
             for case_index, case in enumerate(cases):
                 direction = case["direction"]
                 if case["offset_tag"]:

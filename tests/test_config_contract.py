@@ -43,11 +43,11 @@ class ConfigContractTests(unittest.TestCase):
         evaluation = self.config["vlm_evaluation"]
         self.assertEqual(
             evaluation["sample_output_dir"],
-            "vlm_eval_samples_448_multiseed_d020",
+            "vlm_eval_samples_448_calibration_validation_d020",
         )
         self.assertEqual(
             evaluation["grounding_run_name"],
-            "grounding_qwen3_vl_flash_distance20_448_multiseed_v4",
+            "grounding_qwen3_vl_flash_distance20_448_calibration_validation_v1",
         )
         self.assertTrue(evaluation["run_output_dir"])
         self.assertTrue(evaluation["offline_run_name"])
@@ -62,6 +62,11 @@ class ConfigContractTests(unittest.TestCase):
         self.assertEqual(evaluation["balanced_pose_offsets_xy"], [0.20])
         self.assertTrue(all(offset > 0 for offset in evaluation["balanced_pose_offsets_xy"]))
         self.assertEqual(evaluation["stratified_num_seeds"], 5)
+        self.assertEqual(evaluation["stratified_seeds"], [47, 48, 49, 50, 51])
+        self.assertEqual(len(set(evaluation["stratified_seeds"])), 5)
+        self.assertTrue(
+            all(type(seed) is int for seed in evaluation["stratified_seeds"])
+        )
         self.assertEqual(camera_override["image_width"], 448)
         self.assertEqual(camera_override["image_height"], 448)
         self.assertGreater(evaluation["offline_num_episodes"], 0)

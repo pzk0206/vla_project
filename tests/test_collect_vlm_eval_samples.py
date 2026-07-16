@@ -25,8 +25,25 @@ from collect_vlm_eval_samples import (
     select_evenly_spaced_rows,
     validate_diagnostics,
     validate_samples,
+    validate_stratified_seeds,
     write_sample_files,
 )
+
+
+class ValidateStratifiedSeedsTests(unittest.TestCase):
+    """显式验证 seeds 必须是非空、唯一的纯整数列表。"""
+
+    def test_accepts_five_unique_integer_seeds(self):
+        self.assertEqual(
+            validate_stratified_seeds([47, 48, 49, 50, 51]),
+            [47, 48, 49, 50, 51],
+        )
+
+    def test_rejects_empty_duplicate_boolean_and_non_integer_seeds(self):
+        for value in ([], [47, 47], [True, 48], [47, "48"]):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "stratified_seeds"):
+                    validate_stratified_seeds(value)
 
 
 class SampleDiagnosticsTests(unittest.TestCase):
@@ -147,6 +164,7 @@ class SampleDiagnosticsTests(unittest.TestCase):
                     "sample_strategy": "stratified_balanced_poses",
                     "balanced_pose_offsets_xy": [0.2],
                     "stratified_num_seeds": 5,
+                    "stratified_seeds": [47, 48, 49, 50, 51],
                 },
                 "camera": self.camera_config,
             }
@@ -172,8 +190,9 @@ class SampleDiagnosticsTests(unittest.TestCase):
         self.assertEqual(capture_sample.call_count, 20)
         self.assertEqual(
             {row["random_seed"] for row in samples},
-            {42, 43, 44, 45, 46},
+            {47, 48, 49, 50, 51},
         )
+        self.assertEqual(len({row["sample_id"] for row in samples}), 20)
         self.assertEqual(
             {
                 direction: sum(
