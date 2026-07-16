@@ -11,7 +11,49 @@ import unittest
 from unittest.mock import patch
 from pathlib import Path
 
-from control_arm import calculate_target_joints, determine_termination, next_episode_index
+import numpy as np
+
+from control_arm import (
+    calculate_target_joints,
+    capture_rgb,
+    determine_termination,
+    next_episode_index,
+)
+
+
+class CaptureRgbCameraMatrixTests(unittest.TestCase):
+    @patch("control_arm.p.getCameraImage")
+    @patch("control_arm.compute_camera_matrices")
+    def test_passes_shared_matrices_to_pybullet_renderer(
+        self, compute_matrices, get_camera_image
+    ):
+        view_matrix = [float(index) for index in range(16)]
+        projection_matrix = [float(index + 16) for index in range(16)]
+        compute_matrices.return_value = (view_matrix, projection_matrix)
+        get_camera_image.return_value = (
+            2,
+            2,
+            np.zeros((2, 2, 4), dtype=np.uint8),
+            None,
+            None,
+        )
+        camera_config = {
+            "image_width": 2,
+            "image_height": 2,
+        }
+
+        image = capture_rgb(camera_config, [0.0, 0.4, 3.0])
+
+        compute_matrices.assert_called_once_with(
+            camera_config, [0.0, 0.4, 3.0]
+        )
+        self.assertEqual(
+            get_camera_image.call_args.kwargs["viewMatrix"], view_matrix
+        )
+        self.assertEqual(
+            get_camera_image.call_args.kwargs["projectionMatrix"], projection_matrix
+        )
+        self.assertEqual(image.shape, (2, 2, 3))
 
 
 class CalculateTargetJointsTests(unittest.TestCase):

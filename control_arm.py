@@ -11,6 +11,8 @@ import pybullet as p
 import pybullet_data
 import yaml
 
+from camera_geometry import compute_camera_matrices
+
 
 # =====================================================================
 # control_arm.py
@@ -300,18 +302,9 @@ def capture_rgb(camera_config, camera_eye):
 
     getCameraImage 返回 RGBA，这里丢掉 alpha 通道并转成 OpenCV 常用的 BGR。
     """
-    # view_matrix 决定“从哪个位置看场景”。
-    view_matrix = p.computeViewMatrix(
-        cameraEyePosition=camera_eye,
-        cameraTargetPosition=camera_config["workspace_center"],
-        cameraUpVector=camera_config["up_vector"],
-    )
-    # projection_matrix 决定“镜头参数”，类似真实相机的视场角和裁剪范围。
-    projection_matrix = p.computeProjectionMatrixFOV(
-        fov=camera_config["fov"],
-        aspect=camera_config["image_width"] / camera_config["image_height"],
-        nearVal=camera_config["near_val"],
-        farVal=camera_config["far_val"],
+    # 渲染和后续反投影必须共用完全相同的相机矩阵。
+    view_matrix, projection_matrix = compute_camera_matrices(
+        camera_config, camera_eye
     )
 
     # depth 和 segmentation 暂时不用，所以用 _ 忽略；以后可以保存成多模态训练数据。
