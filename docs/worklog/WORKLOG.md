@@ -595,3 +595,54 @@ back 的纵向偏差远大于横向偏差，模型却没有执行 prompt 中明�
 
 当前阶段结论：直接方向基线已经完成能力边界诊断；下一步进入目标坐标接口，先实现
 红块框中心到工作平面世界坐标的相机反投影，并用红块仿真真值只做离线误差评分。
+
+## 18. 五位置 grounding 反投影稳定性实验（2026-07-16）
+
+这轮不是继续评价 `left/right/front/back` 是否正确，而是检查 VLM 红块框中心能否
+转换成控制器可用的厘米级世界坐标。保持正俯视相机、448×448、20cm 相对距离、
+模型和 prompt 不变，使用 seeds 42–46；每个红块位置拍 left/right/front/back
+四种机械臂姿态，共 20 张。
+
+为避免把遮挡误认为随机框抖动，我使用 PyBullet segmentation mask 比较“当前姿态”
+和“移除机械臂后的红块完整投影”，把可见率只写入 `diagnostics.jsonl`。它不进入
+VLM 输入。实际可见率为：15 张 left/right/front 全部 `1.0`；back 分别为
+`0.640/0.100/0.214/0.249/0.360`。按 `clear>=0.75`、`partial>=0.25`、
+`severe<0.25` 分组后，得到 15/2/3 张。
+
+输出目录：
+
+```text
+样本：vlm_eval_samples_448_multiseed_d020/
+grounding：vlm_eval_runs/grounding_qwen3_vl_flash_distance20_448_multiseed_v4/
+反投影：vlm_eval_runs/grounding_qwen3_vl_flash_distance20_448_multiseed_v4/backprojection/
+```
+
+20/20 返回合法框，`num_failed=0`。整体指标：
+
+```text
+localization_error_xy mean / median / max:
+0.03943699 / 0.03769951 / 0.10062393 m
+signed_error_x_mean: -0.02682766 m
+signed_error_y_mean: +0.02244968 m
+```
+
+逐方向 mean：left `3.10cm`、right `3.55cm`、front `3.37cm`、back `5.76cm`。
+逐可见率分组：
+
+```text
+clear:   15/15 valid, mean/median/max = 3.34/3.45/4.00cm
+partial:  2/2  valid, mean/median/max = 4.02/4.02/4.41cm
+severe:   3/3  valid, mean/median/max = 6.92/6.50/10.06cm
+```
+
+最差的 `seed_43_d020_back` 可见率只有 `0.100`，定位误差 `10.06cm`。因此遮挡
+确实会显著放大 grounding 误差，不能和清晰样本混成一个无法解释的均值。
+
+清晰样本的 15 个 X 误差全部为负、Y 误差全部为正，平均偏差为
+`(-2.49cm, +1.95cm)`，说明还存在稳定系统偏差。同一批数据减去该均值后，探索性
+残差 mean/median/max 为 `1.17/1.20/1.97cm`；但这是在拟合数据本身上计算，存在
+数据泄漏，不能作为校准验收成绩。
+
+结论：先建立独立校准集与验证集，只用校准集估计清晰样本偏差，再在验证集检查
+是否稳定低于 3cm。严重遮挡不参与固定偏差拟合，后续单独测试双视角、历史帧或
+主动避让。在这两类问题分开验收前，不进入在线控制。
