@@ -13,6 +13,26 @@ from camera_geometry import (
 )
 
 
+VISIBILITY_SEVERE_THRESHOLD = 0.25
+VISIBILITY_CLEAR_THRESHOLD = 0.75
+
+
+def classify_visibility(ratio):
+    """把连续红块可见率映射为清晰、部分遮挡和严重遮挡三档。"""
+    if ratio is None:
+        return None
+    if isinstance(ratio, bool) or not isinstance(ratio, (int, float)):
+        raise ValueError("block_visibility_ratio 必须是数值")
+    ratio = float(ratio)
+    if not math.isfinite(ratio) or not 0.0 <= ratio <= 1.0:
+        raise ValueError("block_visibility_ratio 必须位于 [0, 1]")
+    if ratio < VISIBILITY_SEVERE_THRESHOLD:
+        return "severe"
+    if ratio < VISIBILITY_CLEAR_THRESHOLD:
+        return "partial"
+    return "clear"
+
+
 def read_jsonl(path):
     """读取非空 JSONL 行。"""
     with Path(path).open("r", encoding="utf-8") as handle:
@@ -43,10 +63,17 @@ def evaluate_rows(predictions, diagnostics, plane_z=0.0):
     for sample_id, prediction in prediction_index.items():
         diagnostic = diagnostic_index[sample_id]
         boxes = prediction.get("boxes")
+        visibility_ratio = diagnostic.get("block_visibility_ratio")
         base_result = {
             "sample_id": sample_id,
             "expected_direction": prediction.get("expected_direction"),
             "random_seed": prediction.get("random_seed"),
+            "block_visible_pixels": diagnostic.get("block_visible_pixels"),
+            "block_reference_pixels": diagnostic.get(
+                "block_reference_pixels"
+            ),
+            "block_visibility_ratio": visibility_ratio,
+            "visibility_group": classify_visibility(visibility_ratio),
             "red_block_box": boxes.get("red_block") if boxes else None,
             "box_center_pixel": None,
             "predicted_target_world": None,
@@ -193,6 +220,19 @@ def summarize_results(results):
             include_pixel_jitter=True,
         )
         for seed in seeds
+    }
+    visibility_groups = sorted(
+        {
+            row["visibility_group"]
+            for row in results
+            if row.get("visibility_group")
+        }
+    )
+    summary["per_visibility_group"] = {
+        group: _summarize_subset(
+            row for row in results if row.get("visibility_group") == group
+        )
+        for group in visibility_groups
     }
     return summary
 

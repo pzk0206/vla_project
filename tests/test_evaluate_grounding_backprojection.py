@@ -24,8 +24,8 @@ class GroundingBackprojectionEvaluationTests(unittest.TestCase):
             config, [0.0, 0.4, 3.0]
         )
 
-    def diagnostic(self, sample_id, block_pos):
-        return {
+    def diagnostic(self, sample_id, block_pos, visibility_ratio=None):
+        diagnostic = {
             "sample_id": sample_id,
             "block_pos": block_pos,
             "camera_eye": [0.0, 0.4, 3.0],
@@ -34,6 +34,15 @@ class GroundingBackprojectionEvaluationTests(unittest.TestCase):
             "view_matrix": self.view,
             "projection_matrix": self.projection,
         }
+        if visibility_ratio is not None:
+            diagnostic.update(
+                {
+                    "block_visible_pixels": round(100 * visibility_ratio),
+                    "block_reference_pixels": 100,
+                    "block_visibility_ratio": visibility_ratio,
+                }
+            )
+        return diagnostic
 
     def box_around_world_point(self, world):
         pixel_x, pixel_y = world_to_pixel(
@@ -61,7 +70,13 @@ class GroundingBackprojectionEvaluationTests(unittest.TestCase):
                 "error_message": None,
             }
         ]
-        diagnostics = [self.diagnostic("sample-1", [0.08, 0.47, 0.05])]
+        diagnostics = [
+            self.diagnostic(
+                "sample-1",
+                [0.08, 0.47, 0.05],
+                visibility_ratio=0.8,
+            )
+        ]
 
         result = evaluate_rows(predictions, diagnostics)[0]
 
@@ -71,6 +86,7 @@ class GroundingBackprojectionEvaluationTests(unittest.TestCase):
         self.assertAlmostEqual(result["localization_error_xy"], 0.0, places=6)
         self.assertEqual(result["expected_direction"], "left")
         self.assertEqual(result["random_seed"], 42)
+        self.assertEqual(result["visibility_group"], "clear")
         self.assertIsNone(result["error_type"])
 
     def test_keeps_invalid_grounding_as_sample_error(self):
@@ -104,6 +120,7 @@ class GroundingBackprojectionEvaluationTests(unittest.TestCase):
                 "expected_direction": "left",
                 "random_seed": 42,
                 "box_center_pixel": [250.0, 190.0],
+                "visibility_group": "clear",
                 "localization_error_xy": 0.01,
                 "signed_error_x": 0.006,
                 "signed_error_y": -0.008,
@@ -113,6 +130,7 @@ class GroundingBackprojectionEvaluationTests(unittest.TestCase):
                 "expected_direction": "right",
                 "random_seed": 42,
                 "box_center_pixel": [254.0, 193.0],
+                "visibility_group": "partial",
                 "localization_error_xy": 0.03,
                 "signed_error_x": -0.018,
                 "signed_error_y": 0.024,
@@ -122,6 +140,7 @@ class GroundingBackprojectionEvaluationTests(unittest.TestCase):
                 "expected_direction": "left",
                 "random_seed": 43,
                 "box_center_pixel": None,
+                "visibility_group": "severe",
                 "localization_error_xy": None,
                 "signed_error_x": None,
                 "signed_error_y": None,
@@ -147,6 +166,7 @@ class GroundingBackprojectionEvaluationTests(unittest.TestCase):
                 "expected_direction": "left",
                 "random_seed": 42,
                 "box_center_pixel": [250.0, 190.0],
+                "visibility_group": "clear",
                 "localization_error_xy": 0.01,
                 "signed_error_x": -0.006,
                 "signed_error_y": 0.008,
@@ -156,6 +176,7 @@ class GroundingBackprojectionEvaluationTests(unittest.TestCase):
                 "expected_direction": "right",
                 "random_seed": 42,
                 "box_center_pixel": [254.0, 193.0],
+                "visibility_group": "partial",
                 "localization_error_xy": 0.03,
                 "signed_error_x": -0.018,
                 "signed_error_y": 0.024,
@@ -165,6 +186,7 @@ class GroundingBackprojectionEvaluationTests(unittest.TestCase):
                 "expected_direction": "left",
                 "random_seed": 43,
                 "box_center_pixel": None,
+                "visibility_group": "severe",
                 "localization_error_xy": None,
                 "signed_error_x": None,
                 "signed_error_y": None,
@@ -188,6 +210,14 @@ class GroundingBackprojectionEvaluationTests(unittest.TestCase):
             summary["per_random_seed"]["42"]
             ["box_center_pixel_max_distance"],
             5.0,
+        )
+        self.assertEqual(
+            summary["per_visibility_group"]["clear"]["num_valid"],
+            1,
+        )
+        self.assertEqual(
+            summary["per_visibility_group"]["severe"]["num_failed"],
+            1,
         )
 
 

@@ -293,30 +293,38 @@ def sample_camera_eye(camera_config):
     return [workspace_center[axis] + eye_offset[axis] for axis in range(3)]
 
 
-def capture_rgb(camera_config, camera_eye):
-    """从虚拟相机采集 RGB 图片。
+def capture_rgb_and_segmentation(camera_config, camera_eye):
+    """使用同一相机矩阵采集 BGR 图片和物体分割掩码。
 
     PyBullet 相机需要两个矩阵：
     - view_matrix: 相机放在哪里、看向哪里、哪个方向算“上”。
     - projection_matrix: 视场角、近裁剪面、远裁剪面、宽高比。
 
-    getCameraImage 返回 RGBA，这里丢掉 alpha 通道并转成 OpenCV 常用的 BGR。
+    getCameraImage 返回 RGBA 和 segmentation；前者转成 OpenCV 常用的 BGR，
+    后者保留 PyBullet 的 object/link 编码供离线可见率诊断使用。
     """
     # 渲染和后续反投影必须共用完全相同的相机矩阵。
     view_matrix, projection_matrix = compute_camera_matrices(
         camera_config, camera_eye
     )
 
-    # depth 和 segmentation 暂时不用，所以用 _ 忽略；以后可以保存成多模态训练数据。
-    width, height, rgb_img, _, _ = p.getCameraImage(
+    width, height, rgb_img, _, segmentation_img = p.getCameraImage(
         width=camera_config["image_width"],
         height=camera_config["image_height"],
         viewMatrix=view_matrix,
         projectionMatrix=projection_matrix,
         renderer=p.ER_BULLET_HARDWARE_OPENGL,
+        flags=p.ER_SEGMENTATION_MASK_OBJECT_AND_LINKINDEX,
     )
     rgb_array = np.reshape(rgb_img, (height, width, 4))[:, :, :3]
-    return cv2.cvtColor(rgb_array, cv2.COLOR_RGB2BGR)
+    segmentation = np.reshape(segmentation_img, (height, width))
+    return cv2.cvtColor(rgb_array, cv2.COLOR_RGB2BGR), segmentation
+
+
+def capture_rgb(camera_config, camera_eye):
+    """从虚拟相机采集 BGR 图片，保持现有调用方接口不变。"""
+    image_bgr, _ = capture_rgb_and_segmentation(camera_config, camera_eye)
+    return image_bgr
 
 
 def write_dataset_step(

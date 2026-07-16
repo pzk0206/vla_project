@@ -12,6 +12,7 @@ from unittest.mock import patch
 from pathlib import Path
 
 import numpy as np
+import control_arm
 
 from control_arm import (
     calculate_target_joints,
@@ -22,6 +23,30 @@ from control_arm import (
 
 
 class CaptureRgbCameraMatrixTests(unittest.TestCase):
+    @patch("control_arm.p.getCameraImage")
+    @patch("control_arm.compute_camera_matrices")
+    def test_returns_rgb_and_segmentation_with_matching_shapes(
+        self, compute_matrices, get_camera_image
+    ):
+        compute_matrices.return_value = ([0.0] * 16, [1.0] * 16)
+        segmentation = np.array([[3, 3], [7, -1]], dtype=np.int32)
+        get_camera_image.return_value = (
+            2,
+            2,
+            np.zeros((2, 2, 4), dtype=np.uint8),
+            None,
+            segmentation,
+        )
+
+        image, mask = control_arm.capture_rgb_and_segmentation(
+            {"image_width": 2, "image_height": 2},
+            [0.0, 0.4, 3.0],
+        )
+
+        self.assertEqual(image.shape, (2, 2, 3))
+        self.assertEqual(mask.shape, (2, 2))
+        np.testing.assert_array_equal(mask, segmentation)
+
     @patch("control_arm.p.getCameraImage")
     @patch("control_arm.compute_camera_matrices")
     def test_passes_shared_matrices_to_pybullet_renderer(
@@ -35,7 +60,7 @@ class CaptureRgbCameraMatrixTests(unittest.TestCase):
             2,
             np.zeros((2, 2, 4), dtype=np.uint8),
             None,
-            None,
+            np.zeros((2, 2), dtype=np.int32),
         )
         camera_config = {
             "image_width": 2,

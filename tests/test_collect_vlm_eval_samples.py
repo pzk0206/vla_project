@@ -20,6 +20,7 @@ from collect_vlm_eval_samples import (
     build_sampling_config,
     build_stratified_balanced_cases,
     collect_vlm_eval_samples,
+    compute_block_visibility_metrics,
     reset_robot_to_target,
     select_evenly_spaced_rows,
     validate_diagnostics,
@@ -63,6 +64,34 @@ class SampleDiagnosticsTests(unittest.TestCase):
         self.assertEqual(len(diagnostic["projection_matrix"]), 16)
         self.assertEqual(diagnostic["image_width"], 448)
         self.assertEqual(diagnostic["image_height"], 448)
+
+    def test_computes_visibility_from_pybullet_body_ids(self):
+        block_id = 5
+        linked_block_pixel = block_id + (2 << 24)
+        visible = np.array(
+            [[block_id, -1], [linked_block_pixel, 8]],
+            dtype=np.int32,
+        )
+        reference = np.array(
+            [[block_id, block_id], [linked_block_pixel, 8]],
+            dtype=np.int32,
+        )
+
+        metrics = compute_block_visibility_metrics(
+            visible,
+            reference,
+            block_id,
+        )
+
+        self.assertEqual(metrics["block_visible_pixels"], 2)
+        self.assertEqual(metrics["block_reference_pixels"], 3)
+        self.assertAlmostEqual(metrics["block_visibility_ratio"], 2 / 3)
+
+    def test_rejects_visibility_without_reference_pixels(self):
+        empty = np.full((2, 2), -1, dtype=np.int32)
+
+        with self.assertRaisesRegex(ValueError, "参考像素"):
+            compute_block_visibility_metrics(empty, empty, body_id=5)
 
     def test_rejects_duplicate_diagnostic_sample_ids(self):
         row = build_sample_diagnostic(
@@ -125,6 +154,9 @@ class SampleDiagnosticsTests(unittest.TestCase):
             capture_sample.return_value = {
                 "camera_eye": [0.0, 0.4, 3.0],
                 "block_pos": [0.01, 0.44, 0.05],
+                "block_visible_pixels": 75,
+                "block_reference_pixels": 100,
+                "block_visibility_ratio": 0.75,
             }
 
             manifest_path, samples = collect_vlm_eval_samples(config)
@@ -157,6 +189,9 @@ class SampleDiagnosticsTests(unittest.TestCase):
         )
         self.assertTrue(manifest_path.name == "samples.jsonl")
         self.assertTrue(all("block_pos" not in row for row in samples))
+        self.assertTrue(
+            all(row["block_visibility_ratio"] == 0.75 for row in diagnostics)
+        )
 
 
 class ValidateVlmEvalSamplesTests(unittest.TestCase):

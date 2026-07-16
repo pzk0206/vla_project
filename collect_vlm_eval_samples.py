@@ -7,19 +7,21 @@
 
 import copy
 import json
+import math
 import random
 import shutil
 import tempfile
 from pathlib import Path
 
 import cv2
+import numpy as np
 import pybullet as p
 
 from camera_geometry import compute_camera_matrices
 from control_arm import (
     CONFIG_PATH,
     calculate_target_joints,
-    capture_rgb,
+    capture_rgb_and_segmentation,
     connect_physics,
     get_link_position,
     get_object_position,
@@ -42,12 +44,18 @@ VALID_DIRECTIONS = {"left", "right", "front", "back", "stop"}
 BALANCED_DIRECTION_ORDER = ("left", "right", "front", "back")
 
 
-def build_sample_diagnostic(sample_id, block_pos, camera_eye, camera_config):
+def build_sample_diagnostic(
+    sample_id,
+    block_pos,
+    camera_eye,
+    camera_config,
+    visibility_metrics=None,
+):
     """构造只供离线评分使用的仿真真值与相机快照。"""
     view_matrix, projection_matrix = compute_camera_matrices(
         camera_config, camera_eye
     )
-    return {
+    diagnostic = {
         "sample_id": sample_id,
         "block_pos": [float(value) for value in block_pos],
         "camera_eye": [float(value) for value in camera_eye],
@@ -55,6 +63,40 @@ def build_sample_diagnostic(sample_id, block_pos, camera_eye, camera_config):
         "image_height": int(camera_config["image_height"]),
         "view_matrix": [float(value) for value in view_matrix],
         "projection_matrix": [float(value) for value in projection_matrix],
+    }
+    if visibility_metrics is not None:
+        diagnostic.update(visibility_metrics)
+    return diagnostic
+
+
+def compute_block_visibility_metrics(
+    visible_segmentation,
+    reference_segmentation,
+    body_id,
+):
+    """比较当前画面与移除机械臂后的分割掩码，计算红块可见率。"""
+    if isinstance(body_id, bool) or not isinstance(body_id, int) or body_id < 0:
+        raise ValueError("body_id 必须是非负整数")
+
+    object_id_mask = (1 << 24) - 1
+
+    def count_body_pixels(segmentation):
+        object_ids = np.asarray(segmentation, dtype=np.int64) & object_id_mask
+        return int(np.count_nonzero(object_ids == body_id))
+
+    visible_pixels = count_body_pixels(visible_segmentation)
+    reference_pixels = count_body_pixels(reference_segmentation)
+    if reference_pixels <= 0:
+        raise ValueError("红块参考像素必须大于 0")
+    if visible_pixels > reference_pixels:
+        raise ValueError(
+            "红块可见像素不能大于参考像素: "
+            f"visible={visible_pixels}, reference={reference_pixels}"
+        )
+    return {
+        "block_visible_pixels": visible_pixels,
+        "block_reference_pixels": reference_pixels,
+        "block_visibility_ratio": visible_pixels / reference_pixels,
     }
 
 
@@ -74,6 +116,40 @@ def validate_diagnostics(rows):
             raise ValueError(f"诊断 view_matrix 非法: {sample_id}")
         if len(row.get("projection_matrix", [])) != 16:
             raise ValueError(f"诊断 projection_matrix 非法: {sample_id}")
+        visibility_fields = {
+            "block_visible_pixels",
+            "block_reference_pixels",
+            "block_visibility_ratio",
+        }
+        present_fields = visibility_fields & row.keys()
+        if present_fields and present_fields != visibility_fields:
+            raise ValueError(f"诊断可见率字段不完整: {sample_id}")
+        if present_fields:
+            visible = row["block_visible_pixels"]
+            reference = row["block_reference_pixels"]
+            ratio = row["block_visibility_ratio"]
+            if (
+                isinstance(visible, bool)
+                or not isinstance(visible, int)
+                or visible < 0
+            ):
+                raise ValueError(f"诊断可见像素非法: {sample_id}")
+            if (
+                isinstance(reference, bool)
+                or not isinstance(reference, int)
+                or reference <= 0
+            ):
+                raise ValueError(f"诊断参考像素非法: {sample_id}")
+            if visible > reference:
+                raise ValueError(f"诊断可见像素超过参考像素: {sample_id}")
+            if (
+                isinstance(ratio, bool)
+                or not isinstance(ratio, (int, float))
+                or not math.isfinite(ratio)
+                or not 0.0 <= ratio <= 1.0
+                or not math.isclose(ratio, visible / reference, abs_tol=1e-12)
+            ):
+                raise ValueError(f"诊断可见率非法: {sample_id}")
 
 
 def write_sample_files(output_dir, samples, diagnostics):
@@ -279,12 +355,30 @@ def capture_balanced_pose_sample(
                 robot_config["ee_link_index"],
             )
         camera_eye = sample_camera_eye(camera_config)
-        image_bgr = capture_rgb(camera_config, camera_eye)
+        image_bgr, visible_segmentation = capture_rgb_and_segmentation(
+            camera_config,
+            camera_eye,
+        )
         if not cv2.imwrite(str(image_path), image_bgr):
             raise RuntimeError(f"无法写入均衡样本图片: {image_path}")
+
+        # 参考分割只用于测量红块完整投影面积，不保存参考 RGB，也不发送给 VLM。
+        if marker_id is not None:
+            p.removeBody(marker_id)
+        p.removeBody(robot_id)
+        _, reference_segmentation = capture_rgb_and_segmentation(
+            camera_config,
+            camera_eye,
+        )
+        visibility_metrics = compute_block_visibility_metrics(
+            visible_segmentation,
+            reference_segmentation,
+            block_id,
+        )
         return {
             "camera_eye": list(camera_eye),
             "block_pos": list(block_pos),
+            **visibility_metrics,
         }
     finally:
         p.disconnect()
@@ -401,6 +495,17 @@ def collect_vlm_eval_samples(config):
                         captured["block_pos"],
                         camera_eye,
                         camera_config,
+                        visibility_metrics={
+                            "block_visible_pixels": captured[
+                                "block_visible_pixels"
+                            ],
+                            "block_reference_pixels": captured[
+                                "block_reference_pixels"
+                            ],
+                            "block_visibility_ratio": captured[
+                                "block_visibility_ratio"
+                            ],
+                        },
                     )
                 )
 
