@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 接入阿里云百炼华北 2（北京）的 `qwen3-vl-flash`，让模型仅根据相机图像和语言指令输出离散方向，并与当前 50/50 成功的 heuristic 基线进行可复现对比。
+**Goal:** 接入阿里云百炼华北 2（北京）的 `qwen3-vl-flash`，构建“语言条件目标定位 + 机器人本体状态 + 几何闭环控制”的可复现 VLA 基线；保留 VLM 直接输出离散方向的结果作为消融对照，并为 action tokenization 与 LoRA/QLoRA 准备高质量轨迹。
 
-**Architecture:** 保留现有 `direction -> 世界坐标单步目标 -> IK -> PyBullet` 控制层，只替换决策来源。先用 heuristic trace 生成带标准方向标签的离线样本，验证 VLM 对方向语义和相机视角的理解，再进入在线闭环，避免一开始把视觉判断错误和机械臂控制错误混在一起。
+**Architecture:** VLM 只根据图像和指令定位用户指定的红块，不读取仿真目标真值；机器人通过关节状态和正向运动学获得自身末端位置。相机标定把红块框中心反投影到工作平面，几何控制器计算离散动作并沿用现有 `direction -> IK -> PyBullet` 执行层。原“VLM 直接看图输出方向”路径保留为受限但有潜力的直接方向基线和消融对照，模块化融合路径作为当前主路线。
 
 **Tech Stack:** Python 3.10、PyBullet、OpenCV、阿里云百炼 OpenAI 兼容 Chat Completions API、`qwen3-vl-flash`、JSONL、unittest
 
@@ -14,10 +14,30 @@
 - Base URL 使用 `https://dashscope.aliyuncs.com/compatible-mode/v1`；如用户后续创建业务空间专属域名，仅替换环境变量，不修改控制代码。
 - 模型固定为 `qwen3-vl-flash`，首轮不同时比较多个模型。
 - API Key 只能通过环境变量传入，禁止写入 YAML、Python、Markdown、日志或 Git。
-- VLM 在线决策不能读取 `block_pos`、`ee_pos` 等仿真真值；这些字段只用于离线评分和失败分析。
+- VLM prompt 和请求不能读取 `block_pos`、`ee_pos` 或标准方向；`block_pos` 只用于离线评分和失败分析。
+- 控制器可以读取机器人关节状态，并通过正向运动学或 `getLinkState()` 获得自身末端位置；这是本体感知，不是目标真值泄露。
 - heuristic 保持默认安全基线，不删除、不重写其控制逻辑。
 - 第一轮 VLM 在线评估最多 20 个 episode；先通过单请求检查和 3 次 smoke test，避免无效调用造成费用浪费。
 - 世界坐标控制参数保持基线：`max_control_steps=80`、`sim_steps_per_action=60`、`move_step_xy=0.03m`。
+
+## 2026-07-15 架构修订依据
+
+直接方向基线已经完成接口、解析、相机和 prompt 多轮实验。v9 在方向不均衡的 10 张
+样本上达到 70%，证明方案具有潜力；v13 在 20cm、10cm、5cm 三档四方向上均为
+2/4，总计 6/12，暴露固定方向偏置。只把分辨率从 224px 提升到 448px 后，v14 的
+20cm 四方向提高到 3/4（75%）。
+
+进一步的 ground-then-decide 实验要求同一回复先给两个框再给方向：模型最终方向
+3/4，但代码根据模型自己的框中心推导为 4/4，内部一致性只有 3/4。back 样本中
+`dx≈-4、dy≈+91`，模型仍输出 `screen_left` 而不是 `screen_down`。因此继续堆叠
+方向 prompt 的预期收益很低；VLM grounding 与确定性坐标比较应拆成两个模块。
+
+最终项目目标是构建稳定、可解释、可扩展到 action token 学习的 VLA 系统，而不是
+证明通用 VLM 可以替代机器人所有状态估计。主路线因此改为模块化感知与控制融合；
+直接方向结果作为重要消融证据保留。
+
+**当前下一步：** 先实现并验证“红块框中心像素 -> 工作平面世界坐标”的相机反投影；
+红块 PyBullet 真值只用于离线误差评分，不参与运行时目标估计。
 
 ---
 
@@ -303,7 +323,52 @@ conda run -n vla_env python evaluate_vlm_decisions.py
 
 Gate: exact-match accuracy 建议至少达到 80%，并且不存在某个关键方向 recall 为 0。未达到时只迭代 prompt 或相机校准，一次只改一个变量并记录结果。
 
-### Task 5: 在线 3 次 smoke test
+### Task 5R: 目标框到世界坐标的可验证感知接口
+
+**主路线接口：**
+
+```text
+图像 + 指令
+-> Qwen 输出 red_block 归一化框
+-> 框中心像素通过相机内外参反投影到工作平面
+-> robot joint state / FK 提供末端世界坐标
+-> 二者差值生成 direction
+```
+
+- [ ] 为像素射线与工作平面求交写纯函数和单元测试。
+- [ ] 使用已知相机矩阵做“世界点 -> 像素 -> 世界平面”往返测试。
+- [ ] 从当前画框诊断中只保留 `red_block` 作为 VLM 感知输出，不再要求 VLM 每帧识别机器人自身末端。
+- [ ] 运行时禁止读取红块 PyBullet 位姿；仅在离线评估中用 `block_pos` 计算定位误差。
+- [ ] 保存原始框、像素中心、反投影世界坐标、末端 FK 坐标和定位延迟。
+- [ ] 红块短暂被遮挡时保留最近一次合法目标估计，并设置明确的最大失效帧数，禁止无限使用陈旧目标。
+
+Gate：固定离线样本中无系统性坐标轴翻转；定位误差足以支持 0.03m 成功阈值，
+且所有无效框、平面求交失败和目标过期都有明确错误记录。
+
+### Task 6R: 融合控制在线 3 次 smoke test
+
+- [ ] 新增独立决策模式，例如 `probe.mode: api_grounded`，保留 `heuristic` 和原 `api`。
+- [ ] 三种模式共用相同的方向执行、IK、终止和 trace 路径。
+- [ ] 先运行 1 个固定 seed，人工核对红块框、反投影点、末端状态和第一步动作。
+- [ ] 再运行 3 个固定 seed，检查 API、感知、目标缓存和控制错误能否分开诊断。
+
+Gate：3 次运行均无无法解释的接口错误；即使没有全部成功，也能从 trace 区分
+目标定位误差、遮挡后的陈旧目标、控制执行误差和 API 错误。
+
+### Task 7R: 对照评估与 VLA 数据交付
+
+- [ ] 在相同 seeds 和控制参数下比较 heuristic、VLM 直接方向、VLM grounding + 本体状态三条路径。
+- [ ] 报告 success rate、final distance、定位误差、API 延迟、失败类型和调用成本。
+- [ ] 将成功闭环整理成 `image + instruction + proprioceptive state + delta action/direction` 数据。
+- [ ] 把 delta action 转换为 action token，统计 encode/decode 重建误差。
+- [ ] 后续 LoRA/QLoRA 先做小样本 overfit，验证模型是否能从图像、指令和本体状态预测动作 token。
+
+验收时应准确称为“VLM 目标感知与机器人本体状态融合的闭环控制基线”；只有未来
+模型直接学习 action token 后，才称为学习式 VLA 策略。
+
+## 直接方向基线（受限但有潜力，保留为历史与消融对照）
+
+### 原 Task 5: 在线 3 次 smoke test
 
 **Files:**
 - Modify: `sim_config.yaml`
@@ -375,7 +440,7 @@ Gate:
 - 不出现连续非法回复导致的无限循环。
 - 即使成功率不足，也必须能明确区分视觉方向错、API 错和控制执行错。
 
-### Task 6: 20 次 Qwen 在线对比评估
+### 原 Task 6: 20 次 Qwen 在线对比评估
 
 **Files:**
 - Modify: `evaluate_probe.py`
@@ -432,7 +497,7 @@ direction confusion（离线集）
 
 `README.md` 只写最终可复现指标；`WORKLOG.md` 写选择阿里百炼、离线校准、失败分析和结论；`docs/evaluation/vlm-vs-heuristic.md` 保存完整对比表。不要把“调用 VLM”夸写成端到端训练完成的 VLA。
 
-### Task 7: 完整回归与阶段验收
+### 原 Task 7: 完整回归与阶段验收
 
 **Files:**
 - Test: `tests/`

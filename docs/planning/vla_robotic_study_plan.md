@@ -39,21 +39,28 @@ control_steps mean / median: 37.58 / 37
 首批 20 次批量评估曾只有 5 次成功。关节级诊断发现无约束 IK 将 KUKA 第 4
 关节推到 `2.0944rad` 物理上限，造成 x/y 串扰和方向振荡。IK 加入关节限位、
 活动范围和当前姿态 `restPoses` 后，相同 20 种子提升到 20/20；继续扩大到
-50 个固定种子后仍为 50/50。当前阶段应描述为“heuristic 闭环稳定性验收
-完成，准备进入 VLM 决策替换与对比”。
+50 个固定种子后仍为 50/50。Stage 3 heuristic 闭环稳定性验收已经完成。
+
+当前 VLM 阶段已经完成第一轮直接方向基线：Qwen API、结构化输出、距离分层评估、
+分辨率消融和目标画框诊断均已跑通。v13 在三档距离上均为 50%，说明距离不是固定
+方向偏置的充分解释；v14 把图片从 224px 提升到 448px 后，20cm 四方向提高到
+75%。ground-then-decide 中模型最终方向为 3/4，而模型框中心由代码推导为 4/4，
+证明 grounding 与确定性方向计算应拆开。当前阶段应描述为“VLM 直接方向基线完成
+能力边界诊断，主路线转向目标感知与机器人本体状态融合”。
 
 ## 总路线
 
 选择路线 B：工程成果 + 模型深度平衡。
 
-这个路线的目标不是最快做一个 demo，也不是马上冲大模型训练，而是先把项目做成可复现、可评估、可解释的闭环系统，再逐步加入 VLM 决策和动作 tokenization。
+这个路线的目标不是最快做一个 demo，也不是马上冲大模型训练，而是先把项目做成可复现、可评估、可解释的闭环系统，再逐步完成 VLM 目标感知、本体状态融合和动作 tokenization。
 
 主线如下：
 
 ```text
 稳定专家采集
 -> 自动化闭环评估
--> VLM 决策替换接口
+-> VLM 直接方向基线与能力边界诊断
+-> VLM 目标感知 + 本体状态融合闭环
 -> 数据集规模化和质量分析
 -> action tokenization
 -> 轻量 LoRA/QLoRA 微调验证
@@ -112,9 +119,10 @@ control_steps mean / median: 37.58 / 37
 - README 或 WORKLOG 中有清晰的结果表。
 - 能回答：系统什么时候成功、什么时候失败、失败后下一步改哪里。
 
-## 第 5-6 周：VLM 决策替换接口
+## 第 5-6 周：VLM 感知与本体状态融合接口（进行中）
 
-目标：把当前规则决策层抽象成可替换模块，为 API VLM 和本地模型做准备。
+目标：保留已经完成的 VLM 直接方向基线，进一步构建稳定、可解释的目标感知与
+机器人本体状态融合闭环，为后续动作学习准备高质量数据。
 
 当前结构可以理解为：
 
@@ -122,42 +130,59 @@ control_steps mean / median: 37.58 / 37
 状态信息 -> heuristic 决策 -> direction -> PyBullet 控制
 ```
 
-目标结构：
+已验证但准确率不足的直接方向结构：
 
 ```text
 图像 + 语言指令 -> decision module -> direction/action -> PyBullet 控制
 ```
 
+新的主结构：
+
+```text
+图像 + 语言指令 -> VLM 红块定位 -> 相机反投影得到目标世界坐标
+机器人关节状态 -> FK/getLinkState 得到自身末端坐标
+目标坐标 - 末端坐标 -> direction/delta action -> IK -> PyBullet 控制
+```
+
 要做的事：
 
+- 保留 `heuristic` 和 VLM 直接方向 `api` 作为对照路径。
+- 新增融合决策模式，例如 `api_grounded`，三种模式共用相同执行和终止逻辑。
+- VLM 只接收图片和语言指令，只输出红块目标框；禁止向 prompt 传入
+  `block_pos`、`ee_pos` 或标准动作。
+- 使用相机内外参把红块框中心反投影到已知工作平面。
+- 机器人通过关节编码器等价状态和正向运动学获得自身末端位置。这属于本体感知，
+  不是读取目标真值。
+- 红块被短暂遮挡时保留最近一次合法目标估计，同时设置最大失效帧数。
 - 统一决策接口，例如：
 
 ```python
 def decide_direction(image_path, instruction, state, config):
     return {
         "direction": "right",
+        "target_world_estimate": [0.1, 0.5, 0.0],
         "raw_response": "...",
-        "decision_source": "heuristic"
+        "decision_source": "api_grounded"
     }
 ```
 
-- 保留 `heuristic` 作为默认决策器。
-- 新增 `api` 决策器，读取 `VLA_API_BASE_URL`、`VLA_API_KEY`、`VLA_MODEL_NAME`。
-- 强制 VLM 只输出 `left/right/front/back/stop`。
-- 对非法输出做兜底，例如记录 `invalid_response` 并回退到 heuristic 或提前终止。
-- 对比 heuristic 和 VLM 的成功率、最终距离、失败类型。
+- 用离线 `block_pos` 只计算目标定位误差，不参与运行时目标估计。
+- 对比 heuristic、VLM 直接方向和融合路径的成功率、最终距离、失败类型与成本。
 
 重点学习：
 
 - VLA 系统里的决策层和控制层解耦。
-- VLM prompt 结构化输出。
-- 模型错误不只看“答错”，还要看是否导致控制发散。
+- 语言条件目标 grounding 与结构化坐标输出。
+- 相机投影、像素射线与工作平面求交。
+- 本体感知、外部目标感知和仿真真值之间的边界。
+- 模型错误不只看“答错”，还要分离目标定位、坐标转换、目标过期和控制执行错误。
 
 验收标准：
 
-- `probe.mode: heuristic` 和 `probe.mode: api` 共用同一套控制逻辑。
-- API 模式能跑通至少 20 次闭环测试。
-- 有 heuristic vs VLM 的对比结果。
+- 红块像素框可以转换成带误差报告的工作平面坐标。
+- `heuristic`、`api` 和 `api_grounded` 共用同一套控制逻辑。
+- 融合模式先完成 3 次 smoke test，再运行至少 20 次固定种子闭环。
+- 有三条路径的统一指标对比和至少 3 个失败案例分析。
 
 ## 第 7 周：专家数据集规模化
 
@@ -226,6 +251,7 @@ def decide_direction(image_path, instruction, state, config):
 ```text
 image: 当前观察图
 instruction: 悬停在红色积木上方
+proprioceptive_state: 当前关节角或末端状态
 target: action tokens 或 direction token
 ```
 
@@ -261,11 +287,11 @@ target: action tokens 或 direction token
 完成这条路线后，可以把项目写成：
 
 ```text
-构建 PyBullet 机械臂 VLA 仿真系统，完成专家轨迹采集、RGB-语言-action 数据对齐、在线闭环控制与自动化评估；设计 episode-level failure analysis，统计 success rate/final distance 等指标；接入多模态模型进行视觉决策替换，并探索 action tokenization 与 LoRA 微调数据管线。
+构建 PyBullet 机械臂 VLA 仿真系统，完成专家轨迹采集、RGB-语言-action 数据对齐、在线闭环控制与自动化评估；设计 episode-level failure analysis，定位 VLM 直接动作预测中的遮挡与坐标歧义；实现语言条件目标定位、相机反投影与机器人本体状态融合，并探索 action tokenization 与 LoRA 微调数据管线。
 ```
 
 当前最优先的下一步是：
 
 ```text
-实现 Stage 3 自动化评估脚本，让 probe 从单次成功升级为可复现实验结果。
+实现“VLM 红块框中心 -> 工作平面世界坐标”的相机反投影，并使用离线红块真值只做定位误差评分。
 ```

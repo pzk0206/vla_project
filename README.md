@@ -122,14 +122,18 @@ probe:
 python stage3_probe.py
 ```
 
-如果要接入 OpenAI 兼容的多模态 API，把 `sim_config.yaml` 中的 `probe.mode` 改为 `api`，并设置环境变量：
+如果要接入阿里云百炼 OpenAI 兼容的多模态 API，使用华北 2（北京）地域的
+`qwen3-vl-flash`，把 `sim_config.yaml` 中的 `probe.mode` 改为 `api`，并设置环境变量：
 
 ```bash
-export VLA_API_BASE_URL="http://host:port/v1"
-export VLA_API_KEY="your_api_key"
-export VLA_MODEL_NAME="your_model_name"
+export VLA_API_BASE_URL="https://dashscope.aliyuncs.com/compatible-mode/v1"
+export VLA_API_KEY="<填写真实 Key，不要写入仓库>"
+export VLA_MODEL_NAME="qwen3-vl-flash"
 python stage3_probe.py
 ```
+
+API Key 只能通过环境变量传入，禁止写入 YAML、Python、Markdown 或日志。如果以后
+使用 `.env` 文件，必须先把 `.env` 加入 `.gitignore`。
 
 ## Stage 3 批量评估
 
