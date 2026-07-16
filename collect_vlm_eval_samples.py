@@ -15,6 +15,7 @@ from pathlib import Path
 import cv2
 import pybullet as p
 
+from camera_geometry import compute_camera_matrices
 from control_arm import (
     CONFIG_PATH,
     calculate_target_joints,
@@ -39,6 +40,61 @@ from stage3_probe import (
 # VLM 和机械臂控制层共同使用的离散动作集合。
 VALID_DIRECTIONS = {"left", "right", "front", "back", "stop"}
 BALANCED_DIRECTION_ORDER = ("left", "right", "front", "back")
+
+
+def build_sample_diagnostic(sample_id, block_pos, camera_eye, camera_config):
+    """构造只供离线评分使用的仿真真值与相机快照。"""
+    view_matrix, projection_matrix = compute_camera_matrices(
+        camera_config, camera_eye
+    )
+    return {
+        "sample_id": sample_id,
+        "block_pos": [float(value) for value in block_pos],
+        "camera_eye": [float(value) for value in camera_eye],
+        "image_width": int(camera_config["image_width"]),
+        "image_height": int(camera_config["image_height"]),
+        "view_matrix": [float(value) for value in view_matrix],
+        "projection_matrix": [float(value) for value in projection_matrix],
+    }
+
+
+def validate_diagnostics(rows):
+    """拒绝无法和 VLM 样本可靠连接的诊断行。"""
+    seen = set()
+    for row in rows:
+        sample_id = row.get("sample_id")
+        if not isinstance(sample_id, str) or not sample_id:
+            raise ValueError("诊断行缺少非空 sample_id")
+        if sample_id in seen:
+            raise ValueError(f"诊断 sample_id 重复: {sample_id}")
+        seen.add(sample_id)
+        if len(row.get("block_pos", [])) != 3:
+            raise ValueError(f"诊断 block_pos 非法: {sample_id}")
+        if len(row.get("view_matrix", [])) != 16:
+            raise ValueError(f"诊断 view_matrix 非法: {sample_id}")
+        if len(row.get("projection_matrix", [])) != 16:
+            raise ValueError(f"诊断 projection_matrix 非法: {sample_id}")
+
+
+def write_sample_files(output_dir, samples, diagnostics):
+    """分别写入可发送样本和仅供评分的诊断真值。"""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    validate_diagnostics(diagnostics)
+    sample_ids = {row["sample_id"] for row in samples}
+    diagnostic_ids = {row["sample_id"] for row in diagnostics}
+    if sample_ids != diagnostic_ids:
+        raise ValueError("samples 与 diagnostics 的 sample_id 不一致")
+    manifest_path = output_dir / "samples.jsonl"
+    diagnostics_path = output_dir / "diagnostics.jsonl"
+    for path, rows in (
+        (manifest_path, samples),
+        (diagnostics_path, diagnostics),
+    ):
+        with path.open("w", encoding="utf-8") as handle:
+            for row in rows:
+                handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+    return manifest_path, diagnostics_path
 
 # 每条离线样本必须提供的最小字段；诊断字段以后可以额外增加。
 REQUIRED_SAMPLE_FIELDS = {
@@ -226,7 +282,10 @@ def capture_balanced_pose_sample(
         image_bgr = capture_rgb(camera_config, camera_eye)
         if not cv2.imwrite(str(image_path), image_bgr):
             raise RuntimeError(f"无法写入均衡样本图片: {image_path}")
-        return camera_eye
+        return {
+            "camera_eye": list(camera_eye),
+            "block_pos": list(block_pos),
+        }
     finally:
         p.disconnect()
 
@@ -272,8 +331,6 @@ def collect_vlm_eval_samples(config):
     evaluation = config["vlm_evaluation"]
     output_dir = Path(evaluation["sample_output_dir"])
     images_dir = output_dir / "images"
-    manifest_path = output_dir / "samples.jsonl"
-
     # 该目录只包含可重新生成的评估样本。每次清理可避免旧图片和新 manifest 混用。
     if output_dir.exists():
         shutil.rmtree(output_dir)
@@ -281,10 +338,12 @@ def collect_vlm_eval_samples(config):
 
     # 使用独立俯视相机并强制保存图片，不修改 baseline 的原始配置字典。
     sampling_config = build_sampling_config(config)
+    camera_config = sampling_config["camera"]
 
     base_seed = config["probe_evaluation"]["random_seed"]
     instruction = config["dataset"]["instruction"]
     samples = []
+    diagnostics = []
 
     # 均衡模式主动构造相对位置；分层模式额外覆盖远、中、近三档距离。
     if evaluation.get("sample_strategy") in {
@@ -316,13 +375,14 @@ def collect_vlm_eval_samples(config):
                 else:
                     sample_id = f"seed_{seed}_{direction}"
                 relative_image_path = images_dir / f"{sample_id}.jpg"
-                camera_eye = capture_balanced_pose_sample(
+                captured = capture_balanced_pose_sample(
                     sampling_config,
                     direction,
                     seed,
                     relative_image_path,
                     offset_xy=case["offset_xy"],
                 )
+                camera_eye = captured["camera_eye"]
                 samples.append(
                     {
                         "sample_id": sample_id,
@@ -335,11 +395,17 @@ def collect_vlm_eval_samples(config):
                         "camera_eye": list(camera_eye),
                     }
                 )
+                diagnostics.append(
+                    build_sample_diagnostic(
+                        sample_id,
+                        captured["block_pos"],
+                        camera_eye,
+                        camera_config,
+                    )
+                )
 
         validate_samples(samples, Path.cwd())
-        with manifest_path.open("w", encoding="utf-8") as manifest_file:
-            for sample in samples:
-                manifest_file.write(json.dumps(sample, ensure_ascii=False) + "\n")
+        manifest_path, _ = write_sample_files(output_dir, samples, diagnostics)
         return manifest_path, samples
 
     # 原始逐步图片只用于挑选，放在临时目录中并在结束后自动清理。
@@ -378,12 +444,18 @@ def collect_vlm_eval_samples(config):
                         "camera_eye": row["camera_eye"],
                     }
                 )
+                diagnostics.append(
+                    build_sample_diagnostic(
+                        sample_id,
+                        row["block_pos"],
+                        row["camera_eye"],
+                        camera_config,
+                    )
+                )
 
     # 先用同一套契约校验全部样本，通过后才写最终 manifest。
     validate_samples(samples, Path.cwd())
-    with manifest_path.open("w", encoding="utf-8") as manifest_file:
-        for sample in samples:
-            manifest_file.write(json.dumps(sample, ensure_ascii=False) + "\n")
+    manifest_path, _ = write_sample_files(output_dir, samples, diagnostics)
 
     return manifest_path, samples
 

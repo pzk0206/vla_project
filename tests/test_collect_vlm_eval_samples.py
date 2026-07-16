@@ -5,6 +5,7 @@ VLM。目的是在批量采样和付费评估前，尽早发现字段缺失、�
 样本 ID 重复。
 """
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -15,12 +16,132 @@ import numpy as np
 
 from collect_vlm_eval_samples import (
     build_balanced_ee_positions,
+    build_sample_diagnostic,
     build_sampling_config,
     build_stratified_balanced_cases,
+    collect_vlm_eval_samples,
     reset_robot_to_target,
     select_evenly_spaced_rows,
+    validate_diagnostics,
     validate_samples,
+    write_sample_files,
 )
+
+
+class SampleDiagnosticsTests(unittest.TestCase):
+    def setUp(self):
+        self.camera_config = {
+            "workspace_center": [0.0, 0.4, 0.0],
+            "up_vector": [0.0, 1.0, 0.0],
+            "image_width": 448,
+            "image_height": 448,
+            "fov": 45,
+            "near_val": 0.1,
+            "far_val": 100.0,
+        }
+
+    def test_builds_reproducible_diagnostic_without_mutating_sample(self):
+        sample = {
+            "sample_id": "seed_42_d020_left",
+            "image_path": "frame.jpg",
+            "instruction": "悬停在红色积木上方",
+            "expected_direction": "left",
+            "camera_eye": [0.0, 0.4, 3.0],
+        }
+
+        diagnostic = build_sample_diagnostic(
+            sample["sample_id"],
+            [0.01, 0.44, 0.05],
+            sample["camera_eye"],
+            self.camera_config,
+        )
+
+        self.assertNotIn("block_pos", sample)
+        self.assertEqual(diagnostic["sample_id"], sample["sample_id"])
+        self.assertEqual(diagnostic["block_pos"], [0.01, 0.44, 0.05])
+        self.assertEqual(len(diagnostic["view_matrix"]), 16)
+        self.assertEqual(len(diagnostic["projection_matrix"]), 16)
+        self.assertEqual(diagnostic["image_width"], 448)
+        self.assertEqual(diagnostic["image_height"], 448)
+
+    def test_rejects_duplicate_diagnostic_sample_ids(self):
+        row = build_sample_diagnostic(
+            "duplicate",
+            [0.01, 0.44, 0.05],
+            [0.0, 0.4, 3.0],
+            self.camera_config,
+        )
+
+        with self.assertRaisesRegex(ValueError, "重复"):
+            validate_diagnostics([row, dict(row)])
+
+    def test_writes_truth_to_separate_file(self):
+        sample = {
+            "sample_id": "seed_42_d020_left",
+            "image_path": "frame.jpg",
+            "instruction": "悬停在红色积木上方",
+            "expected_direction": "left",
+            "camera_eye": [0.0, 0.4, 3.0],
+        }
+        diagnostic = build_sample_diagnostic(
+            sample["sample_id"],
+            [0.01, 0.44, 0.05],
+            sample["camera_eye"],
+            self.camera_config,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path, diagnostics_path = write_sample_files(
+                Path(temp_dir), [sample], [diagnostic]
+            )
+            manifest_row = json.loads(manifest_path.read_text(encoding="utf-8"))
+            diagnostic_row = json.loads(
+                diagnostics_path.read_text(encoding="utf-8")
+            )
+
+        self.assertNotIn("block_pos", manifest_row)
+        self.assertIn("block_pos", diagnostic_row)
+
+    @patch("collect_vlm_eval_samples.validate_samples")
+    @patch("collect_vlm_eval_samples.capture_balanced_pose_sample")
+    @patch("collect_vlm_eval_samples.build_sampling_config")
+    def test_balanced_collection_writes_matching_diagnostics(
+        self, build_config, capture_sample, _validate_samples
+    ):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = {
+                "probe": {"mode": "heuristic"},
+                "probe_evaluation": {"random_seed": 42},
+                "dataset": {"instruction": "悬停在红色积木上方"},
+                "vlm_evaluation": {
+                    "sample_output_dir": temp_dir,
+                    "sample_strategy": "stratified_balanced_poses",
+                    "balanced_pose_offsets_xy": [0.2],
+                    "stratified_num_seeds": 1,
+                },
+                "camera": self.camera_config,
+            }
+            build_config.return_value = config
+            capture_sample.return_value = {
+                "camera_eye": [0.0, 0.4, 3.0],
+                "block_pos": [0.01, 0.44, 0.05],
+            }
+
+            manifest_path, samples = collect_vlm_eval_samples(config)
+            diagnostics_path = Path(temp_dir) / "diagnostics.jsonl"
+
+            diagnostics = [
+                json.loads(line)
+                for line in diagnostics_path.read_text(encoding="utf-8").splitlines()
+            ]
+
+        self.assertEqual(len(samples), 4)
+        self.assertEqual(
+            {row["sample_id"] for row in samples},
+            {row["sample_id"] for row in diagnostics},
+        )
+        self.assertTrue(manifest_path.name == "samples.jsonl")
+        self.assertTrue(all("block_pos" not in row for row in samples))
 
 
 class ValidateVlmEvalSamplesTests(unittest.TestCase):
