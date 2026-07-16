@@ -41,7 +41,14 @@ class ConfigContractTests(unittest.TestCase):
     def test_vlm_evaluation_config_is_valid(self):
         """离线采样与在线评估必须使用非空目录和正数 episode 上限。"""
         evaluation = self.config["vlm_evaluation"]
-        self.assertEqual(evaluation["sample_output_dir"], "vlm_eval_samples_448")
+        self.assertEqual(
+            evaluation["sample_output_dir"],
+            "vlm_eval_samples_448_multiseed_d020",
+        )
+        self.assertEqual(
+            evaluation["grounding_run_name"],
+            "grounding_qwen3_vl_flash_distance20_448_multiseed_v4",
+        )
         self.assertTrue(evaluation["run_output_dir"])
         self.assertTrue(evaluation["offline_run_name"])
         self.assertTrue(evaluation["ground_then_decide_run_name"])
@@ -54,7 +61,7 @@ class ConfigContractTests(unittest.TestCase):
         self.assertEqual(evaluation["sample_strategy"], "stratified_balanced_poses")
         self.assertEqual(evaluation["balanced_pose_offsets_xy"], [0.20])
         self.assertTrue(all(offset > 0 for offset in evaluation["balanced_pose_offsets_xy"]))
-        self.assertGreater(evaluation["stratified_num_seeds"], 0)
+        self.assertEqual(evaluation["stratified_num_seeds"], 5)
         self.assertEqual(camera_override["image_width"], 448)
         self.assertEqual(camera_override["image_height"], 448)
         self.assertGreater(evaluation["offline_num_episodes"], 0)

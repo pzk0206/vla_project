@@ -117,7 +117,7 @@ class SampleDiagnosticsTests(unittest.TestCase):
                     "sample_output_dir": temp_dir,
                     "sample_strategy": "stratified_balanced_poses",
                     "balanced_pose_offsets_xy": [0.2],
-                    "stratified_num_seeds": 1,
+                    "stratified_num_seeds": 5,
                 },
                 "camera": self.camera_config,
             }
@@ -135,7 +135,22 @@ class SampleDiagnosticsTests(unittest.TestCase):
                 for line in diagnostics_path.read_text(encoding="utf-8").splitlines()
             ]
 
-        self.assertEqual(len(samples), 4)
+        self.assertEqual(len(samples), 20)
+        self.assertEqual(len(diagnostics), 20)
+        self.assertEqual(capture_sample.call_count, 20)
+        self.assertEqual(
+            {row["random_seed"] for row in samples},
+            {42, 43, 44, 45, 46},
+        )
+        self.assertEqual(
+            {
+                direction: sum(
+                    row["expected_direction"] == direction for row in samples
+                )
+                for direction in ("left", "right", "front", "back")
+            },
+            {"left": 5, "right": 5, "front": 5, "back": 5},
+        )
         self.assertEqual(
             {row["sample_id"] for row in samples},
             {row["sample_id"] for row in diagnostics},

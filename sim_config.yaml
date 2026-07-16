@@ -114,15 +114,15 @@ probe_evaluation:
 
 # 10. VLM 离线与在线评估配置：先用少量离线样本验证视觉方向，再进行付费闭环。
 vlm_evaluation:
-  sample_output_dir: "vlm_eval_samples_448" # v14 独立保存 448px 样本，不覆盖 v13 的 224px 证据。
+  sample_output_dir: "vlm_eval_samples_448_multiseed_d020" # 五个 seed 的 20 张定位样本，不覆盖原四张证据。
   run_output_dir: "vlm_eval_runs"       # 离线预测与在线闭环评估结果的根目录。
-  offline_run_name: "offline_qwen3_vl_flash_distance20_448_v14" # v14 只提高到 448px，与 224px 的 20cm 结果对照。
-  grounding_run_name: "grounding_qwen3_vl_flash_distance20_448_v3" # 检查 448px 下 20cm 四方向的目标框。
-  ground_then_decide_run_name: "ground_then_decide_qwen3_vl_flash_448_v1" # 同一回复先框选再给方向，检查内部一致性。
+  offline_run_name: "offline_qwen3_vl_flash_distance20_448_multiseed_v15" # 多 seed 目录与原四样本方向结果隔离。
+  grounding_run_name: "grounding_qwen3_vl_flash_distance20_448_multiseed_v4" # 五个位置、四姿态的目标框稳定性实验。
+  ground_then_decide_run_name: "ground_then_decide_qwen3_vl_flash_448_multiseed_v2" # 避免新样本误写入原四样本运行目录。
   sample_strategy: "stratified_balanced_poses" # 每档距离主动构造四方向，消除类别偏置。
   balanced_pose_offset_xy: 0.10      # 10cm 明显超过停止阈值，同时避开靠近底座的不可达区。
   balanced_pose_offsets_xy: [0.20]  # v14 固定 20cm，只改变图片分辨率这个变量。
-  stratified_num_seeds: 1            # 固定 seed 42，共四方向 4 张。
+  stratified_num_seeds: 5            # 固定 seeds 42-46，每个 seed 四方向，共 20 张。
   balanced_block_position:           # 仅均衡离线基准使用，不修改 Baseline 原任务分布。
     x_range: [0.15, 0.2]              # 侧移目标区，避免机械臂主体遮住 back 方向红块。
     y_range: [0.55, 0.65]             # 向外移，保证 front/back 两侧姿态都在可达区。
