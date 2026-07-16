@@ -13,6 +13,9 @@ env/
 dataset/
 probe_runs/
 probe_eval_runs/
+vlm_eval_samples/
+vlm_eval_samples_448/
+vlm_eval_runs/
 
 # Logs and temporary files
 *.log

@@ -92,12 +92,18 @@ probe:
   move_step_xy: 0.03                 # left/right/front/back 每次移动的平面步长。
   hover_height: 0.15                 # 闭环控制时仍然保持在积木上方的悬停高度。
   stop_distance_xy: 0.02             # 末端与目标在 xy 平面足够接近时，判定 stop。
+  end_effector_marker:               # 只改变真实末端外观，方便 VLM 区分中间关节。
+    enabled: false                    # v10 消融降到 50%，恢复无标记视觉基线。
+    color_rgba: [0, 1, 0, 1]         # 纯绿色，不编码任何移动方向。
+    radius: 0.08                      # 8cm 无碰撞视觉球，横向姿态下也能露出绿色边缘。
   api:
     base_url_env: "VLA_API_BASE_URL" # 例如 http://host:port/v1
     api_key_env: "VLA_API_KEY"       # 多模态 API Key 环境变量名。
     model_env: "VLA_MODEL_NAME"      # 模型名环境变量名。
     endpoint_path: "/chat/completions" # OpenAI 兼容接口路径。
     temperature: 0.0                 # 探路阶段尽量让输出稳定。
+    timeout_seconds: 30
+    max_retries: 2
 
 # 9. Stage 3 批量评估配置：
 probe_evaluation:
@@ -105,3 +111,37 @@ probe_evaluation:
   output_dir: "probe_eval_runs"       # 每次评估会在这里创建带时间戳的批次目录。
   save_failure_images_only: true     # 成功只留 trace，失败保留图片用于复盘。
   random_seed: 42                    # episode i 使用 random_seed + i，保证可复现。
+
+# 10. VLM 离线与在线评估配置：先用少量离线样本验证视觉方向，再进行付费闭环。
+vlm_evaluation:
+  sample_output_dir: "vlm_eval_samples_448" # v14 独立保存 448px 样本，不覆盖 v13 的 224px 证据。
+  run_output_dir: "vlm_eval_runs"       # 离线预测与在线闭环评估结果的根目录。
+  offline_run_name: "offline_qwen3_vl_flash_distance20_448_v14" # v14 只提高到 448px，与 224px 的 20cm 结果对照。
+  grounding_run_name: "grounding_qwen3_vl_flash_distance20_448_v3" # 检查 448px 下 20cm 四方向的目标框。
+  ground_then_decide_run_name: "ground_then_decide_qwen3_vl_flash_448_v1" # 同一回复先框选再给方向，检查内部一致性。
+  sample_strategy: "stratified_balanced_poses" # 每档距离主动构造四方向，消除类别偏置。
+  balanced_pose_offset_xy: 0.10      # 10cm 明显超过停止阈值，同时避开靠近底座的不可达区。
+  balanced_pose_offsets_xy: [0.20]  # v14 固定 20cm，只改变图片分辨率这个变量。
+  stratified_num_seeds: 1            # 固定 seed 42，共四方向 4 张。
+  balanced_block_position:           # 仅均衡离线基准使用，不修改 Baseline 原任务分布。
+    x_range: [0.15, 0.2]              # 侧移目标区，避免机械臂主体遮住 back 方向红块。
+    y_range: [0.55, 0.65]             # 向外移，保证 front/back 两侧姿态都在可达区。
+  balanced_pose_tolerance: 0.005     # 静态末端目标需在 5mm 内收敛后才允许拍照。
+  balanced_pose_ik_iterations: 20   # 迭代 IK，避免单次近似解污染 stop 标签。
+  offline_num_episodes: 5            # 使用固定种子 42-46 收集离线样本。
+  max_samples_per_episode: 10        # 每个 episode 最多均匀保留 10 帧，减少重复画面。
+  online_smoke_episodes: 3           # 正式评估前只运行 3 次在线冒烟测试。
+  online_eval_episodes: 20           # 第一轮付费在线评估最多运行 20 次。
+  use_dual_view: false               # v9 先使用无跨面板干扰的单张正俯视图。
+  camera_override:                   # VLM 使用俯视图，避免斜视透视混淆世界 X/Y。
+    image_width: 448                 # v14 单变量：宽度从 224 提升到 448。
+    image_height: 448                # v14 单变量：高度从 224 提升到 448。
+    eye_offset_base: [0.0, 0.0, 3.0] # 提高到 3 米正俯视，让高位末端和地面红块同时入画。
+    eye_offset_random_range: [0.0, 0.0] # 首轮关闭视角扰动，先验证方向语义。
+    up_vector: [0, 1, 0]             # 画面上方对应世界 +Y。
+    fov: 45                          # 覆盖机械臂和目标工作区，同时保持目标清晰。
+  secondary_camera_override:         # 从 -Y 侧补看遮挡区，屏幕方向仍与左图一致。
+    eye_offset_base: [0.0, -0.8, 2.0]
+    eye_offset_random_range: [0.0, 0.0]
+    up_vector: [0, 1, 0]
+    fov: 45

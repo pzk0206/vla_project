@@ -33,9 +33,34 @@ class ConfigContractTests(unittest.TestCase):
                 "camera",
                 "probe",
                 "probe_evaluation",
+                "vlm_evaluation",
             }
             <= self.config.keys()
         )
+
+    def test_vlm_evaluation_config_is_valid(self):
+        """离线采样与在线评估必须使用非空目录和正数 episode 上限。"""
+        evaluation = self.config["vlm_evaluation"]
+        self.assertEqual(evaluation["sample_output_dir"], "vlm_eval_samples_448")
+        self.assertTrue(evaluation["run_output_dir"])
+        self.assertTrue(evaluation["offline_run_name"])
+        self.assertTrue(evaluation["ground_then_decide_run_name"])
+        camera_override = evaluation["camera_override"]
+        self.assertEqual(len(camera_override["eye_offset_base"]), 3)
+        self.assertEqual(camera_override["eye_offset_base"], [0.0, 0.0, 3.0])
+        self.assertEqual(len(camera_override["up_vector"]), 3)
+        self.assertEqual(len(camera_override["eye_offset_random_range"]), 2)
+        self.assertIs(evaluation["use_dual_view"], False)
+        self.assertEqual(evaluation["sample_strategy"], "stratified_balanced_poses")
+        self.assertEqual(evaluation["balanced_pose_offsets_xy"], [0.20])
+        self.assertTrue(all(offset > 0 for offset in evaluation["balanced_pose_offsets_xy"]))
+        self.assertGreater(evaluation["stratified_num_seeds"], 0)
+        self.assertEqual(camera_override["image_width"], 448)
+        self.assertEqual(camera_override["image_height"], 448)
+        self.assertGreater(evaluation["offline_num_episodes"], 0)
+        self.assertGreater(evaluation["max_samples_per_episode"], 0)
+        self.assertGreater(evaluation["online_smoke_episodes"], 0)
+        self.assertGreater(evaluation["online_eval_episodes"], 0)
 
     def test_probe_evaluation_config_is_valid(self):
         """批量评估必须有正数次数、非空目录和可复现的整数种子。"""
@@ -73,6 +98,22 @@ class ConfigContractTests(unittest.TestCase):
             task["force_terminal_after_step"],
             dataset["max_steps_per_episode"],
         )
+    def test_probe_api_limits_are_valid(self):
+        api = self.config["probe"]["api"]
+        self.assertGreater(api["timeout_seconds"], 0)
+        self.assertGreaterEqual(api["max_retries"], 0)
+
+    def test_end_effector_marker_config_is_valid(self):
+        """VLM 末端标记开关和 RGBA 颜色配置必须合法。"""
+        marker = self.config["probe"]["end_effector_marker"]
+
+        self.assertIs(marker["enabled"], False)
+        self.assertEqual(len(marker["color_rgba"]), 4)
+        self.assertTrue(all(0 <= channel <= 1 for channel in marker["color_rgba"]))
+        self.assertGreater(marker["radius"], 0)
+
+        evaluation = self.config["vlm_evaluation"]
+        self.assertGreater(evaluation["balanced_pose_offset_xy"], 0)
 
 
 if __name__ == "__main__":

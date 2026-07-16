@@ -56,6 +56,79 @@ DIRECTION_TO_DELTA = {
 }
 
 
+def apply_end_effector_marker(robot_id, robot_config, marker_config):
+    """把真实末端 link 改成醒目的颜色，帮助 VLM 区分末端与中间关节。"""
+    if not marker_config.get("enabled", False):
+        return None
+    p.changeVisualShape(
+        robot_id,
+        robot_config["ee_link_index"],
+        rgbaColor=marker_config["color_rgba"],
+    )
+    visual_shape_id = p.createVisualShape(
+        p.GEOM_SPHERE,
+        radius=marker_config["radius"],
+        rgbaColor=marker_config["color_rgba"],
+    )
+    return p.createMultiBody(
+        baseMass=0,
+        baseCollisionShapeIndex=-1,
+        baseVisualShapeIndex=visual_shape_id,
+    )
+
+
+def sync_end_effector_marker(marker_id, robot_id, link_index):
+    """在拍照前把无碰撞视觉小球同步到真实末端，不影响物理控制。"""
+    link_state = p.getLinkState(robot_id, link_index)
+    p.resetBasePositionAndOrientation(
+        marker_id,
+        link_state[4],
+        link_state[5],
+    )
+
+
+def combine_camera_views(primary_image, secondary_image):
+    """添加面板标签和分隔线，再组成一张双视角模型输入图。"""
+    if primary_image.shape[0] != secondary_image.shape[0]:
+        raise ValueError("双视图高度必须相同")
+
+    def add_header(image, label):
+        # 独立标题栏不会盖住机械臂或红块；英文标签可由 OpenCV 稳定绘制。
+        annotated = cv2.copyMakeBorder(
+            image,
+            24,
+            0,
+            0,
+            0,
+            cv2.BORDER_CONSTANT,
+            value=(0, 0, 0),
+        )
+        cv2.putText(
+            annotated,
+            label,
+            (8, 17),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (255, 255, 255),
+            1,
+            cv2.LINE_AA,
+        )
+        return annotated
+
+    primary_panel = add_header(primary_image, "MAIN")
+    secondary_panel = add_header(secondary_image, "AUX")
+    primary_with_divider = cv2.copyMakeBorder(
+        primary_panel,
+        0,
+        0,
+        0,
+        4,
+        cv2.BORDER_CONSTANT,
+        value=(0, 255, 255),
+    )
+    return cv2.hconcat([primary_with_divider, secondary_panel])
+
+
 def direction_to_target(direction, ee_pos, hover_height, move_step_xy):
     """把世界坐标方向转换成单步末端目标位置。
 
@@ -119,43 +192,112 @@ def encode_image_to_data_url(image_bgr):
     return f"data:image/jpeg;base64,{image_base64}"
 
 
-def build_probe_prompt():
-    """构造给多模态模型看的最小控制提示词。
+SCREEN_TO_WORLD = {
+    "screen_right": "right",
+    "screen_left": "left",
+    "screen_up": "front",
+    "screen_down": "back",
+    "stop": "stop",
+}
 
-    这个 prompt 故意要求模型只输出 left/right/front/back/stop。
-    原因是阶段三先验证闭环骨架，不让模型自由生成长文本，
-    否则后面的解析和控制会变得不稳定。
+
+def build_vision_direction_prompt(instruction, include_stop):
+    """构造在线、离线共用的图像方向 prompt。
+
+    末端由机械臂连接结构确定，不再依赖颜色或它在画面中的高低位置。
+    离线方向集不包含停止样本；在线闭环才启用停止分支。
     """
-    return (
-        "你在帮助控制一个仿真机械臂末端接近红色积木上方。"
-        "请只输出一个方向词，不要输出解释。"
-        "允许输出的内容只有: left, right, front, back, stop。"
-        "如果红色积木已经基本位于末端正下方，则输出 stop。"
+    lines = [
+        f"任务指令：{instruction}",
+        "你在控制 PyBullet 机械臂末端，使其移动到红色方块正上方。",
+        "输入图片是一张单张正俯视图。",
+        "先找到固定在地面上的机械臂底座，再沿相互连接的机械臂连杆逐节追踪；"
+        "连接关系中最后一节的末梢才是真实末端。",
+        "这里的最后一节由机械臂连接关系决定，不是画面中的直线距离、上下位置或颜色。",
+        "不要把固定底座或中间关节当成末端。",
+        "比较红色方块中心相对真实末端中心在画面中的位置。",
+        "如果红块主要在末端右侧，输出 screen_right。",
+        "如果红块主要在末端左侧，输出 screen_left。",
+        "如果红块主要在末端下方，输出 screen_down。",
+        "如果红块主要在末端上方，输出 screen_up。",
+        "如果同时存在水平和垂直偏差，比较两者的像素距离绝对值，选择偏差更大的轴。",
+    ]
+    if include_stop:
+        lines.extend(
+            [
+                "只有当真实末端中心与红色方块中心已经基本对齐时，才输出 stop。",
+                "只能输出一个标签：screen_left、screen_right、screen_up、screen_down、stop。",
+            ]
+        )
+    else:
+        lines.append(
+            "只能输出一个标签：screen_left、screen_right、screen_up、screen_down。"
+        )
+    lines.append("不要解释，不要输出标点或其他文字。")
+    return "\n".join(lines)
+
+
+def build_probe_prompt():
+    """兼容旧调用：在线闭环使用带停止分支的共享 prompt。"""
+    return build_vision_direction_prompt(
+        "悬停在红色积木上方",
+        include_stop=True,
     )
 
 
-def parse_direction(text):
-    """从模型回复里解析方向词。
-
-    理想情况：模型只返回 "left" 这种单词。
-    兜底情况：模型如果返回 "move left" 或带解释文本，
-    这里用正则从中提取第一个合法方向。
-
-    如果完全解析不到，就返回 stop，避免机械臂乱动。
-    """
+def parse_screen_direction(text):
+    """从模型回复中提取自然图像方向标签。"""
     if not text:
-        return "stop"
+        return None
     lowered = text.strip().lower()
+    if lowered in SCREEN_TO_WORLD:
+        return lowered
+    match = re.search(
+        r"\b(screen_left|screen_right|screen_up|screen_down|stop)\b",
+        lowered,
+    )
+    return match.group(1) if match else None
+
+
+def map_screen_to_world(screen_direction):
+    """把图像坐标方向确定性转换成 PyBullet 世界动作。"""
+    if screen_direction not in SCREEN_TO_WORLD:
+        raise ValueError(f"未知图像方向: {screen_direction!r}")
+    return SCREEN_TO_WORLD[screen_direction]
+
+
+class InvalidModelResponseError(RuntimeError):
+    """模型回复中不包含任何允许的离散方向。"""
+
+
+def parse_direction(text):
+    """从模型回复中提取合法方向；无法解析时返回 None。"""
+    # 空回复不是 stop，而是一次无效模型回复。
+    if not text:
+        return None
+
+    lowered = text.strip().lower()
+
+    # 优先处理模型只返回一个方向词的标准情况。
     for direction in DIRECTION_TO_DELTA:
         if lowered == direction:
             return direction
+
+    # 兼容 “move right” 之类带简短解释的回复。
     match = re.search(r"\b(left|right|front|back|stop)\b", lowered)
     if match:
         return match.group(1)
-    return "stop"
+
+    # 没有合法方向时明确返回 None，避免伪装成 stop。
+    return None
 
 
-def call_openai_compatible_api(image_bgr, api_config):
+def call_openai_compatible_api(
+    image_bgr,
+    api_config,
+    prompt_text=None,
+    response_parser=parse_direction,
+):
     """调用 OpenAI 兼容的多模态 API，让模型根据图片判断移动方向。
 
     这个函数只在 sim_config.yaml 里 probe.mode = "api" 时会被使用。
@@ -165,6 +307,7 @@ def call_openai_compatible_api(image_bgr, api_config):
     - VLA_API_BASE_URL: 接口地址，例如 http://host:port/v1
     - VLA_API_KEY: API Key
     - VLA_MODEL_NAME: 模型名
+
     """
     base_url = os.environ.get(api_config["base_url_env"], "").rstrip("/")
     api_key = os.environ.get(api_config["api_key_env"], "")
@@ -185,7 +328,10 @@ def call_openai_compatible_api(image_bgr, api_config):
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": build_probe_prompt()},
+                    {
+                        "type": "text",
+                        "text": prompt_text or build_probe_prompt(),
+                    },
                     {
                         "type": "image_url",
                         "image_url": {"url": encode_image_to_data_url(image_bgr)},
@@ -207,12 +353,31 @@ def call_openai_compatible_api(image_bgr, api_config):
         method="POST",
     )
 
-    try:
-        with urllib.request.urlopen(request, timeout=60) as response:
-            body = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        error_body = exc.read().decode("utf-8", errors="ignore")
-        raise RuntimeError(f"API 请求失败: {exc.code} {error_body}") from exc
+    # max_retries 表示首次请求失败后最多额外尝试几次。
+    for attempt in range(api_config["max_retries"] + 1):
+        try:
+            # 超时时间由 YAML 配置控制，避免网络策略写死在 Python 代码中。
+            with urllib.request.urlopen(
+                request,
+                timeout=api_config["timeout_seconds"],
+            ) as response:
+                body = json.loads(response.read().decode("utf-8"))
+            break
+        except urllib.error.HTTPError as exc:
+            error_body = exc.read().decode("utf-8", errors="ignore")
+            retryable = exc.code == 429 or 500 <= exc.code < 600
+
+            # 429 和服务端 5xx 通常是瞬时错误，有剩余次数时才重试。
+            if retryable and attempt < api_config["max_retries"]:
+                continue
+            raise RuntimeError(
+                f"API 请求失败: {exc.code} {error_body}"
+            ) from exc
+        except urllib.error.URLError as exc:
+            # 连接中断、DNS 等网络瞬时错误可以重试；次数耗尽后明确失败。
+            if attempt < api_config["max_retries"]:
+                continue
+            raise RuntimeError(f"API 网络请求失败: {exc.reason}") from exc
 
     # 不同兼容服务返回的 content 可能是字符串，也可能是列表。
     # 这里统一整理成普通文本，再交给 parse_direction 解析方向。
@@ -223,7 +388,17 @@ def call_openai_compatible_api(image_bgr, api_config):
             if isinstance(item, dict) and item.get("type") == "text":
                 text_chunks.append(item.get("text", ""))
         content = " ".join(text_chunks)
-    return parse_direction(content), content
+
+    # 请求成功不等于模型输出有效，必须单独验证离散方向。
+    direction = response_parser(content)
+    if direction is None:
+        # 限制预览长度，既保留诊断线索，也避免长回复大量写入错误日志。
+        response_preview = str(content).strip().replace("\n", " ")[:200]
+        raise InvalidModelResponseError(
+            f"模型回复不包含合法方向: {response_preview!r}"
+        )
+
+    return direction, content
 
 
 def heuristic_direction(ee_pos, block_pos, stop_distance_xy):
@@ -251,7 +426,13 @@ def heuristic_direction(ee_pos, block_pos, stop_distance_xy):
     return ("front", "heuristic_dy_positive") if dy > 0 else ("back", "heuristic_dy_negative")
 
 
-def decide_direction(probe_config, image_bgr, ee_pos, block_pos):
+def decide_direction(
+    probe_config,
+    image_bgr,
+    ee_pos,
+    block_pos,
+    instruction="悬停在红色积木上方",
+):
     """统一决策入口：根据配置选择真实 API 或启发式规则。
 
     main() 不关心方向来自哪里，只关心最终拿到：
@@ -261,8 +442,16 @@ def decide_direction(probe_config, image_bgr, ee_pos, block_pos):
     """
     mode = probe_config["mode"].lower()
     if mode == "api":
-        direction, raw_response = call_openai_compatible_api(image_bgr, probe_config["api"])
-        return direction, raw_response, "api"
+        screen_direction, raw_response = call_openai_compatible_api(
+            image_bgr,
+            probe_config["api"],
+            prompt_text=build_vision_direction_prompt(
+                instruction,
+                include_stop=True,
+            ),
+            response_parser=parse_screen_direction,
+        )
+        return map_screen_to_world(screen_direction), raw_response, "api"
     if mode == "heuristic":
         direction, raw_response = heuristic_direction(
             ee_pos,
@@ -343,6 +532,12 @@ def run_probe_episode(config, episode_idx, episode_dir, random_seed=None):
     # 初始化仿真世界：连接 PyBullet、加载机械臂、加载红色积木。
     connect_physics(config["connection_mode"])
     _, robot_id = setup_world(config)
+    # 标记只改变末端外观，不改变 IK、关节状态或标准方向标签。
+    end_effector_marker_id = apply_end_effector_marker(
+        robot_id,
+        robot_config,
+        probe_config["end_effector_marker"],
+    )
     block_id = load_block(task_config)
     settle_object(config, task_config["initial_settle_steps"])
 
@@ -357,6 +552,12 @@ def run_probe_episode(config, episode_idx, episode_dir, random_seed=None):
     # 一次 probe 内相机固定，避免画面变化来自相机抖动。
     # 不同运行之间仍然可以有轻微随机视角，保持后续泛化空间。
     camera_eye = sample_camera_eye(camera_config)
+    secondary_camera_config = probe_config.get("secondary_camera")
+    secondary_camera_eye = (
+        sample_camera_eye(secondary_camera_config)
+        if secondary_camera_config
+        else None
+    )
     print(
         f"🎥 [PROBE] 阶段三探路相机位置: "
         f"X:{camera_eye[0]:.2f}, Y:{camera_eye[1]:.2f}, Z:{camera_eye[2]:.2f}"
@@ -379,7 +580,21 @@ def run_probe_episode(config, episode_idx, episode_dir, random_seed=None):
 
             # 采集当前相机图片。API 模式会把这张图发给多模态模型；
             # heuristic 模式虽然不靠图片决策，但保存图片便于人肉复盘。
+            if end_effector_marker_id is not None:
+                sync_end_effector_marker(
+                    end_effector_marker_id,
+                    robot_id,
+                    robot_config["ee_link_index"],
+                )
             image_bgr = capture_rgb(camera_config, camera_eye)
+            # 左图提供稳定的方向坐标，右图在机械臂遮挡红块时补充观察。
+            # 拼成一张图后仍然只需调用模型一次。
+            if secondary_camera_config:
+                secondary_image_bgr = capture_rgb(
+                    secondary_camera_config,
+                    secondary_camera_eye,
+                )
+                image_bgr = combine_camera_views(image_bgr, secondary_image_bgr)
             image_filename = os.path.join(output_dir, f"probe_step_{control_step:02d}.jpg")
             if probe_config["save_trace_images"]:
                 cv2.imwrite(image_filename, image_bgr)
@@ -391,6 +606,7 @@ def run_probe_episode(config, episode_idx, episode_dir, random_seed=None):
                 image_bgr,
                 ee_pos_before,
                 block_pos,
+                instruction=config["dataset"]["instruction"],
             )
 
             # heuristic 和 API 共用同一条执行路径：方向词决定真实的单步位移。
@@ -466,6 +682,11 @@ def run_probe_episode(config, episode_idx, episode_dir, random_seed=None):
                 "distance_delta": distance_delta,
                 "termination_reason": termination_reason,
                 "image_path": image_filename if probe_config["save_trace_images"] else None,
+                # 离线 VLM 样本必须记录实际视角，才能复现方向语义问题。
+                "camera_eye": list(camera_eye),
+                "secondary_camera_eye": (
+                    list(secondary_camera_eye) if secondary_camera_eye else None
+                ),
             }
             write_probe_trace(trace_jsonl_path, trace_row)
             trace_rows.append(trace_row)
