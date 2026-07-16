@@ -1,5 +1,6 @@
 """冻结清晰 grounding 的固定偏差，并在独立反投影结果上验证。"""
 
+import argparse
 import json
 import math
 import statistics
@@ -167,3 +168,138 @@ def apply_frozen_calibration(calibration, validation_rows):
             )
         corrected_rows.append(corrected)
     return corrected_rows
+
+
+def _summarize_group(rows):
+    """汇总一组原始/补偿误差，并把失败样本计入通过率分母。"""
+    rows = list(rows)
+    valid = [
+        row for row in rows if row.get("corrected_error_xy") is not None
+    ]
+    raw_errors = [row["localization_error_xy"] for row in valid]
+    corrected_errors = [row["corrected_error_xy"] for row in valid]
+    within = [
+        error
+        for error in corrected_errors
+        if error <= PASS_THRESHOLD_METERS
+    ]
+    return {
+        "num_samples": len(rows),
+        "num_valid": len(valid),
+        "num_failed": len(rows) - len(valid),
+        "raw_error_xy_mean": (
+            statistics.fmean(raw_errors) if raw_errors else None
+        ),
+        "raw_error_xy_median": (
+            statistics.median(raw_errors) if raw_errors else None
+        ),
+        "raw_error_xy_max": max(raw_errors) if raw_errors else None,
+        "corrected_error_xy_mean": (
+            statistics.fmean(corrected_errors) if corrected_errors else None
+        ),
+        "corrected_error_xy_median": (
+            statistics.median(corrected_errors)
+            if corrected_errors
+            else None
+        ),
+        "corrected_error_xy_max": (
+            max(corrected_errors) if corrected_errors else None
+        ),
+        "num_within_3cm": len(within),
+        "within_3cm_rate": len(within) / len(rows) if rows else 0.0,
+    }
+
+
+def summarize_validation(rows, calibration):
+    """生成整体/可见率摘要，并严格判定 clear 组是否通过。"""
+    rows = list(rows)
+    groups = {
+        group: _summarize_group(
+            row for row in rows if row["visibility_group"] == group
+        )
+        for group in ("clear", "partial", "severe")
+    }
+    clear = groups["clear"]
+    reasons = []
+    if clear["num_samples"] == 0:
+        reasons.append("验证集中没有 clear 样本")
+    if clear["num_failed"]:
+        reasons.append("存在定位失败的 clear 样本")
+    if (
+        clear["num_valid"]
+        and clear["num_within_3cm"] != clear["num_samples"]
+    ):
+        reasons.append("clear 样本补偿后误差超过 0.03m")
+
+    return {
+        "calibration_source": calibration["calibration_source"],
+        "num_clear_calibration_samples": calibration[
+            "num_clear_calibration_samples"
+        ],
+        "frozen_correction": {
+            "x": calibration["correction_x"],
+            "y": calibration["correction_y"],
+        },
+        "pass_threshold_meters": PASS_THRESHOLD_METERS,
+        "num_validation_samples": len(rows),
+        "num_valid": sum(
+            row.get("corrected_error_xy") is not None for row in rows
+        ),
+        "num_failed": sum(
+            row.get("corrected_error_xy") is None for row in rows
+        ),
+        "overall": _summarize_group(rows),
+        "per_visibility_group": groups,
+        "passed": not reasons,
+        "failure_reasons": reasons,
+    }
+
+
+def write_jsonl(path, rows):
+    """覆盖写入逐样本补偿结果。"""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def write_outputs(output_dir, calibration, rows, summary):
+    """保存冻结参数、逐样本结果和最终摘要三个证据文件。"""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    with (output_dir / "calibration.json").open(
+        "w", encoding="utf-8"
+    ) as handle:
+        json.dump(calibration, handle, ensure_ascii=False, indent=2)
+    write_jsonl(output_dir / "corrected_validation_results.jsonl", rows)
+    with (output_dir / "calibration_validation_summary.json").open(
+        "w", encoding="utf-8"
+    ) as handle:
+        json.dump(summary, handle, ensure_ascii=False, indent=2)
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--calibration-results", required=True)
+    parser.add_argument("--validation-results", required=True)
+    parser.add_argument("--output-dir", required=True)
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+    calibration_rows = read_jsonl(args.calibration_results)
+    validation_rows = read_jsonl(args.validation_results)
+    calibration = fit_clear_calibration(
+        calibration_rows,
+        args.calibration_results,
+    )
+    corrected = apply_frozen_calibration(calibration, validation_rows)
+    summary = summarize_validation(corrected, calibration)
+    write_outputs(args.output_dir, calibration, corrected, summary)
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+
+
+if __name__ == "__main__":
+    main()
