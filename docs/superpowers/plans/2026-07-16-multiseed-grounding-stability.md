@@ -15,6 +15,7 @@
 - 不得覆盖 `vlm_eval_samples_448/` 或 `grounding_qwen3_vl_flash_distance20_448_v3/`。
 - `samples.jsonl` 不得包含 `block_pos` 和相机矩阵；这些真值只能保存在 `diagnostics.jsonl`。
 - 本计划不添加标定偏移，也不把定位结果接入在线控制。
+- 保留原 `balanced_block_position` 范围和遮挡样本；使用 PyBullet segmentation mask 把遮挡程度写入 diagnostics，不通过筛选图片掩盖问题。
 - 所有 Python 测试和脚本都必须通过 `conda run -n vla_env` 执行。
 
 ---
@@ -478,16 +479,36 @@ git commit -m "feat: summarize grounding stability by pose and seed"
 
 **文件：**
 
+- 修改：`control_arm.py`
+- 修改：`collect_vlm_eval_samples.py`
+- 修改：`tests/test_control_arm.py`
+- 修改：`tests/test_collect_vlm_eval_samples.py`
 - 生成并由 Git 忽略：`vlm_eval_samples_448_multiseed_d020/images/*.jpg`
 - 生成并由 Git 忽略：`vlm_eval_samples_448_multiseed_d020/samples.jsonl`
 - 生成并由 Git 忽略：`vlm_eval_samples_448_multiseed_d020/diagnostics.jsonl`
 
 **接口：**
 
-- 输入：任务 1 的配置以及现有 PyBullet 均衡姿态采样器。
-- 输出：供任务 5 和任务 6 使用的 20 组图片、样本记录和诊断记录。
+- 输入：任务 1 的配置、PyBullet RGB 图和 segmentation mask。
+- 输出：供任务 5 和任务 6 使用的 20 组图片、样本记录和诊断记录；每条 diagnostics 包含 `block_visible_pixels`、`block_reference_pixels` 和 `block_visibility_ratio`。
 
-- [ ] **步骤 1：在不调用 Qwen 的情况下生成样本**
+- [ ] **步骤 1：为 RGB 与 segmentation 联合采集编写失败测试**
+
+在 `tests/test_control_arm.py` 中验证新函数 `capture_rgb_and_segmentation(camera_config, camera_eye)` 返回 `(BGR, segmentation)`，二者分别为 `(height, width, 3)` 和 `(height, width)`；同时保留 `capture_rgb` 的原接口。
+
+- [ ] **步骤 2：实现联合采集并确认测试通过**
+
+让 `capture_rgb_and_segmentation` 复用同一组 view/projection matrices；`capture_rgb` 只返回联合采集结果的第一项，避免影响现有调用方。
+
+- [ ] **步骤 3：为可见率诊断编写失败测试**
+
+在 `tests/test_collect_vlm_eval_samples.py` 中验证：当前 segmentation 中属于 `block_id` 的像素数为可见数；移除机械臂后参考 segmentation 中属于同一 `block_id` 的像素数为参考数；可见率等于 `visible/reference`，并且这些字段只进入 diagnostics。
+
+- [ ] **步骤 4：实现可见率采集并确认测试通过**
+
+均衡姿态先保存带机械臂的 RGB 和 segmentation，再移除机器人及可选 marker，使用相同相机重拍参考 segmentation。拒绝参考像素数为 0、可见数大于参考数或可见率超出 `[0, 1]` 的诊断记录。
+
+- [ ] **步骤 5：在不调用 Qwen 的情况下重新生成样本**
 
 运行：
 
@@ -497,7 +518,7 @@ conda run -n vla_env python collect_vlm_eval_samples.py
 
 预期：退出码为 0，并输出 `样本数量: 20`。
 
-- [ ] **步骤 2：校验数量、ID、seed、方向和真值隔离**
+- [ ] **步骤 6：校验数量、ID、seed、方向、可见率和真值隔离**
 
 运行：
 
@@ -507,9 +528,9 @@ conda run -n vla_env python -c 'import json,pathlib,collections; root=pathlib.Pa
 
 预期：输出 `validated 20 Counter({'left': 5, 'right': 5, 'front': 5, 'back': 5})`。
 
-- [ ] **步骤 3：人工检查每个 seed 的一张图片**
+- [ ] **步骤 7：人工检查清晰和严重遮挡图片**
 
-打开生成图片目录中的 `seed_42_d020_left.jpg` 至 `seed_46_d020_left.jpg`，确认红块清晰可见并且位于相机视野内。如果任何目标被裁切或完全遮挡，不得继续进行付费调用。
+打开生成图片目录中的 left 与 back 样本，确认 diagnostics 的可见率排序与画面一致。遮挡样本继续保留；只有图片损坏、红块出视野或参考 segmentation 为 0 时才停止。
 
 ---
 
@@ -525,7 +546,7 @@ conda run -n vla_env python -c 'import json,pathlib,collections; root=pathlib.Pa
 **接口：**
 
 - 输入：任务 4 的 20 个样本和诊断真值，以及 `sim_config.yaml` 中的 API 设置和环境变量 `VLA_API_BASE_URL`、`VLA_API_KEY`、`VLA_MODEL_NAME`。
-- 输出：20 条已保存的 grounding 结果和一份分组定位摘要。
+- 输出：20 条已保存的 grounding 结果和一份按方向、seed、可见程度分组的定位摘要。
 
 - [ ] **步骤 1：在不打印密钥的情况下验证 API 配置**
 
@@ -565,7 +586,7 @@ conda run -n vla_env python -c 'import json,pathlib; path=pathlib.Path("vlm_eval
 conda run -n vla_env python evaluate_grounding_backprojection.py --predictions vlm_eval_runs/grounding_qwen3_vl_flash_distance20_448_multiseed_v4/grounding_predictions.jsonl --diagnostics vlm_eval_samples_448_multiseed_d020/diagnostics.jsonl --output-dir vlm_eval_runs/grounding_qwen3_vl_flash_distance20_448_multiseed_v4/backprojection
 ```
 
-预期：退出码为 0，输出的 JSON 包含 `num_samples: 20`、`per_direction` 和 `per_random_seed`。
+预期：退出码为 0，输出的 JSON 包含 `num_samples: 20`、`per_direction`、`per_random_seed` 和 `per_visibility_group`。
 
 - [ ] **步骤 5：在不添加补偿的情况下判断证据类型**
 
@@ -575,6 +596,7 @@ conda run -n vla_env python evaluate_grounding_backprojection.py --predictions v
 - left/right/front/back 各方向的平均误差和失败数；
 - seeds 42–46 的像素中心 X/Y 跨度和最大两两像素距离；
 - 有符号误差在不同 seed 和姿态之间是否保持相同方向。
+- clear、partial、severe 三个可见程度分组的有效率和定位误差。
 
 结论规则：只有当不同位置、不同姿态下的误差方向和幅度仍然相近时，才建议后续设计标定补偿实验。否则应改进 grounding，或进行检测器/分割方法的消融实验。无论哪种结果，本轮都不修改控制器代码。
 
