@@ -1,11 +1,17 @@
-"""测试 VLM 末端与红块定位诊断的 prompt、解析和画框。"""
+"""测试 VLM 末端与红块定位诊断的 prompt、解析、画框和断点续跑。"""
 
+import json
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
+import cv2
 import numpy as np
 
 from diagnose_vlm_grounding import (
     build_grounding_prompt,
+    diagnose_grounding,
     draw_grounding_boxes,
     parse_grounding_boxes,
 )
@@ -56,6 +62,61 @@ class DrawGroundingBoxesTests(unittest.TestCase):
         self.assertFalse(np.any(image))
         self.assertTrue(np.any(annotated[10:31, 10:31]))
         self.assertTrue(np.any(annotated[60:81, 60:81]))
+
+
+class GroundingResumeTests(unittest.TestCase):
+    """重复运行时不得为已完成样本再次支付 API 调用成本。"""
+
+    def test_completed_sample_is_skipped_and_seed_is_preserved(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            sample_dir = root / "samples"
+            image_path = sample_dir / "images" / "sample.jpg"
+            image_path.parent.mkdir(parents=True)
+            self.assertTrue(
+                cv2.imwrite(
+                    str(image_path),
+                    np.zeros((16, 16, 3), dtype=np.uint8),
+                )
+            )
+            sample = {
+                "sample_id": "seed_42_d020_left",
+                "image_path": str(image_path),
+                "instruction": "悬停在红色积木上方",
+                "expected_direction": "left",
+                "random_seed": 42,
+            }
+            (sample_dir / "samples.jsonl").write_text(
+                json.dumps(sample, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            config = {
+                "vlm_evaluation": {
+                    "sample_output_dir": str(sample_dir),
+                    "run_output_dir": str(root / "runs"),
+                    "grounding_run_name": "grounding_test",
+                },
+                "probe": {"api": {}},
+            }
+            boxes = {
+                "end_effector": [100.0, 100.0, 200.0, 200.0],
+                "red_block": [500.0, 500.0, 600.0, 600.0],
+            }
+            with patch(
+                "diagnose_vlm_grounding.call_openai_compatible_api",
+                return_value=(boxes, "{}"),
+            ) as api_mock:
+                first_dir, first_results = diagnose_grounding(config, limit=1)
+                second_dir, second_results = diagnose_grounding(config, limit=1)
+
+            self.assertEqual(api_mock.call_count, 1)
+            self.assertEqual(first_dir, second_dir)
+            self.assertEqual(first_results[0]["random_seed"], 42)
+            self.assertEqual(second_results[0]["random_seed"], 42)
+            lines = (first_dir / "grounding_predictions.jsonl").read_text(
+                encoding="utf-8"
+            ).splitlines()
+            self.assertEqual(len(lines), 1)
 
 
 if __name__ == "__main__":

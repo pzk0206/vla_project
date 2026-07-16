@@ -102,6 +102,22 @@ def append_jsonl(path, row):
         handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
+def load_existing_predictions(path):
+    """按 sample_id 读取已完成 grounding，拒绝重复行。"""
+    path = Path(path)
+    if not path.exists():
+        return {}
+    existing = {}
+    for row in read_jsonl(path):
+        sample_id = row.get("sample_id")
+        if not isinstance(sample_id, str) or not sample_id:
+            raise ValueError("grounding 结果缺少非空 sample_id")
+        if sample_id in existing:
+            raise ValueError(f"grounding sample_id 重复: {sample_id}")
+        existing[sample_id] = row
+    return existing
+
+
 def diagnose_grounding(config, limit=None):
     """对固定离线图片调用 VLM，并保存带预测框的诊断图片。"""
     evaluation = config["vlm_evaluation"]
@@ -115,9 +131,13 @@ def diagnose_grounding(config, limit=None):
     annotated_dir = run_dir / "annotated"
     annotated_dir.mkdir(parents=True, exist_ok=True)
     results_path = run_dir / "grounding_predictions.jsonl"
+    existing = load_existing_predictions(results_path)
 
-    results = []
     for sample in samples:
+        # 已保存的成功或失败结果都属于一次已付费尝试，重跑时不重复调用。
+        if sample["sample_id"] in existing:
+            continue
+
         image_bgr = cv2.imread(sample["image_path"])
         started_at = time.perf_counter()
         boxes = None
@@ -142,6 +162,7 @@ def diagnose_grounding(config, limit=None):
             "sample_id": sample["sample_id"],
             "image_path": sample["image_path"],
             "expected_direction": sample["expected_direction"],
+            "random_seed": sample["random_seed"],
             "boxes": boxes,
             "raw_response": raw_response,
             "annotated_path": str(annotated_path) if annotated_path else None,
@@ -150,7 +171,10 @@ def diagnose_grounding(config, limit=None):
             "error_message": error_message,
         }
         append_jsonl(results_path, result)
-        results.append(result)
+        existing[sample["sample_id"]] = result
+
+    # 返回顺序必须与 manifest 一致，且续跑后包含旧结果和本轮新结果。
+    results = [existing[sample["sample_id"]] for sample in samples]
     return run_dir, results
 
 
