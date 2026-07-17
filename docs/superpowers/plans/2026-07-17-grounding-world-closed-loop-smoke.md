@@ -1,5 +1,7 @@
 # Grounding 世界坐标闭环 Smoke Test 实施计划
 
+> **2026-07-17 revision:** Tasks 1–4 已在 `feat/grounding-world-smoke` 完成。首轮 seeds 52–54 暴露 clear/可达前置条件错误；后续 Task 5–6 由 `docs/superpowers/plans/2026-07-17-dynamic-smoke-case-screening.md` 取代。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 用 3 个 clear episode 验证 Qwen grounding、相机反投影、冻结补偿、主轴2cm单步控制和安全中止组成的真实视觉闭环能否达到3/3、最终 XY 误差不超过3cm。
