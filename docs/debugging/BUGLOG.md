@@ -678,3 +678,49 @@ vlm_eval_samples_448_calibration_validation_d020/
 vlm_eval_runs/grounding_qwen3_vl_flash_distance20_448_calibration_validation_v1/
 vlm_eval_runs/grounding_qwen3_vl_flash_distance20_448_calibration_validation_v1/calibration_validation/
 ```
+
+## BUG-004：全程 clear 的闭环案例不存在
+
+- 状态：根因已确认，遮挡恢复方案已设计，尚未完成在线验证
+- 发现日期：2026-07-17
+- 影响模块：`run_grounding_smoke.py`、`screen_grounding_smoke_cases.py`
+- 证据批次：`vlm_smoke_screening_runs/run_20260717_231406/`
+
+### 现象
+
+为了避免在首次在线 smoke 中混入遮挡变量，动态筛选要求每条轨迹从约 10cm 起点到约
+2cm 终点的五个观察点全部满足可见率 `>=0.75`。seeds 55–100 与
+left/right/front 共形成 138 个候选，结果没有任何合格案例：
+
+```text
+num_candidates=138
+num_qualified=0
+visibility_below_threshold=131
+start_pose_error=7
+```
+
+方向分组中，left 的 46 个候选全部因可见率失败；right 为 44 个可见率失败和 2 个
+起点姿态误差；front 为 41 个可见率失败和 5 个起点姿态误差。代表性最长 clear 轨迹
+也会在继续靠近时跌破阈值，例如 right seed 55 的可见率依次为
+`0.929 -> 0.786 -> 0.595`。
+
+### 根因与排除项
+
+- 轨迹位置误差大多约为 1mm，排除“机械臂动作不准确导致筛选失败”为主因。
+- 三个方向、46 个 seed 均出现接近后可见率下降，排除少数坏 seed 为主因。
+- 不降低 0.75 阈值，也不继续扩大 seed 范围；这两种做法只会掩盖固定相机下的系统性
+  接近遮挡。
+
+### 处置决策
+
+采用“最近可靠目标坐标 + 最大失效步数”，不采用“重复上一次方向”：
+
+- 只缓存已经通过反投影、冻结补偿、工作区和跳变检查的 VLM 目标世界坐标；
+- 遮挡步骤不调用 VLM，使用缓存目标与当前末端位置重新计算方向；
+- 最多连续使用 4 步，第 5 次仍不可见则以 `stale_target_limit` 停止；
+- 新的可靠 VLM 定位会更新缓存并把目标年龄清零；
+- PyBullet 红块真值继续只允许进入事后评分闭包。
+
+清晰画面下的 API、无效框、反投影、目标跳变、无进展和 IK 错误不回退到缓存，避免
+遮挡恢复掩盖其他问题。BUG-004 只有在自动测试通过并完成三个真实在线 smoke cases
+后才能更新状态；成功结论也只代表短时静态目标遮挡恢复，不外推到目标移动或永久遮挡。
