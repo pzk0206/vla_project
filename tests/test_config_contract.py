@@ -61,6 +61,15 @@ class ConfigContractTests(unittest.TestCase):
         self.assertEqual(smoke["required_successes"], 3)
         self.assertEqual(smoke["max_total_api_calls"], 30)
         self.assertEqual(smoke["expected_calibration_samples"], 15)
+        screening = smoke["screening"]
+        self.assertEqual(screening["output_dir"], "vlm_smoke_screening_runs")
+        self.assertEqual(screening["seed_range"], [55, 100])
+        self.assertEqual(
+            screening["directions"], ["left", "right", "front"]
+        )
+        self.assertEqual(screening["num_actions"], 4)
+        self.assertEqual(screening["max_pose_error"], 0.005)
+        self.assertEqual(screening["max_final_distance_xy"], 0.03)
 
     def test_vlm_evaluation_config_is_valid(self):
         """离线采样与在线评估必须使用非空目录和正数 episode 上限。"""

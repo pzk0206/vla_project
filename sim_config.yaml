@@ -171,3 +171,10 @@ grounding_smoke:
   no_progress_limit: 2               # 连续两次不足 5mm 判为无进展。
   required_successes: 3              # 固定三个 case 必须全部成功。
   max_total_api_calls: 30            # 3 episodes × 10 steps 的硬上限。
+  screening:                         # 正式调用 VLM 前的无 API 动态轨迹筛选。
+    output_dir: "vlm_smoke_screening_runs"
+    seed_range: [55, 100]            # 与既有校准、验证及首轮失败 seeds 隔离。
+    directions: ["left", "right", "front"]
+    num_actions: 4                   # 10cm 起点执行四次 2cm 动作，到达约 2cm。
+    max_pose_error: 0.005            # 起点与每个动作目标最多允许 5mm 误差。
+    max_final_distance_xy: 0.03      # 筛选轨迹最终真实 XY 必须进入 3cm。
