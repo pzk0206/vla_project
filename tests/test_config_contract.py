@@ -34,9 +34,33 @@ class ConfigContractTests(unittest.TestCase):
                 "probe",
                 "probe_evaluation",
                 "vlm_evaluation",
+                "grounding_smoke",
             }
             <= self.config.keys()
         )
+
+    def test_grounding_smoke_config_is_frozen_and_safe(self):
+        """在线小测必须锁定案例、标定、步长和安全阈值。"""
+        smoke = self.config["grounding_smoke"]
+
+        self.assertEqual(smoke["output_dir"], "vlm_smoke_runs")
+        self.assertEqual(smoke["seeds"], [52, 53, 54])
+        self.assertEqual(smoke["start_directions"], ["left", "right", "front"])
+        self.assertEqual(smoke["start_offset_xy"], 0.10)
+        self.assertEqual(smoke["max_control_steps"], 10)
+        self.assertEqual(smoke["move_step_xy"], 0.02)
+        self.assertEqual(smoke["hover_z"], 0.20)
+        self.assertEqual(smoke["stop_distance_xy"], 0.02)
+        self.assertEqual(smoke["visibility_reference_pixels"], 378)
+        self.assertEqual(smoke["clear_visibility_threshold"], 0.75)
+        self.assertEqual(smoke["max_target_jump_xy"], 0.03)
+        self.assertEqual(smoke["min_progress_xy"], 0.005)
+        self.assertEqual(smoke["no_progress_limit"], 2)
+        self.assertEqual(smoke["workspace_x"], [-0.30, 0.30])
+        self.assertEqual(smoke["workspace_y"], [0.30, 0.70])
+        self.assertEqual(smoke["required_successes"], 3)
+        self.assertEqual(smoke["max_total_api_calls"], 30)
+        self.assertEqual(smoke["expected_calibration_samples"], 15)
 
     def test_vlm_evaluation_config_is_valid(self):
         """离线采样与在线评估必须使用非空目录和正数 episode 上限。"""
