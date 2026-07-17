@@ -1,18 +1,23 @@
 """验证 grounding smoke 闭环编排、证据留存和批次判定。"""
 
+import inspect
 import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import numpy as np
 
-from grounding_targeting import SmokeSafetyAbort
+from grounding_targeting import SmokeSafetyAbort, compute_grounding_action
 from run_grounding_smoke import (
     SmokeDependencies,
     aggregate_smoke_summaries,
+    build_smoke_cases,
+    compute_visibility,
+    make_run_dir,
     run_control_loop,
+    run_smoke_batch,
 )
 
 
@@ -269,6 +274,168 @@ class SmokeLoopTests(unittest.TestCase):
                 self.assertFalse(
                     aggregate_smoke_summaries(rows, BASE_CONFIG)["passed"]
                 )
+
+
+class SmokeBatchContractTests(unittest.TestCase):
+    def test_builds_exact_three_cases_without_back(self):
+        self.assertEqual(
+            build_smoke_cases(
+                {
+                    "seeds": [52, 53, 54],
+                    "start_directions": ["left", "right", "front"],
+                }
+            ),
+            [
+                {"episode_idx": 0, "seed": 52, "start_direction": "left"},
+                {"episode_idx": 1, "seed": 53, "start_direction": "right"},
+                {"episode_idx": 2, "seed": 54, "start_direction": "front"},
+            ],
+        )
+
+    def test_rejects_changed_case_set(self):
+        for smoke_config in (
+            {"seeds": [52, 53], "start_directions": ["left", "right"]},
+            {
+                "seeds": [52, 52, 54],
+                "start_directions": ["left", "right", "front"],
+            },
+            {
+                "seeds": [52, 53, 54],
+                "start_directions": ["left", "right", "back"],
+            },
+        ):
+            with self.subTest(smoke_config=smoke_config):
+                with self.assertRaises(ValueError):
+                    build_smoke_cases(smoke_config)
+
+    def test_run_directory_never_overwrites(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            created = make_run_dir(temp_dir, "run_fixed")
+            self.assertTrue(created.is_dir())
+            with self.assertRaises(FileExistsError):
+                make_run_dir(temp_dir, "run_fixed")
+
+    def test_visibility_decodes_pybullet_object_id(self):
+        block_id = 7
+        segmentation = np.array(
+            [
+                [-1, block_id],
+                [block_id | (3 << 24), 2],
+            ],
+            dtype=np.int64,
+        )
+
+        metrics = compute_visibility(segmentation, block_id, reference_pixels=4)
+
+        self.assertEqual(metrics["block_visible_pixels"], 2)
+        self.assertEqual(metrics["block_reference_pixels"], 4)
+        self.assertEqual(metrics["block_visibility_ratio"], 0.5)
+
+    def test_batch_uses_three_isolated_cases_and_writes_summary(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            calibration_path = Path(temp_dir) / "calibration.json"
+            calibration_path.write_text("{}", encoding="utf-8")
+            config = {
+                "connection_mode": "DIRECT",
+                "gravity": [0, 0, -9.8],
+                "enable_time_sleep": False,
+                "simulation_hz": 240,
+                "robot": {
+                    "ee_link_index": 6,
+                    "controlled_joints": 7,
+                },
+                "task": {"initial_settle_steps": 1},
+                "dataset": {"instruction": "悬停在红色积木上方"},
+                "probe": {
+                    "sim_steps_per_action": 1,
+                    "api": {},
+                },
+                "camera": {
+                    "workspace_center": [0.0, 0.4, 0.0],
+                    "near_val": 0.1,
+                    "far_val": 100.0,
+                },
+                "vlm_evaluation": {
+                    "balanced_pose_tolerance": 0.005,
+                    "balanced_pose_ik_iterations": 20,
+                    "camera_override": {
+                        "image_width": 448,
+                        "image_height": 448,
+                        "eye_offset_base": [0.0, 0.0, 3.0],
+                        "eye_offset_random_range": [0.0, 0.0],
+                        "up_vector": [0, 1, 0],
+                        "fov": 45,
+                    },
+                },
+                "grounding_smoke": {
+                    **BASE_CONFIG,
+                    "output_dir": temp_dir,
+                    "calibration_path": str(calibration_path),
+                    "expected_calibration_samples": 15,
+                    "expected_correction_x": 0.02492227406480192,
+                    "expected_correction_y": -0.019467343494422532,
+                    "start_directions": ["left", "right", "front"],
+                    "start_offset_xy": 0.10,
+                    "hover_z": 0.20,
+                    "move_step_xy": 0.02,
+                    "visibility_reference_pixels": 378,
+                },
+            }
+            fake_calibration = {
+                "num_clear_calibration_samples": 15,
+                "correction_x": 0.02492227406480192,
+                "correction_y": -0.019467343494422532,
+            }
+
+            def fake_loop(smoke_config, case, calibration, episode_dir, dependencies):
+                episode_dir.mkdir(parents=True, exist_ok=False)
+                return {
+                    **case,
+                    "success": True,
+                    "termination_reason": "success",
+                    "api_calls": 1,
+                    "all_clear": True,
+                    "num_control_steps": 1,
+                    "final_true_distance_xy": 0.02,
+                }
+
+            with (
+                patch("run_grounding_smoke.load_frozen_calibration", return_value=fake_calibration),
+                patch("run_grounding_smoke.connect_physics"),
+                patch("run_grounding_smoke.setup_world", return_value=(1, 10)),
+                patch("run_grounding_smoke.load_block", return_value=20),
+                patch("run_grounding_smoke.settle_object"),
+                patch("run_grounding_smoke.get_object_position", return_value=[0.1, 0.45, 0.05]),
+                patch("run_grounding_smoke.build_balanced_ee_positions", return_value={
+                    "left": [0.2, 0.45, 0.20],
+                    "right": [0.0, 0.45, 0.20],
+                    "front": [0.1, 0.35, 0.20],
+                }),
+                patch(
+                    "run_grounding_smoke.reset_robot_to_target",
+                    side_effect=lambda robot_id, robot_config, target_pos, **kwargs: list(target_pos),
+                ),
+                patch("run_grounding_smoke.sample_camera_eye", return_value=[0.0, 0.4, 3.0]),
+                patch("run_grounding_smoke.compute_camera_matrices", return_value=([1.0] * 16, [1.0] * 16)),
+                patch("run_grounding_smoke.run_control_loop", side_effect=fake_loop) as loop,
+                patch("run_grounding_smoke.call_openai_compatible_api") as api,
+                patch("run_grounding_smoke.p.disconnect") as disconnect,
+            ):
+                batch_dir, summary = run_smoke_batch(config, run_name="run_test")
+
+            self.assertEqual(loop.call_count, 3)
+            self.assertEqual(
+                [call.args[1]["seed"] for call in loop.call_args_list],
+                [52, 53, 54],
+            )
+            self.assertNotIn(
+                "block_pos", inspect.signature(compute_grounding_action).parameters
+            )
+            self.assertEqual(disconnect.call_count, 3)
+            api.assert_not_called()
+            self.assertTrue((batch_dir / "smoke_summary.json").is_file())
+            self.assertTrue((batch_dir / "episode_summary.jsonl").is_file())
+            self.assertTrue(summary["passed"])
 
 
 if __name__ == "__main__":
