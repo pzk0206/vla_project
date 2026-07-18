@@ -62,17 +62,23 @@
 运行后会生成：
 
 ```text
-dataset/
-├── trajectory_expert.jsonl
-├── episode_summary.jsonl
-└── ep_x_step_y.jpg
-
-probe_runs/
-├── probe_trace.jsonl
-└── probe_step_xx.jpg
+outputs/
+├── dataset/                    # Baseline 1 训练图片、轨迹和 episode 汇总
+├── probe/                      # Stage 3 单次闭环图片和 trace
+├── probe_evaluations/          # Stage 3 批量评估运行目录
+├── vlm_samples/                # Qwen 离线输入图片、样本清单和诊断信息
+│   ├── default/
+│   ├── 448/
+│   ├── 448_multiseed_d020/
+│   └── 448_calibration_validation_d020/
+└── vlm_evaluations/            # VLM 预测、标注图、反投影和评估统计
 ```
 
 这些目录是实验输出，不建议直接提交到 GitHub。需要分享数据时，建议单独打包、上传到网盘、Hugging Face Dataset 或 GitHub Release。
+
+2026-07-18 以前分散在仓库根目录的生成输出已经迁移到 `outputs/`；旧路径与
+新路径的完整映射记录在
+[`docs/superpowers/specs/2026-07-18-generated-output-organization-design.md`](docs/superpowers/specs/2026-07-18-generated-output-organization-design.md)。
 
 ## 环境准备
 
@@ -107,7 +113,7 @@ pip install -r requirements.txt
 python control_arm.py
 ```
 
-采集结果会写入 `dataset/`：
+采集结果会写入 `outputs/dataset/`：
 
 - `trajectory_expert.jsonl`：训练样本，一行对应一帧图像。
 - `episode_summary.jsonl`：每条轨迹的摘要，便于判断成功、卡住、超步数等失败原因。
@@ -151,12 +157,12 @@ API Key 只能通过环境变量传入，禁止写入 YAML、Python、Markdown �
 conda run -n vla_env python evaluate_probe.py
 ```
 
-运行次数、输出目录和失败图片策略由 `sim_config.yaml` 的 `probe_evaluation` 控制。结果写入 `probe_eval_runs/run_*/`；成功 episode 只保留 trace，失败 episode 保留 trace 和步骤图片。
+运行次数、输出目录和失败图片策略由 `sim_config.yaml` 的 `probe_evaluation` 控制。结果写入 `outputs/probe_evaluations/run_*/`；成功 episode 只保留 trace，失败 episode 保留 trace 和步骤图片。
 
 修复 IK 冗余解未使用关节限位和当前姿态的问题后，Stage 3 使用固定种子
 42-91 完成 50 次 heuristic 回归：50 次全部成功，成功率 100%，无失败和运行
 异常；最终距离 mean / median / max 为 0.0193 / 0.0197 / 0.0291m，平均控制
-步数为 37.58。结果保存在 `probe_eval_runs/run_20260712_221135/`，已经达到
+步数为 37.58。结果保存在 `outputs/probe_evaluations/run_20260712_221135/`，已经达到
 “至少 50 次且成功率不低于 80%”的阶段门槛。
 
 ## 数据格式
@@ -251,8 +257,7 @@ conda run -n vla_env python evaluate_probe.py
 
 建议忽略：
 
-- `dataset/`
-- `probe_runs/`
+- `outputs/`
 - `__pycache__/`
 - `.venv/`
 - IDE 本地配置

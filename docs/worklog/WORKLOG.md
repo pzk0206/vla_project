@@ -90,7 +90,7 @@ Baseline 0 的目标是让整个数据采集流程先能工作。我先关心这
 抽样看红色积木和机械臂都在画面里
 ```
 
-这次判断对应的是当前 `dataset/` 目录和当前 `sim_config.yaml` 的 Baseline 1 配置：
+这次判断对应的是当前 `outputs/dataset/` 目录和当前 `sim_config.yaml` 的 Baseline 1 配置：
 
 ```text
 block_position.y_range = [0.38, 0.5]
@@ -181,7 +181,7 @@ probe 每一步都要记录机械臂末端位置和它离目标悬停点的距�
 
 审查旧版 probe 时发现过一个控制路径 bug：heuristic 虽然输出了 `front/right/left/back`，执行分支却直接把完整 `hover_target` 交给 IK。因此旧版 13 步、`1.1567m -> 0.0161m` 的结果只能证明 IK 能接近目标，不能证明方向词真正控制了动作。
 
-修复后 heuristic 和 API 统一经过 `direction -> PyBullet 世界坐标 delta -> 单步 target_pos`。当前有效证据来自重新生成的 `probe_runs/probe_trace.jsonl`：
+修复后 heuristic 和 API 统一经过 `direction -> PyBullet 世界坐标 delta -> 单步 target_pos`。当前有效证据来自重新生成的 `outputs/probe/probe_trace.jsonl`：
 
 ```text
 63 步闭环控制
@@ -248,7 +248,7 @@ move_step_xy = 0.03m
 success_distance = 0.03m
 ```
 
-正式验收结果来自 `probe_eval_runs/run_20260712_221135/`：
+正式验收结果来自 `outputs/probe_evaluations/run_20260712_221135/`：
 
 ```text
 success: 50/50
@@ -391,7 +391,7 @@ use_dual_view          = false
 同时避免双面板交叉配对。对应结果目录为：
 
 ```text
-vlm_eval_runs/offline_qwen3_vl_flash_high_topdown_v9/
+outputs/vlm_evaluations/offline_qwen3_vl_flash_high_topdown_v9/
 ```
 
 10 张评估结果：
@@ -501,7 +501,7 @@ right recall：3/3
 front recall：3/3
 back recall：0/3
 平均 API 延迟：约 0.97s
-输出：vlm_eval_runs/offline_qwen3_vl_flash_distance_stratified_v13/
+输出：outputs/vlm_evaluations/offline_qwen3_vl_flash_distance_stratified_v13/
 ```
 
 三个距离得到完全相同的方向模式：`left/back` 都被预测为 `right`，`right/front`
@@ -519,7 +519,7 @@ left：两个预测框的相对中心关系支持 left；直接方向仍错误�
 right：框中心关系支持 right；直接方向正确
 front：框中心关系以向上偏差为主；直接方向正确输出 front
 back：红块框没有稳定覆盖真实红块，框中心关系也不支持 back；直接方向错误
-输出：vlm_eval_runs/grounding_qwen3_vl_flash_distance20_v2/
+输出：outputs/vlm_evaluations/grounding_qwen3_vl_flash_distance20_v2/
 ```
 
 这证明 50% 不是一个单一故障。`left` 是“预测框的相对中心关系已经支持正确方向，
@@ -538,9 +538,9 @@ left/front 等姿态约有 87 个纯红像素，而 back 只有 50 个，约 43%
 224×224 提升到 448×448。使用独立目录保存图片，避免覆盖 v13：
 
 ```text
-样本：vlm_eval_samples_448/
-方向结果：vlm_eval_runs/offline_qwen3_vl_flash_distance20_448_v14/
-画框结果：vlm_eval_runs/grounding_qwen3_vl_flash_distance20_448_v3/
+样本：outputs/vlm_samples/448/
+方向结果：outputs/vlm_evaluations/offline_qwen3_vl_flash_distance20_448_v14/
+画框结果：outputs/vlm_evaluations/grounding_qwen3_vl_flash_distance20_448_v3/
 ```
 
 像素测量显示红块主体从约 `10×9` 增加到 `20×18`；back 的纯红像素从 50 增加
@@ -575,7 +575,7 @@ back：仍错误输出 right
 模型最终方向：3/4
 框中心推导方向：4/4
 模型方向与框中心内部一致：3/4
-输出：vlm_eval_runs/ground_then_decide_qwen3_vl_flash_448_v1/
+输出：outputs/vlm_evaluations/ground_then_decide_qwen3_vl_flash_448_v1/
 ```
 
 left/right/front 三张完全一致且正确。back 回复为：
@@ -612,9 +612,9 @@ VLM 输入。实际可见率为：15 张 left/right/front 全部 `1.0`；back �
 输出目录：
 
 ```text
-样本：vlm_eval_samples_448_multiseed_d020/
-grounding：vlm_eval_runs/grounding_qwen3_vl_flash_distance20_448_multiseed_v4/
-反投影：vlm_eval_runs/grounding_qwen3_vl_flash_distance20_448_multiseed_v4/backprojection/
+样本：outputs/vlm_samples/448_multiseed_d020/
+grounding：outputs/vlm_evaluations/grounding_qwen3_vl_flash_distance20_448_multiseed_v4/
+反投影：outputs/vlm_evaluations/grounding_qwen3_vl_flash_distance20_448_multiseed_v4/backprojection/
 ```
 
 20/20 返回合法框，`num_failed=0`。整体指标：
@@ -665,10 +665,10 @@ correction_y = -0.019467343494422532 m
 输出目录：
 
 ```text
-样本：vlm_eval_samples_448_calibration_validation_d020/
-grounding：vlm_eval_runs/grounding_qwen3_vl_flash_distance20_448_calibration_validation_v1/
-反投影：vlm_eval_runs/grounding_qwen3_vl_flash_distance20_448_calibration_validation_v1/backprojection/
-校准验证：vlm_eval_runs/grounding_qwen3_vl_flash_distance20_448_calibration_validation_v1/calibration_validation/
+样本：outputs/vlm_samples/448_calibration_validation_d020/
+grounding：outputs/vlm_evaluations/grounding_qwen3_vl_flash_distance20_448_calibration_validation_v1/
+反投影：outputs/vlm_evaluations/grounding_qwen3_vl_flash_distance20_448_calibration_validation_v1/backprojection/
+校准验证：outputs/vlm_evaluations/grounding_qwen3_vl_flash_distance20_448_calibration_validation_v1/calibration_validation/
 ```
 
 独立验证指标：

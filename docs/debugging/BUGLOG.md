@@ -7,7 +7,7 @@
 - 状态：已修复并通过固定批量回归
 - 发现日期：2026-07-11
 - 影响模块：`stage3_probe.py`、`evaluate_probe.py`
-- 基线批次：`probe_eval_runs/run_20260711_185439/`
+- 基线批次：`outputs/probe_evaluations/run_20260711_185439/`
 
 ### 现象
 
@@ -23,7 +23,7 @@ final_distance mean / median / max: 0.4989 / 0.5948 / 0.8137 m
 
 ### 代表案例
 
-文件：`probe_eval_runs/run_20260711_185439/episode_001/probe_trace.jsonl`
+文件：`outputs/probe_evaluations/run_20260711_185439/episode_001/probe_trace.jsonl`
 
 seed 43，`block_x=-0.18458`，`control_step=21`：
 
@@ -93,7 +93,7 @@ Cartesian target_pos
 固定 seed 43 的诊断输出：
 
 ```text
-probe_eval_runs/diagnostic_seed43_joints/probe_trace.jsonl
+outputs/probe_evaluations/diagnostic_seed43_joints/probe_trace.jsonl
 ```
 
 KUKA iiwa 第 4 关节（数组下标 3）的 URDF 限位为：
@@ -166,7 +166,7 @@ IK 优先沿连续、靠近现状的冗余解移动；关节限位信息为求�
 ```text
 修复前：80 步失败，final_distance=0.8087m，distance_increase_steps=33
 修复后：32 步成功，final_distance=0.0165m，distance_increase_steps=0
-输出：probe_eval_runs/diagnostic_seed43_limited_ik/
+输出：outputs/probe_evaluations/diagnostic_seed43_limited_ik/
 ```
 
 相同 seeds 42-61 的 20 次批量回归：
@@ -179,7 +179,7 @@ IK 优先沿连续、靠近现状的冗余解移动；关节限位信息为求�
 最终距离 mean / median / max：0.0180 / 0.0173 / 0.0285m
 平均控制步数：38
 全批次距离变差步数：5 / 760
-输出：probe_eval_runs/run_20260711_221233/
+输出：outputs/probe_evaluations/run_20260711_221233/
 ```
 
 原先 12 个负 x 目标从 `0/12` 成功变为全部成功，说明系统性负 x 故障已消失。
@@ -204,7 +204,7 @@ success_rate: 100%
 failure / error: 0 / 0
 final_distance mean / median / max: 0.0193 / 0.0197 / 0.0291m
 control_steps mean / median: 37.58 / 37
-输出：probe_eval_runs/run_20260712_221135/
+输出：outputs/probe_evaluations/run_20260712_221135/
 ```
 
 50 次结果仍然没有复现负 x 系统性失败，且最大最终距离低于 0.03m 成功阈值。
@@ -237,7 +237,7 @@ BUG-001 的直接根因是 IK 未使用关节约束和当前姿态作为冗余�
 - 发现日期：2026-07-14
 - 影响模块：`collect_vlm_eval_samples.py`、`evaluate_vlm_decisions.py`、
   `stage3_probe.py`、`sim_config.yaml`
-- 对照基线：`vlm_eval_runs/offline_qwen3_vl_flash_high_topdown_v9/`
+- 对照基线：`outputs/vlm_evaluations/offline_qwen3_vl_flash_high_topdown_v9/`
 
 ### 现象
 
@@ -400,7 +400,7 @@ step 26 仍可能存在真实末端部件识别错误。
 exact-match accuracy：50% (5/10)
 right：9 张，正确 4 张，其中 5 张被误判为 front
 front：1 张，正确 1 张
-输出：vlm_eval_runs/offline_qwen3_vl_flash_green_ee_v10/
+输出：outputs/vlm_evaluations/offline_qwen3_vl_flash_green_ee_v10/
 ```
 
 绿色标记没有提高准确率，反而比 v9 的 70% 下降到 50%。这说明“增加醒目颜色”
@@ -422,7 +422,7 @@ left  -> right（错误）
 right -> right（正确）
 front -> front（正确）
 back  -> right（错误）
-输出：vlm_eval_runs/offline_qwen3_vl_flash_balanced_v11/
+输出：outputs/vlm_evaluations/offline_qwen3_vl_flash_balanced_v11/
 ```
 
 这个小样本结果证明 v9 的 70% 受到方向类别不均衡影响。模型仍可能把中间关节或
@@ -445,7 +445,7 @@ back  -> right（错误）
 继续漂移。新运行目录为：
 
 ```text
-vlm_eval_runs/offline_qwen3_vl_flash_balanced_chain_prompt_v12/
+outputs/vlm_evaluations/offline_qwen3_vl_flash_balanced_chain_prompt_v12/
 ```
 
 v12 已先评估四方向各 1 张：
@@ -458,7 +458,7 @@ right -> right（正确）
 front -> front（正确）
 back  -> right（错误）
 平均 API 延迟：约 1.04s
-输出：vlm_eval_runs/offline_qwen3_vl_flash_balanced_chain_prompt_v12/
+输出：outputs/vlm_evaluations/offline_qwen3_vl_flash_balanced_chain_prompt_v12/
 ```
 
 结果与 v11 的四个输出完全相同，说明删除颜色描述、改用连接链描述后，模型仍选择
@@ -477,7 +477,7 @@ back  -> right（错误）
 
 ```text
 成功生成目标框：4/4
-输出：vlm_eval_runs/grounding_qwen3_vl_flash_ee_red_v1/
+输出：outputs/vlm_evaluations/grounding_qwen3_vl_flash_ee_red_v1/
 ```
 
 人工核对标框图后，模型选择的末端框基本位于机械臂连接链末梢，并没有持续框住
@@ -671,10 +671,10 @@ BUG-003 目前是“部分解决”，不能整体关闭：
 证据目录：
 
 ```text
-vlm_eval_samples_448_multiseed_d020/
-vlm_eval_runs/grounding_qwen3_vl_flash_distance20_448_multiseed_v4/
-vlm_eval_runs/grounding_qwen3_vl_flash_distance20_448_multiseed_v4/backprojection/
-vlm_eval_samples_448_calibration_validation_d020/
-vlm_eval_runs/grounding_qwen3_vl_flash_distance20_448_calibration_validation_v1/
-vlm_eval_runs/grounding_qwen3_vl_flash_distance20_448_calibration_validation_v1/calibration_validation/
+outputs/vlm_samples/448_multiseed_d020/
+outputs/vlm_evaluations/grounding_qwen3_vl_flash_distance20_448_multiseed_v4/
+outputs/vlm_evaluations/grounding_qwen3_vl_flash_distance20_448_multiseed_v4/backprojection/
+outputs/vlm_samples/448_calibration_validation_d020/
+outputs/vlm_evaluations/grounding_qwen3_vl_flash_distance20_448_calibration_validation_v1/
+outputs/vlm_evaluations/grounding_qwen3_vl_flash_distance20_448_calibration_validation_v1/calibration_validation/
 ```

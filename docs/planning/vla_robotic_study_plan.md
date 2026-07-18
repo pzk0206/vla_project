@@ -16,9 +16,9 @@
 当前数据状态：
 
 ```text
-dataset/episode_summary.jsonl: 50 条 episode
+outputs/dataset/episode_summary.jsonl: 50 条 episode
 termination_reason: 50 条 success
-dataset/trajectory_expert.jsonl: 286 帧训练样本
+outputs/dataset/trajectory_expert.jsonl: 286 帧训练样本
 final_distance: min 0.0098m, median 0.0293m, max 0.0300m
 ```
 
