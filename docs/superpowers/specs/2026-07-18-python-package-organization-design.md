@@ -117,9 +117,10 @@ where = ["src"]
 运行环境继续由 `requirements.txt` 管理。安装项目本身使用：
 
 ```bash
-conda run -n vla_env pip install -e . --no-deps
+conda run -n vla_env pip install -e . --no-deps --no-build-isolation
 ```
 
+`--no-build-isolation` 复用 `vla_env` 已安装的 setuptools，避免安装时访问网络。
 `.gitignore` 增加 `*.egg-info/`，避免 editable install 元数据进入 Git。
 
 ## 命令入口
