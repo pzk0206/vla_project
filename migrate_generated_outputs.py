@@ -166,6 +166,9 @@ def preflight_migration(project_root):
 
     summary = _inventory(sources)
     summary["source_directories"] = len(sources)
+    summary["missing_image_references"] = len(
+        _missing_image_references(project_root, sources)
+    )
     return summary
 
 
@@ -184,8 +187,24 @@ def _iter_image_path_values(value):
             yield from _iter_image_path_values(item)
 
 
+def _missing_image_references(project_root, roots):
+    """返回规范化后的历史悬空图片引用集合，供迁移前后精确对比。"""
+    missing = set()
+    for record_path in _record_files(roots):
+        value = _parse_record_file(record_path)
+        normalized_record = rewrite_path(
+            record_path.relative_to(project_root).as_posix()
+        )
+        for image_path_value in _iter_image_path_values(value):
+            image_path = Path(image_path_value)
+            resolved = image_path if image_path.is_absolute() else project_root / image_path
+            if not resolved.is_file():
+                missing.add((normalized_record, rewrite_path(image_path_value)))
+    return missing
+
+
 def validate_migrated_outputs(project_root):
-    """验证新目录、记录格式和记录引用的本地图片。"""
+    """验证新目录和记录格式，并报告仍存在的历史悬空图片引用。"""
     project_root = _validate_project_root(project_root)
     destinations = [project_root / destination for _, destination in MIGRATIONS]
     missing = [str(path) for path in destinations if not path.is_dir()]
@@ -193,15 +212,12 @@ def validate_migrated_outputs(project_root):
         raise MigrationError("缺少迁移后目录: " + ", ".join(missing))
 
     for record_path in _record_files(destinations):
-        value = _parse_record_file(record_path)
-        for image_path_value in _iter_image_path_values(value):
-            image_path = Path(image_path_value)
-            resolved = image_path if image_path.is_absolute() else project_root / image_path
-            if not resolved.is_file():
-                raise MigrationError(
-                    f"记录 {record_path} 引用了不存在的图片: {image_path_value}"
-                )
-    return _inventory(destinations)
+        _parse_record_file(record_path)
+    summary = _inventory(destinations)
+    summary["missing_image_references"] = len(
+        _missing_image_references(project_root, destinations)
+    )
+    return summary
 
 
 def _remove_empty_output_parents(project_root):
@@ -229,6 +245,8 @@ def migrate_generated_outputs(project_root):
     """执行迁移；任何移动后的失败都会触发反向改写和目录回滚。"""
     project_root = _validate_project_root(project_root)
     before = preflight_migration(project_root)
+    source_paths = [project_root / source for source, _ in MIGRATIONS]
+    missing_before = _missing_image_references(project_root, source_paths)
     moved = []
     destinations = [project_root / destination for _, destination in MIGRATIONS]
 
@@ -242,6 +260,12 @@ def migrate_generated_outputs(project_root):
 
         _rewrite_record_trees(destinations, MIGRATIONS)
         after = validate_migrated_outputs(project_root)
+        missing_after = _missing_image_references(project_root, destinations)
+        if missing_after != missing_before:
+            raise MigrationError(
+                "迁移改变了历史悬空图片引用集合: "
+                f"before={len(missing_before)}, after={len(missing_after)}"
+            )
         for key in ("files", "images", "image_bytes"):
             if after[key] != before[key]:
                 raise MigrationError(

@@ -101,6 +101,36 @@ class GeneratedOutputMigrationTests(unittest.TestCase):
 
             self.assertTrue(all((root / source).is_dir() for source, _ in MIGRATIONS))
 
+    def test_preexisting_missing_image_reference_is_preserved_not_rejected(self):
+        """历史清理策略允许悬空引用，但迁移不能新增悬空引用。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            self.make_source_trees(root)
+            trace = root / "probe_eval_runs" / "run_001" / "probe_trace.jsonl"
+            trace.parent.mkdir(parents=True)
+            trace.write_text(
+                json.dumps(
+                    {"image_path": "probe_eval_runs/run_001/probe_step_00.jpg"}
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            before = preflight_migration(root)
+            after = migrate_generated_outputs(root)
+
+            self.assertEqual(before["missing_image_references"], 1)
+            self.assertEqual(after["missing_image_references"], 1)
+            moved_trace = (
+                root
+                / "outputs/probe_evaluations/run_001/probe_trace.jsonl"
+            )
+            row = json.loads(moved_trace.read_text(encoding="utf-8"))
+            self.assertEqual(
+                row["image_path"],
+                "outputs/probe_evaluations/run_001/probe_step_00.jpg",
+            )
+
     def test_worktree_path_is_rejected(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir) / ".worktrees" / "experiment"

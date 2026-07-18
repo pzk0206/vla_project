@@ -16,7 +16,7 @@
 - Do not call Qwen or any paid API.
 - Do not change control, sampling, evaluation, or backprojection behavior.
 - Run Python verification through `conda run -n vla_env`.
-- Treat any destination collision or unreadable JSON/JSONL as a hard failure before moving data.
+- Treat any destination collision or unreadable JSON/JSONL as a hard failure before moving data. Preserve the exact pre-existing dangling-image-reference set; migration must not add dangling references.
 
 ---
 
@@ -266,7 +266,7 @@ def migrate_generated_outputs(project_root):
     # 4. Record total files, image files, and image-file bytes for each source.
     # 5. Create only destination parents, then Path.rename each source to destination.
     # 6. Rewrite known path prefixes in migrated .json and .jsonl files.
-    # 7. Recount inventory and validate every non-null image_path or annotated_path.
+    # 7. Recount inventory and prove the normalized dangling-reference set is unchanged.
     # 8. If steps 5-7 fail, reverse rewritten prefixes and rename moved directories back.
     # 9. Return counts including moved_directories, files, images, and image_bytes.
 ```
@@ -427,7 +427,7 @@ Call the Task 2 validation interface directly:
 conda run -n vla_env python -c 'from pathlib import Path; from migrate_generated_outputs import validate_migrated_outputs; print(validate_migrated_outputs(Path.cwd()))'
 ```
 
-Expected: all JSON/JSONL parses; all non-null `image_path` and `annotated_path` entries resolve; count remains exactly 8,590 images for the current snapshot.
+Expected: all JSON/JSONL parses; the normalized pre-existing dangling-reference set is unchanged; count remains exactly 8,590 images for the current snapshot.
 
 - [ ] **Step 6: Verify Git sees no generated data**
 
