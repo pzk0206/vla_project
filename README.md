@@ -46,8 +46,15 @@
 
 ```text
 .
-├── control_arm.py       # 数据采集主脚本
-├── stage3_probe.py      # 阶段三闭环探路脚本
+├── pyproject.toml       # Python 包元数据和命令入口
+├── src/vla_project/
+│   ├── simulation/      # 仿真、采集、闭环控制与 probe 评估
+│   ├── vlm/             # VLM 采样、grounding、反投影与校准评估
+│   └── tools/           # 生成输出迁移等维护工具
+├── tests/
+│   ├── simulation/      # simulation 模块测试
+│   ├── vlm/             # VLM 模块测试
+│   └── tools/           # 维护工具测试
 ├── sim_config.yaml      # 仿真、相机、任务、数据集配置
 ├── requirements.txt     # Python 依赖
 ├── README.md            # 项目说明
@@ -88,6 +95,7 @@ outputs/
 python3.10 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+pip install -e .
 ```
 
 如果本机只有 `python3`，也可以先尝试：
@@ -96,7 +104,26 @@ pip install -r requirements.txt
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+pip install -e .
 ```
+
+`pip install -e .` 会以可编辑模式安装本项目，并注册下文使用的 `vla-*` 命令；
+修改 `src/` 中的代码后无需重复安装。
+
+安装后可直接使用以下命令：
+
+| 命令 | 用途 |
+| --- | --- |
+| `vla-collect` | 采集 Baseline 训练数据 |
+| `vla-probe` | 运行 Stage 3 单次闭环 |
+| `vla-evaluate-probe` | 批量评估 heuristic 闭环 |
+| `vla-collect-vlm-samples` | 生成固定 VLM 离线评估样本 |
+| `vla-evaluate-vlm-decisions` | 评估 VLM 方向决策 |
+| `vla-diagnose-grounding` | 诊断末端与红块 grounding 框 |
+| `vla-ground-then-decide` | 评估 grounding 后的确定性方向判断 |
+| `vla-evaluate-backprojection` | 评估框中心到世界坐标的反投影 |
+| `vla-validate-grounding-calibration` | 验证冻结的 grounding 校准参数 |
+| `vla-migrate-generated-outputs` | 迁移和检查历史生成输出 |
 
 ## 采集数据
 
@@ -110,7 +137,7 @@ pip install -r requirements.txt
 运行：
 
 ```bash
-python control_arm.py
+vla-collect
 ```
 
 采集结果会写入 `outputs/dataset/`：
@@ -121,7 +148,7 @@ python control_arm.py
 
 ## 阶段三闭环探路
 
-`stage3_probe.py` 用来验证“观测图 -> 决策方向 -> 机械臂移动”的最小闭环。
+`src/vla_project/simulation/stage3_probe.py` 用来验证“观测图 -> 决策方向 -> 机械臂移动”的最小闭环。
 
 默认使用启发式模式：
 
@@ -133,7 +160,7 @@ probe:
 运行：
 
 ```bash
-python stage3_probe.py
+vla-probe
 ```
 
 如果要接入阿里云百炼 OpenAI 兼容的多模态 API，使用华北 2（北京）地域的
@@ -143,7 +170,7 @@ python stage3_probe.py
 export VLA_API_BASE_URL="https://dashscope.aliyuncs.com/compatible-mode/v1"
 export VLA_API_KEY="<填写真实 Key，不要写入仓库>"
 export VLA_MODEL_NAME="qwen3-vl-flash"
-python stage3_probe.py
+vla-probe
 ```
 
 API Key 只能通过环境变量传入，禁止写入 YAML、Python、Markdown 或日志。如果以后
@@ -154,7 +181,7 @@ API Key 只能通过环境变量传入，禁止写入 YAML、Python、Markdown �
 批量评估使用固定随机种子运行 heuristic probe，并为每个 episode 保存独立 trace：
 
 ```bash
-conda run -n vla_env python evaluate_probe.py
+conda run -n vla_env vla-evaluate-probe
 ```
 
 运行次数、输出目录和失败图片策略由 `sim_config.yaml` 的 `probe_evaluation` 控制。结果写入 `outputs/probe_evaluations/run_*/`；成功 episode 只保留 trace，失败 episode 保留 trace 和步骤图片。
@@ -242,14 +269,15 @@ conda run -n vla_env python evaluate_probe.py
 - 卡住检测窗口。
 - 机械臂最大速度。
 
-只有当流程逻辑本身要变化时，才改 `control_arm.py` 或 `stage3_probe.py`。
+只有当流程逻辑本身要变化时，才改 `src/vla_project/` 中的对应模块。
 
 ## GitHub 仓库管理建议
 
 建议提交：
 
-- `control_arm.py`
-- `stage3_probe.py`
+- `src/vla_project/`
+- `tests/`
+- `pyproject.toml`
 - `sim_config.yaml`
 - `requirements.txt`
 - `README.md`

@@ -114,7 +114,7 @@ final_distance max    = 0.0300m
 
 ## 6. 阶段三：为什么要做 probe
 
-`stage3_probe.py` 的目的不是继续采训练数据，而是验证在线闭环。
+`src/vla_project/simulation/stage3_probe.py` 的目的不是继续采训练数据，而是验证在线闭环。
 
 我想验证的是：
 
@@ -122,10 +122,10 @@ final_distance max    = 0.0300m
 观察当前状态 -> 判断下一步方向 -> 控制机械臂移动 -> 再观察 -> 再判断
 ```
 
-这和 `control_arm.py` 不一样：
+这和 `src/vla_project/simulation/control_arm.py` 不一样：
 
-- `control_arm.py` 是离线专家数据采集。
-- `stage3_probe.py` 是在线闭环探路。
+- `src/vla_project/simulation/control_arm.py` 是离线专家数据采集。
+- `src/vla_project/simulation/stage3_probe.py` 是在线闭环探路。
 
 我先用启发式规则，而不是一开始就接大模型。原因是如果简单规则都不能让机械臂接近目标，那问题很可能在控制逻辑、坐标映射或仿真参数，而不是模型能力。
 
@@ -214,7 +214,7 @@ API 多模态模型
 
 ## 10. 首批批量评估与失败诊断
 
-在修复单次方向执行后，我新增了 `evaluate_probe.py`，用固定种子 42 连续评估 20 个随机 episode。配置为 `max_control_steps=80`、`sim_steps_per_action=60`、`move_step_xy=0.03`，结果是：
+在修复单次方向执行后，我新增了 `src/vla_project/simulation/evaluate_probe.py`，用固定种子 42 连续评估 20 个随机 episode。配置为 `max_control_steps=80`、`sim_steps_per_action=60`、`move_step_xy=0.03`，结果是：
 
 ```text
 success: 5/20
@@ -320,7 +320,7 @@ Stage 3 probe 稳定化
 - 数据质量：通过 `episode_summary.jsonl` 记录 `termination_reason`、最终距离、最终目标位置，让每条轨迹都能被诊断。
 - 失败分析：遇到 `stuck` 时没有直接放宽成功阈值，而是先拆分失败类型，再根据红块位置和最终距离调整采样范围。
 - 配置驱动：把随机范围、成功阈值、相机参数、采集数量等实验变量放进 `sim_config.yaml`，让实验可复盘。
-- 闭环控制：用 `stage3_probe.py` 验证“观察 -> 决策 -> 控制 -> 再观察”的在线闭环，而不是只停留在离线数据采集。
+- 闭环控制：用 `src/vla_project/simulation/stage3_probe.py` 验证“观察 -> 决策 -> 控制 -> 再观察”的在线闭环，而不是只停留在离线数据采集。
 - 模型接口：先保留 heuristic 作为 sanity check，再准备 VLM 决策替换接口，使 heuristic、API VLM 和未来本地微调模型可以在同一套评估框架下比较。
 - 深度扩展：后续通过 action tokenization 和 LoRA/QLoRA 微调验证，把项目从规则控制推进到真正的 image-instruction-action 学习问题。
 
@@ -348,8 +348,8 @@ API 地址、Key 和模型名称通过环境变量读取，没有写入代码或
 
 为了避免每次改 prompt 都重新运行仿真，我新增了两段离线工具链：
 
-- `collect_vlm_eval_samples.py`：使用固定种子的 heuristic trace 生成图片和标准方向。
-- `evaluate_vlm_decisions.py`：只读取固定图片，调用 VLM，保存逐样本预测并支持断点续跑。
+- `src/vla_project/vlm/collect_vlm_eval_samples.py`：使用固定种子的 heuristic trace 生成图片和标准方向。
+- `src/vla_project/vlm/evaluate_vlm_decisions.py`：只读取固定图片，调用 VLM，保存逐样本预测并支持断点续跑。
 
 当前离线样本共 50 张，每个样本只向模型提供图片和任务指令；`block_pos`、
 `ee_pos` 等仿真真值只用于采集标准答案，不进入模型 prompt。评估指标包括合法
@@ -434,7 +434,7 @@ v12 连接链结构 prompt：4 张准确率仍为 50%，输出与 v11 完全相�
 潜力的直接方向基线”，后续保留为消融对照，而不是直接放弃。
 
 这说明剩余问题不能靠增加醒目颜色或继续堆叠末端描述解决。为了直接观察模型选中
-的参照物，我新增 `diagnose_vlm_grounding.py`，让 Qwen 分别返回机械臂末端与红块
+的参照物，我新增 `src/vla_project/vlm/diagnose_vlm_grounding.py`，让 Qwen 分别返回机械臂末端与红块
 的归一化框，并由代码绘制诊断图。四张图片均返回合法框，模型基本能找到机械臂
 连接链末梢；真正的问题是接近目标后两个框明显重叠，部分框中心的图像方向与
 PyBullet 世界动作标签不一致。
@@ -567,7 +567,7 @@ back：仍错误输出 right
 
 ### 17.1 Ground-then-decide 内部一致性实验
 
-新增 `evaluate_ground_then_decide.py`，要求同一个 API 回复同时包含两个归一化框和
+新增 `src/vla_project/vlm/evaluate_ground_then_decide.py`，要求同一个 API 回复同时包含两个归一化框和
 一个 `screen_*` 方向；代码独立根据框中心主轴计算第二个方向，用于检查模型是否
 遵循自己输出的空间关系。448px 四方向结果：
 
@@ -697,7 +697,7 @@ severe corrected error:             3.27cm（0/1 <=3cm）
 ### 19.1 今日工程收尾与下一阶段约束
 
 本轮不仅生成了实验结论，也把验证过程固化为可重复执行的工程接口：采样器使用显式
-seeds 47–51；`validate_grounding_calibration.py` 负责冻结校准、检查数据集 ID 隔离、
+seeds 47–51；`src/vla_project/vlm/validate_grounding_calibration.py` 负责冻结校准、检查数据集 ID 隔离、
 输出逐样本补偿结果和严格通过判定；新增测试覆盖空 clear、clear 定位失败、超过 3cm、
 校准/验证 ID 重叠和遮挡分组。最终完整测试为 `98/98` 通过，相关代码和四份项目文档
 已通过功能分支快进合并回 `main`。20 张原图、Qwen 标注图、反投影结果和校准验证
@@ -713,3 +713,15 @@ seeds 47–51；`validate_grounding_calibration.py` 负责冻结校准、检查�
 API、框解析、反投影、工作区边界或运动趋势检查失败时必须立即安全中止；安全中止只
 证明保护机制工作，不算任务成功。下一次继续设计时，还需要确定每一步是否都重新调用
 Qwen。确定完整设计并审查通过前，不改在线控制代码。
+
+## 20. Python 源码按标准包结构整理（2026-07-18）
+
+为避免根目录同时混放配置、正式代码和维护脚本，源码已统一迁移到标准 `src/`
+布局：仿真与控制放在 `src/vla_project/simulation/`，VLM 评估放在
+`src/vla_project/vlm/`，仓库维护工具放在 `src/vla_project/tools/`；测试继续独立
+放在 `tests/`，并按相同领域镜像分组。
+
+新增 `pyproject.toml` 和 10 个 `vla-*` 命令入口。开发环境执行 `pip install -e .`
+后，可以用 `vla-collect`、`vla-probe`、`vla-evaluate-probe` 等稳定命令运行流程，
+不再依赖根目录 Python 文件名。迁移过程中保持业务逻辑不变，包导入、命令元数据和
+原有行为测试合计 `109/109` 通过。

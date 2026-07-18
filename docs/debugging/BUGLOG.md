@@ -6,7 +6,7 @@
 
 - 状态：已修复并通过固定批量回归
 - 发现日期：2026-07-11
-- 影响模块：`stage3_probe.py`、`evaluate_probe.py`
+- 影响模块：`src/vla_project/simulation/stage3_probe.py`、`src/vla_project/simulation/evaluate_probe.py`
 - 基线批次：`outputs/probe_evaluations/run_20260711_185439/`
 
 ### 现象
@@ -222,7 +222,7 @@ actual_joint_angles_after
 joint_error_after
 ```
 
-这些字段保留在 `stage3_probe.py`，以后出现类似轨迹偏移时，可以直接区分
+这些字段保留在 `src/vla_project/simulation/stage3_probe.py`，以后出现类似轨迹偏移时，可以直接区分
 “IK 目标错误”和“电机未跟踪”。
 
 ### 最终结论
@@ -235,8 +235,8 @@ BUG-001 的直接根因是 IK 未使用关节约束和当前姿态作为冗余�
 
 - 状态：主要根因已确认；直接方向路径保留为对照，主路线转向目标感知与本体状态融合
 - 发现日期：2026-07-14
-- 影响模块：`collect_vlm_eval_samples.py`、`evaluate_vlm_decisions.py`、
-  `stage3_probe.py`、`sim_config.yaml`
+- 影响模块：`src/vla_project/vlm/collect_vlm_eval_samples.py`、`src/vla_project/vlm/evaluate_vlm_decisions.py`、
+  `src/vla_project/simulation/stage3_probe.py`、`sim_config.yaml`
 - 对照基线：`outputs/vlm_evaluations/offline_qwen3_vl_flash_high_topdown_v9/`
 
 ### 现象
@@ -472,7 +472,7 @@ back  -> right（错误）
 ### 末端与红块画框诊断
 
 为了区分“模型找不到末端”和“找到末端但无法比较方向”，新增
-`diagnose_vlm_grounding.py`。模型只返回 `end_effector` 与 `red_block` 的 0–1000
+`src/vla_project/vlm/diagnose_vlm_grounding.py`。模型只返回 `end_effector` 与 `red_block` 的 0–1000
 归一化框，代码再把绿色末端框和黄色红块框画到原图上。四张均衡图片均返回合法框：
 
 ```text
