@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from migrate_generated_outputs import (
+from vla_project.tools.migrate_generated_outputs import (
     MIGRATIONS,
     MigrationConflictError,
     MigrationError,
