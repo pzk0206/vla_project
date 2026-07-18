@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from validate_grounding_calibration import (
+from vla_project.vlm.validate_grounding_calibration import (
     apply_frozen_calibration,
     fit_clear_calibration,
     summarize_validation,

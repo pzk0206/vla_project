@@ -2,7 +2,7 @@
 
 import unittest
 
-from evaluate_ground_then_decide import (
+from vla_project.vlm.evaluate_ground_then_decide import (
     build_ground_then_decide_prompt,
     direction_from_grounding_boxes,
     parse_ground_then_decide,

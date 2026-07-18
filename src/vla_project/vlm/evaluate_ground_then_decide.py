@@ -7,9 +7,9 @@ from pathlib import Path
 
 import cv2
 
-from collect_vlm_eval_samples import read_jsonl
+from vla_project.vlm.collect_vlm_eval_samples import read_jsonl
 from vla_project.simulation.control_arm import CONFIG_PATH, load_config
-from diagnose_vlm_grounding import (
+from vla_project.vlm.diagnose_vlm_grounding import (
     REQUIRED_BOXES,
     append_jsonl,
     draw_grounding_boxes,

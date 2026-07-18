@@ -14,7 +14,7 @@ from unittest.mock import patch
 import cv2
 import numpy as np
 
-from collect_vlm_eval_samples import (
+from vla_project.vlm.collect_vlm_eval_samples import (
     build_balanced_ee_positions,
     build_sample_diagnostic,
     build_sampling_config,
@@ -148,9 +148,9 @@ class SampleDiagnosticsTests(unittest.TestCase):
         self.assertNotIn("block_pos", manifest_row)
         self.assertIn("block_pos", diagnostic_row)
 
-    @patch("collect_vlm_eval_samples.validate_samples")
-    @patch("collect_vlm_eval_samples.capture_balanced_pose_sample")
-    @patch("collect_vlm_eval_samples.build_sampling_config")
+    @patch("vla_project.vlm.collect_vlm_eval_samples.validate_samples")
+    @patch("vla_project.vlm.collect_vlm_eval_samples.capture_balanced_pose_sample")
+    @patch("vla_project.vlm.collect_vlm_eval_samples.build_sampling_config")
     def test_balanced_collection_writes_matching_diagnostics(
         self, build_config, capture_sample, _validate_samples
     ):
@@ -338,13 +338,13 @@ class BalancedEePositionsTests(unittest.TestCase):
             12,
         )
 
-    @patch("collect_vlm_eval_samples.p.resetJointState")
+    @patch("vla_project.vlm.collect_vlm_eval_samples.p.resetJointState")
     @patch(
-        "collect_vlm_eval_samples.get_link_position",
+        "vla_project.vlm.collect_vlm_eval_samples.get_link_position",
         side_effect=[[0.2, 0.2, 0.3], [0.1, 0.4, 0.2]],
     )
     @patch(
-        "collect_vlm_eval_samples.calculate_target_joints",
+        "vla_project.vlm.collect_vlm_eval_samples.calculate_target_joints",
         return_value=[0.0] * 7,
     )
     def test_iterates_ik_until_target_pose_converges(

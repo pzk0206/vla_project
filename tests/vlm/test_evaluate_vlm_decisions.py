@@ -9,7 +9,7 @@ from unittest.mock import patch
 import cv2
 import numpy as np
 
-from evaluate_vlm_decisions import (
+from vla_project.vlm.evaluate_vlm_decisions import (
     build_offline_prompt,
     evaluate_offline,
     map_screen_to_world,
@@ -162,7 +162,7 @@ class OfflineResumeTests(unittest.TestCase):
 
             # 模拟 Qwen 返回 right；不会访问真实网络。
             with patch(
-                "evaluate_vlm_decisions.call_openai_compatible_api",
+                "vla_project.vlm.evaluate_vlm_decisions.call_openai_compatible_api",
                 return_value=("screen_right", "screen_right"),
             ) as api_mock:
                 first_run_dir, first_summary = evaluate_offline(config, limit=1)

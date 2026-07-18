@@ -12,7 +12,7 @@ from pathlib import Path
 
 import cv2
 
-from collect_vlm_eval_samples import VALID_DIRECTIONS, read_jsonl
+from vla_project.vlm.collect_vlm_eval_samples import VALID_DIRECTIONS, read_jsonl
 from vla_project.simulation.control_arm import CONFIG_PATH, load_config
 from vla_project.simulation.stage3_probe import (
     build_vision_direction_prompt,

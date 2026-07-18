@@ -5,7 +5,10 @@ import unittest
 import numpy as np
 
 from vla_project.simulation.camera_geometry import compute_camera_matrices, world_to_pixel
-from evaluate_grounding_backprojection import evaluate_rows, summarize_results
+from vla_project.vlm.evaluate_grounding_backprojection import (
+    evaluate_rows,
+    summarize_results,
+)
 
 
 class GroundingBackprojectionEvaluationTests(unittest.TestCase):

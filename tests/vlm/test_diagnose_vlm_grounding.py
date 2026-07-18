@@ -9,7 +9,7 @@ from unittest.mock import patch
 import cv2
 import numpy as np
 
-from diagnose_vlm_grounding import (
+from vla_project.vlm.diagnose_vlm_grounding import (
     build_grounding_prompt,
     diagnose_grounding,
     draw_grounding_boxes,
@@ -103,7 +103,7 @@ class GroundingResumeTests(unittest.TestCase):
                 "red_block": [500.0, 500.0, 600.0, 600.0],
             }
             with patch(
-                "diagnose_vlm_grounding.call_openai_compatible_api",
+                "vla_project.vlm.diagnose_vlm_grounding.call_openai_compatible_api",
                 return_value=(boxes, "{}"),
             ) as api_mock:
                 first_dir, first_results = diagnose_grounding(config, limit=1)
