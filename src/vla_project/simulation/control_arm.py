@@ -11,7 +11,7 @@ import pybullet as p
 import pybullet_data
 import yaml
 
-from camera_geometry import compute_camera_matrices
+from vla_project.simulation.camera_geometry import compute_camera_matrices
 
 
 # =====================================================================

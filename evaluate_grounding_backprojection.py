@@ -7,7 +7,7 @@ import statistics
 from collections import Counter
 from pathlib import Path
 
-from camera_geometry import (
+from vla_project.simulation.camera_geometry import (
     normalized_box_center_to_pixel,
     pixel_to_world_on_plane,
 )

@@ -25,7 +25,7 @@ import pybullet as p
 # - 用 IK 把目标点转换成机械臂关节角
 #
 # 这样 stage3_probe.py 只负责“闭环探路”逻辑，不重复写仿真环境代码。
-from control_arm import (
+from vla_project.simulation.control_arm import (
     CONFIG_PATH,
     apply_joint_targets,
     calculate_target_joints,

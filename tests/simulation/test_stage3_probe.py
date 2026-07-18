@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 
-from stage3_probe import (
+from vla_project.simulation.stage3_probe import (
     InvalidModelResponseError,
     apply_end_effector_marker,
     build_vision_direction_prompt,
@@ -32,9 +32,9 @@ from stage3_probe import (
 class EndEffectorMarkerTests(unittest.TestCase):
     """绿色标记必须只修改配置指定的真实末端 link。"""
 
-    @patch("stage3_probe.p.createMultiBody", return_value=12)
-    @patch("stage3_probe.p.createVisualShape", return_value=11)
-    @patch("stage3_probe.p.changeVisualShape")
+    @patch("vla_project.simulation.stage3_probe.p.createMultiBody", return_value=12)
+    @patch("vla_project.simulation.stage3_probe.p.createVisualShape", return_value=11)
+    @patch("vla_project.simulation.stage3_probe.p.changeVisualShape")
     def test_marks_configured_end_effector_link_green(
         self,
         change_visual_shape,
@@ -68,9 +68,9 @@ class EndEffectorMarkerTests(unittest.TestCase):
             baseVisualShapeIndex=11,
         )
 
-    @patch("stage3_probe.p.resetBasePositionAndOrientation")
+    @patch("vla_project.simulation.stage3_probe.p.resetBasePositionAndOrientation")
     @patch(
-        "stage3_probe.p.getLinkState",
+        "vla_project.simulation.stage3_probe.p.getLinkState",
         return_value=(None, None, None, None, [1, 2, 3], [0, 0, 0, 1]),
     )
     def test_syncs_marker_to_current_link_pose(self, get_link_state, reset_marker_pose):
@@ -153,7 +153,7 @@ class DecideDirectionTests(unittest.TestCase):
             )
 
     @patch(
-        "stage3_probe.call_openai_compatible_api",
+        "vla_project.simulation.stage3_probe.call_openai_compatible_api",
         return_value=("screen_up", "screen_up"),
     )
     def test_api_uses_screen_prompt_then_maps_to_world(self, api_call):
@@ -309,13 +309,13 @@ class ApiResponseTests(unittest.TestCase):
         }
 
         with (
-            patch.dict("stage3_probe.os.environ", environment),
+            patch.dict("vla_project.simulation.stage3_probe.os.environ", environment),
             patch(
-                "stage3_probe.encode_image_to_data_url",
+                "vla_project.simulation.stage3_probe.encode_image_to_data_url",
                 return_value="data:image/jpeg;base64,test",
             ),
             patch(
-                "stage3_probe.urllib.request.urlopen",
+                "vla_project.simulation.stage3_probe.urllib.request.urlopen",
                 side_effect=unauthorized_error,
             ) as urlopen_mock,
         ):
@@ -355,13 +355,13 @@ class ApiResponseTests(unittest.TestCase):
 
         # 第一次模拟 429，第二次返回合法方向；整个测试不会访问真实网络。
         with (
-            patch.dict("stage3_probe.os.environ", environment),
+            patch.dict("vla_project.simulation.stage3_probe.os.environ", environment),
             patch(
-                "stage3_probe.encode_image_to_data_url",
+                "vla_project.simulation.stage3_probe.encode_image_to_data_url",
                 return_value="data:image/jpeg;base64,test",
             ),
             patch(
-                "stage3_probe.urllib.request.urlopen",
+                "vla_project.simulation.stage3_probe.urllib.request.urlopen",
                 side_effect=[rate_limit_error, success_response],
             ) as urlopen_mock,
         ):
@@ -394,13 +394,13 @@ class ApiResponseTests(unittest.TestCase):
 
         # 请求、图片编码和环境变量都由测试替代，不会访问真实 API，也不会产生费用。
         with (
-            patch.dict("stage3_probe.os.environ", environment),
+            patch.dict("vla_project.simulation.stage3_probe.os.environ", environment),
             patch(
-                "stage3_probe.encode_image_to_data_url",
+                "vla_project.simulation.stage3_probe.encode_image_to_data_url",
                 return_value="data:image/jpeg;base64,test",
             ),
             patch(
-                "stage3_probe.urllib.request.urlopen",
+                "vla_project.simulation.stage3_probe.urllib.request.urlopen",
                 return_value=response,
             ) as urlopen_mock,
         ):

@@ -17,8 +17,8 @@ import cv2
 import numpy as np
 import pybullet as p
 
-from camera_geometry import compute_camera_matrices
-from control_arm import (
+from vla_project.simulation.camera_geometry import compute_camera_matrices
+from vla_project.simulation.control_arm import (
     CONFIG_PATH,
     calculate_target_joints,
     capture_rgb_and_segmentation,
@@ -31,7 +31,7 @@ from control_arm import (
     settle_object,
     setup_world,
 )
-from stage3_probe import (
+from vla_project.simulation.stage3_probe import (
     apply_end_effector_marker,
     heuristic_direction,
     run_probe_episode,

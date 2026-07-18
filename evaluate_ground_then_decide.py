@@ -8,14 +8,17 @@ from pathlib import Path
 import cv2
 
 from collect_vlm_eval_samples import read_jsonl
-from control_arm import CONFIG_PATH, load_config
+from vla_project.simulation.control_arm import CONFIG_PATH, load_config
 from diagnose_vlm_grounding import (
     REQUIRED_BOXES,
     append_jsonl,
     draw_grounding_boxes,
     parse_grounding_boxes,
 )
-from stage3_probe import call_openai_compatible_api, map_screen_to_world
+from vla_project.simulation.stage3_probe import (
+    call_openai_compatible_api,
+    map_screen_to_world,
+)
 
 
 SCREEN_DIRECTIONS = {

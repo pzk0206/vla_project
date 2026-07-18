@@ -12,9 +12,9 @@ from unittest.mock import patch
 from pathlib import Path
 
 import numpy as np
-import control_arm
+from vla_project.simulation import control_arm
 
-from control_arm import (
+from vla_project.simulation.control_arm import (
     calculate_target_joints,
     capture_rgb,
     determine_termination,
@@ -23,8 +23,8 @@ from control_arm import (
 
 
 class CaptureRgbCameraMatrixTests(unittest.TestCase):
-    @patch("control_arm.p.getCameraImage")
-    @patch("control_arm.compute_camera_matrices")
+    @patch("vla_project.simulation.control_arm.p.getCameraImage")
+    @patch("vla_project.simulation.control_arm.compute_camera_matrices")
     def test_returns_rgb_and_segmentation_with_matching_shapes(
         self, compute_matrices, get_camera_image
     ):
@@ -47,8 +47,8 @@ class CaptureRgbCameraMatrixTests(unittest.TestCase):
         self.assertEqual(mask.shape, (2, 2))
         np.testing.assert_array_equal(mask, segmentation)
 
-    @patch("control_arm.p.getCameraImage")
-    @patch("control_arm.compute_camera_matrices")
+    @patch("vla_project.simulation.control_arm.p.getCameraImage")
+    @patch("vla_project.simulation.control_arm.compute_camera_matrices")
     def test_passes_shared_matrices_to_pybullet_renderer(
         self, compute_matrices, get_camera_image
     ):
@@ -88,10 +88,19 @@ class CalculateTargetJointsTests(unittest.TestCase):
     # - 不需要真正加载 KUKA；
     # - 可以直接检查 calculateInverseKinematics 最终收到了哪些参数。
     # 装饰器从下往上应用，所以 mock 参数按从下往上的顺序传入测试方法。
-    @patch("control_arm.p.calculateInverseKinematics", return_value=[0.0] * 7)
-    @patch("control_arm.p.getJointState", side_effect=lambda _robot, joint: (0.1 * joint,))
-    @patch("control_arm.p.getJointInfo")
-    @patch("control_arm.p.getQuaternionFromEuler", return_value=[0.0, 0.0, 0.0, 1.0])
+    @patch(
+        "vla_project.simulation.control_arm.p.calculateInverseKinematics",
+        return_value=[0.0] * 7,
+    )
+    @patch(
+        "vla_project.simulation.control_arm.p.getJointState",
+        side_effect=lambda _robot, joint: (0.1 * joint,),
+    )
+    @patch("vla_project.simulation.control_arm.p.getJointInfo")
+    @patch(
+        "vla_project.simulation.control_arm.p.getQuaternionFromEuler",
+        return_value=[0.0, 0.0, 0.0, 1.0],
+    )
     def test_ik_receives_joint_limits_and_current_pose_as_rest_pose(
         self,
         _quaternion,

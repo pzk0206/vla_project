@@ -8,8 +8,8 @@ from pathlib import Path
 import cv2
 
 from collect_vlm_eval_samples import read_jsonl
-from control_arm import CONFIG_PATH, load_config
-from stage3_probe import call_openai_compatible_api
+from vla_project.simulation.control_arm import CONFIG_PATH, load_config
+from vla_project.simulation.stage3_probe import call_openai_compatible_api
 
 
 REQUIRED_BOXES = ("end_effector", "red_block")

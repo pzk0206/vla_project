@@ -16,8 +16,8 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
-from control_arm import CONFIG_PATH, load_config
-from stage3_probe import run_probe_episode
+from vla_project.simulation.control_arm import CONFIG_PATH, load_config
+from vla_project.simulation.stage3_probe import run_probe_episode
 
 
 def cleanup_success_images(episode_dir, success, enabled):

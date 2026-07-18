@@ -6,7 +6,7 @@
 
 import unittest
 
-from control_arm import load_config
+from vla_project.simulation.control_arm import load_config
 
 
 class ConfigContractTests(unittest.TestCase):

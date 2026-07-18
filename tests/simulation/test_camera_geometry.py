@@ -4,7 +4,7 @@ import unittest
 
 import numpy as np
 
-from camera_geometry import (
+from vla_project.simulation.camera_geometry import (
     compute_camera_matrices,
     normalized_box_center_to_pixel,
     pixel_to_world_on_plane,

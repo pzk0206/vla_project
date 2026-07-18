@@ -8,7 +8,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from evaluate_probe import aggregate_probe_summaries, cleanup_success_images
+from vla_project.simulation.evaluate_probe import (
+    aggregate_probe_summaries,
+    cleanup_success_images,
+)
 
 
 class AggregateTests(unittest.TestCase):

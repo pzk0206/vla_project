@@ -13,8 +13,8 @@ from pathlib import Path
 import cv2
 
 from collect_vlm_eval_samples import VALID_DIRECTIONS, read_jsonl
-from control_arm import CONFIG_PATH, load_config
-from stage3_probe import (
+from vla_project.simulation.control_arm import CONFIG_PATH, load_config
+from vla_project.simulation.stage3_probe import (
     build_vision_direction_prompt,
     call_openai_compatible_api,
     map_screen_to_world,

@@ -4,7 +4,7 @@ import unittest
 
 import numpy as np
 
-from camera_geometry import compute_camera_matrices, world_to_pixel
+from vla_project.simulation.camera_geometry import compute_camera_matrices, world_to_pixel
 from evaluate_grounding_backprojection import evaluate_rows, summarize_results
 
 
