@@ -63,7 +63,7 @@ def prepare_dataset(dataset_config):
     """按配置初始化数据集目录与 JSONL 文件路径。
 
     数据集结构采用：
-        dataset/
+        outputs/dataset/
           ep_0_step_0.jpg
           ep_0_step_24.jpg
           ...

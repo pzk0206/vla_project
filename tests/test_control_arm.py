@@ -2,7 +2,7 @@
 
 覆盖三部分：IK 是否收到关节约束、episode 终止原因的优先级，以及追加采集时
 episode 编号的计算。外部仿真接口使用 mock，文件测试使用临时目录，因此不会
-打开 PyBullet 窗口，也不会改动真实 ``dataset/``。
+打开 PyBullet 窗口，也不会改动真实 ``outputs/dataset/``。
 """
 
 import json
@@ -189,7 +189,7 @@ class NextEpisodeIndexTests(unittest.TestCase):
 
     def test_missing_summary_starts_from_zero(self):
         """摘要文件尚不存在代表首次采集，应从 episode 0 开始。"""
-        # TemporaryDirectory 会在测试结束后自动清理，不污染真实 dataset/。
+        # TemporaryDirectory 会在测试结束后自动清理，不污染真实 outputs/dataset/。
         with tempfile.TemporaryDirectory() as temp_dir:
             summary_path = Path(temp_dir) / "episode_summary.jsonl"
             self.assertEqual(next_episode_index(summary_path), 0)

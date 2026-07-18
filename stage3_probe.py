@@ -172,7 +172,7 @@ def get_controlled_joint_angles(robot_id, controlled_joints):
 def ensure_dir(path):
     """确保输出目录存在。
 
-    probe 运行时会把每一步图片和 trace 日志写进 probe_runs/。
+    probe 运行时会把每一步图片和 trace 日志写进 outputs/probe/。
     如果目录不存在，先创建；如果已存在，不报错。
     """
     os.makedirs(path, exist_ok=True)
@@ -541,7 +541,7 @@ def run_probe_episode(config, episode_idx, episode_dir, random_seed=None):
     block_id = load_block(task_config)
     settle_object(config, task_config["initial_settle_steps"])
 
-    # probe_runs/ 是阶段三探路输出，不进入 Git 仓库。
+    # outputs/probe/ 是阶段三探路输出，不进入 Git 仓库。
     # 每次运行会覆盖旧 trace，图片文件名按 step 编号重写。
     output_dir = str(episode_dir)
     ensure_dir(output_dir)
