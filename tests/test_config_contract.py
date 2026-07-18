@@ -43,7 +43,7 @@ class ConfigContractTests(unittest.TestCase):
         evaluation = self.config["vlm_evaluation"]
         self.assertEqual(
             evaluation["sample_output_dir"],
-            "vlm_eval_samples_448_calibration_validation_d020",
+            "outputs/vlm_samples/448_calibration_validation_d020",
         )
         self.assertEqual(
             evaluation["grounding_run_name"],
@@ -73,6 +73,23 @@ class ConfigContractTests(unittest.TestCase):
         self.assertGreater(evaluation["max_samples_per_episode"], 0)
         self.assertGreater(evaluation["online_smoke_episodes"], 0)
         self.assertGreater(evaluation["online_eval_episodes"], 0)
+
+    def test_generated_outputs_are_grouped_under_outputs(self):
+        """所有生成图片和实验记录必须进入统一 outputs 根目录。"""
+        self.assertEqual(self.config["dataset"]["output_dir"], "outputs/dataset")
+        self.assertEqual(self.config["probe"]["output_dir"], "outputs/probe")
+        self.assertEqual(
+            self.config["probe_evaluation"]["output_dir"],
+            "outputs/probe_evaluations",
+        )
+        self.assertEqual(
+            self.config["vlm_evaluation"]["sample_output_dir"],
+            "outputs/vlm_samples/448_calibration_validation_d020",
+        )
+        self.assertEqual(
+            self.config["vlm_evaluation"]["run_output_dir"],
+            "outputs/vlm_evaluations",
+        )
 
     def test_probe_evaluation_config_is_valid(self):
         """批量评估必须有正数次数、非空目录和可复现的整数种子。"""

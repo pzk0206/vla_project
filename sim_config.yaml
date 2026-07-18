@@ -44,7 +44,7 @@ robot:
 
 # 5. 数据集采集配置：
 dataset:
-  output_dir: "dataset"              # 图片和 JSONL 的输出目录。
+  output_dir: "outputs/dataset"      # Baseline 1 图片和 JSONL 统一放在 outputs/dataset/。
   jsonl_name: "trajectory_expert.jsonl"  # 训练标签文件，一行对应一张图片。
   summary_jsonl_name: "episode_summary.jsonl"  # 每条轨迹的诊断摘要，一行对应一个 episode。
   clean_before_run: true             # true 会删除旧 dataset；想追加数据时改 false。
@@ -85,7 +85,7 @@ camera:
 # 8. 阶段三最小闭环探路配置：
 probe:
   mode: "heuristic"                  # heuristic 先离线验闭环；api 时走真实多模态模型。
-  output_dir: "probe_runs"           # 保存阶段三探路图片和日志。
+  output_dir: "outputs/probe"        # 保存 Stage 3 单次探路图片和日志。
   save_trace_images: true            # 是否保存每一步的观测图，方便复盘模型判断。
   max_control_steps: 80              # 一次闭环最多让模型决策多少步。
   sim_steps_per_action: 60           # 每次决策后，在物理世界里执行多少个子 step。
@@ -108,14 +108,14 @@ probe:
 # 9. Stage 3 批量评估配置：
 probe_evaluation:
   num_episodes: 50                   # Stage 3 稳定性验收使用 50 个固定种子 episode。
-  output_dir: "probe_eval_runs"       # 每次评估会在这里创建带时间戳的批次目录。
+  output_dir: "outputs/probe_evaluations" # 每次评估在统一目录下创建带时间戳的批次。
   save_failure_images_only: true     # 成功只留 trace，失败保留图片用于复盘。
   random_seed: 42                    # episode i 使用 random_seed + i，保证可复现。
 
 # 10. VLM 离线与在线评估配置：先用少量离线样本验证视觉方向，再进行付费闭环。
 vlm_evaluation:
-  sample_output_dir: "vlm_eval_samples_448_calibration_validation_d020" # 独立 seeds 47-51 的 20 张验证样本。
-  run_output_dir: "vlm_eval_runs"       # 离线预测与在线闭环评估结果的根目录。
+  sample_output_dir: "outputs/vlm_samples/448_calibration_validation_d020" # 独立 seeds 47-51 的 20 张验证样本。
+  run_output_dir: "outputs/vlm_evaluations" # 离线预测与在线闭环评估结果的统一根目录。
   offline_run_name: "offline_qwen3_vl_flash_distance20_448_multiseed_v15" # 多 seed 目录与原四样本方向结果隔离。
   grounding_run_name: "grounding_qwen3_vl_flash_distance20_448_calibration_validation_v1" # 与 seeds 42-46 校准结果隔离。
   ground_then_decide_run_name: "ground_then_decide_qwen3_vl_flash_448_multiseed_v2" # 避免新样本误写入原四样本运行目录。
