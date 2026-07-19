@@ -24,7 +24,7 @@
 | Python 包信息和 `vla-*` 命令入口 | `pyproject.toml` | 契约测试放 `tests/test_package_metadata.py` |
 | 第三方 Python 依赖 | `requirements.txt` | 修改后重新安装并运行全量测试 |
 | 安装方法、运行命令和阶段概览 | `README.md` | 不在这里记录详细实验过程 |
-| 文件职责和新文件路由规则 | `docs/PROJECT_STRUCTURE.md` | 目录发生变化时同步更新 |
+| 文件职责和新文件路由规则 | `docs/agent/PROJECT_STRUCTURE.md` | 目录发生变化时同步更新 |
 | 当前工程进展和实验复盘 | `docs/worklog/WORKLOG.md` | 记录过程、指标和阶段结论 |
 | 后续路线和验收计划 | `docs/planning/` | 可编辑计划使用 Markdown |
 | Bug 证据、根因和修复结论 | `docs/debugging/BUGLOG.md` | 保留失败到修复的完整证据链 |
@@ -58,7 +58,10 @@ vla_project/
 │   ├── test_config_contract.py
 │   └── test_package_metadata.py
 ├── docs/                            # 项目说明、过程记录和设计文档
-│   ├── PROJECT_STRUCTURE.md         # 本文件：结构和新文件路由规则
+│   ├── agent/                       # Agent 项目知识和文件路由
+│   │   ├── PROJECT_OVERVIEW.md
+│   │   ├── CURRENT_STATUS.md
+│   │   └── PROJECT_STRUCTURE.md     # 本文件：结构和新文件路由规则
 │   ├── worklog/WORKLOG.md
 │   ├── planning/
 │   ├── debugging/BUGLOG.md
@@ -142,7 +145,9 @@ src/vla_project/tools/x.py       -> tests/tools/test_x.py
 
 | 位置 | 内容性质 |
 | --- | --- |
-| `docs/PROJECT_STRUCTURE.md` | 当前目录职责和未来新文件的唯一存放规则 |
+| `docs/agent/PROJECT_OVERVIEW.md` | Agent 使用的稳定项目目标、架构、关键决策和学习背景 |
+| `docs/agent/CURRENT_STATUS.md` | 当前阶段、进行中工作、未解决问题和下一步 |
+| `docs/agent/PROJECT_STRUCTURE.md` | 当前目录职责和未来新文件的唯一存放规则 |
 | `docs/worklog/WORKLOG.md` | 实时工程进展、实验指标、失败复盘和阶段判断 |
 | `docs/planning/` | 当前学习路线、下一阶段任务和验收标准 |
 | `docs/debugging/BUGLOG.md` | Bug 现象、证据、根因、单变量实验和最终结论 |

@@ -59,6 +59,7 @@
 ├── requirements.txt     # Python 依赖
 ├── README.md            # 项目说明
 ├── docs/
+│   ├── agent/           # Agent 项目简介、当前状态和文件路由
 │   ├── worklog/         # 项目推进和实验复盘
 │   ├── planning/        # 学习计划及原始 PDF
 │   ├── debugging/       # Bug 证据、实验和结论
@@ -217,6 +218,9 @@ conda run -n vla_env vla-evaluate-probe
 
 项目文档：
 
+- [Agent 项目简介](docs/agent/PROJECT_OVERVIEW.md)：项目目标、架构、关键决策和学习路线。
+- [当前工作状态](docs/agent/CURRENT_STATUS.md)：当前阶段、未解决问题和下一步。
+- [文件路由手册](docs/agent/PROJECT_STRUCTURE.md)：目录职责和新增文件存放规则。
 - [工作日志](docs/worklog/WORKLOG.md)：推进过程、调参原因和阶段判断。
 - [学习计划](docs/planning/vla_robotic_study_plan.md)：当前路线和验收门槛。
 - [Bug 日志](docs/debugging/BUGLOG.md)：故障证据、根因假设和单变量实验。
