@@ -386,10 +386,23 @@ def run_control_loop(
         for row in rows
         if isinstance(row.get("target_age_steps"), int)
     ]
+    final_true_distance_xy = (
+        rows[-1]["true_distance_xy"]
+        if rows
+        else initial_scoring["true_distance_xy"]
+    )
+    task_success = final_true_distance_xy <= 0.03
+    autonomous_stop_success = termination == "success"
+    success = task_success and termination in {
+        "success",
+        "stale_target_limit",
+    }
 
     return {
         **case,
-        "success": termination == "success",
+        "success": success,
+        "task_success": task_success,
+        "autonomous_stop_success": autonomous_stop_success,
         "termination_reason": termination,
         "num_control_steps": len(rows),
         "num_actions": sum(row.get("execution") is not None for row in rows),
@@ -400,11 +413,7 @@ def run_control_loop(
         "recovered_from_occlusion": termination == "success"
         and held_steps > 0,
         "initial_true_distance_xy": initial_scoring["true_distance_xy"],
-        "final_true_distance_xy": (
-            rows[-1]["true_distance_xy"]
-            if rows
-            else initial_scoring["true_distance_xy"]
-        ),
+        "final_true_distance_xy": final_true_distance_xy,
         "max_target_jump_xy": max(
             (
                 row["target_jump_xy"]

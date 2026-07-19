@@ -280,6 +280,9 @@ class SmokeLoopTests(unittest.TestCase):
         )
 
         self.assertEqual(summary["termination_reason"], "stale_target_limit")
+        self.assertFalse(summary["task_success"])
+        self.assertFalse(summary["autonomous_stop_success"])
+        self.assertFalse(summary["success"])
         self.assertEqual(
             [row["target_age_steps"] for row in rows[:-1]],
             [0, 1, 2, 3, 4],
@@ -352,6 +355,8 @@ class SmokeLoopTests(unittest.TestCase):
 
         summary, rows = self.run_in_temp(dependencies)
 
+        self.assertTrue(summary["task_success"])
+        self.assertTrue(summary["autonomous_stop_success"])
         self.assertTrue(summary["success"])
         self.assertEqual(summary["initial_true_distance_xy"], 0.10)
         self.assertEqual(summary["final_true_distance_xy"], 0.02)
@@ -359,6 +364,44 @@ class SmokeLoopTests(unittest.TestCase):
         self.assertEqual(len(rows), 2)
         self.assertEqual(ground.call_count, 2)
         self.assertEqual(execute.call_count, 1)
+
+    def test_stale_target_limit_counts_as_task_success_after_reaching_target(self):
+        dependencies = self.make_dependencies(
+            observe=Mock(
+                side_effect=[observation(1.0)] + [observation(0.50)] * 5
+            ),
+            compute_action=Mock(return_value=action("right", 0.10)),
+            compute_held_action=Mock(
+                side_effect=[
+                    action("right", 0.08),
+                    action("right", 0.06),
+                    action("right", 0.04),
+                    action("right", 0.02),
+                ]
+            ),
+            score=Mock(
+                side_effect=[
+                    scoring(0.12),
+                    scoring(0.10),
+                    scoring(0.08),
+                    scoring(0.06),
+                    scoring(0.04),
+                    scoring(0.004),
+                    scoring(0.004),
+                ]
+            ),
+        )
+
+        summary, _ = self.run_in_temp(
+            dependencies,
+            dict(BASE_CONFIG, max_control_steps=6),
+        )
+
+        self.assertEqual(summary["termination_reason"], "stale_target_limit")
+        self.assertEqual(summary["final_true_distance_xy"], 0.004)
+        self.assertTrue(summary["task_success"])
+        self.assertFalse(summary["autonomous_stop_success"])
+        self.assertTrue(summary["success"])
 
     def test_action_call_never_receives_block_truth(self):
         compute_action = Mock(return_value=action("stop", 0.01))
@@ -490,6 +533,47 @@ class SmokeLoopTests(unittest.TestCase):
 
         self.assertEqual(summary["termination_reason"], "ik_error")
         self.assertEqual(rows[-1]["termination_reason"], "ik_error")
+
+    def test_system_errors_cannot_pass_despite_task_arrival(self):
+        cases = {
+            "api_error": self.make_dependencies(
+                ground=Mock(side_effect=TimeoutError("timeout")),
+                score=Mock(side_effect=[scoring(0.10), scoring(0.01)]),
+            ),
+            "backprojection_error": self.make_dependencies(
+                compute_action=Mock(side_effect=ValueError("bad matrix")),
+                score=Mock(side_effect=[scoring(0.10), scoring(0.01)]),
+            ),
+            "ik_error": self.make_dependencies(
+                compute_action=Mock(return_value=action("right", 0.08)),
+                execute=Mock(side_effect=RuntimeError("ik failed")),
+                score=Mock(side_effect=[scoring(0.10), scoring(0.01)]),
+            ),
+        }
+
+        for expected_reason, dependencies in cases.items():
+            with self.subTest(expected_reason=expected_reason):
+                summary, _ = self.run_in_temp(dependencies)
+                self.assertEqual(summary["termination_reason"], expected_reason)
+                self.assertTrue(summary["task_success"])
+                self.assertFalse(summary["autonomous_stop_success"])
+                self.assertFalse(summary["success"])
+
+    def test_max_steps_cannot_pass_despite_task_arrival(self):
+        dependencies = self.make_dependencies(
+            compute_action=Mock(return_value=action("right", 0.08)),
+            score=Mock(side_effect=[scoring(0.10), scoring(0.01)]),
+        )
+
+        summary, _ = self.run_in_temp(
+            dependencies,
+            dict(BASE_CONFIG, max_control_steps=1),
+        )
+
+        self.assertEqual(summary["termination_reason"], "max_control_steps")
+        self.assertTrue(summary["task_success"])
+        self.assertFalse(summary["autonomous_stop_success"])
+        self.assertFalse(summary["success"])
 
     def test_batch_pass_requires_three_successful_recoverable_episodes(self):
         episodes = [
