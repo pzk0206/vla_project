@@ -681,7 +681,7 @@ outputs/vlm_evaluations/grounding_qwen3_vl_flash_distance20_448_calibration_vali
 
 ## BUG-004：全程 clear 的闭环案例不存在
 
-- 状态：根因已确认，遮挡恢复方案已设计，尚未完成在线验证
+- 状态：根因已确认，短时遮挡恢复状态机已实现，尚未完成在线验证
 - 发现日期：2026-07-17
 - 影响模块：`run_grounding_smoke.py`、`screen_grounding_smoke_cases.py`
 - 证据批次：`vlm_smoke_screening_runs/run_20260717_231406/`
@@ -724,3 +724,23 @@ start_pose_error=7
 清晰画面下的 API、无效框、反投影、目标跳变、无进展和 IK 错误不回退到缓存，避免
 遮挡恢复掩盖其他问题。BUG-004 只有在自动测试通过并完成三个真实在线 smoke cases
 后才能更新状态；成功结论也只代表短时静态目标遮挡恢复，不外推到目标移动或永久遮挡。
+
+## BUG-005：held 计算异常被误记为反投影错误
+
+- 状态：已修复并有回归测试
+- 发现日期：2026-07-19
+- 影响模块：`src/vla_project/vlm/grounding_smoke/runner.py`
+
+### 现象与根因
+
+独立代码审查发现，低可见率下调用 `compute_held_action()` 时，除
+`SmokeSafetyAbort` 以外的未知异常统一记录为 `backprojection_error`。held 路径只接收
+已缓存的世界目标和当前末端位置，不执行像素反投影，因此该分类会把缓存状态、配置或
+实现错误错误归因到相机几何。
+
+### 修复与验证
+
+新增 `test_held_compute_exception_becomes_held_target_error`，先确认旧实现返回
+`backprojection_error`，再把该分支改为独立的 `held_target_error`。fresh 路径的真实
+反投影异常仍保持 `backprojection_error`，两类证据不再混淆。完整自动测试为
+164/164通过，真实 API 调用为0。

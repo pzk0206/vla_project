@@ -182,7 +182,7 @@ def run_control_loop(
                 )
                 break
             except Exception as exc:
-                termination = "backprojection_error"
+                termination = "held_target_error"
                 record(
                     visibility,
                     termination,

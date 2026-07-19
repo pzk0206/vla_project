@@ -392,6 +392,29 @@ class SmokeLoopTests(unittest.TestCase):
         self.assertEqual(summary["termination_reason"], "backprojection_error")
         self.assertEqual(rows[-1]["termination_reason"], "backprojection_error")
 
+    def test_held_compute_exception_becomes_held_target_error(self):
+        dependencies = self.make_dependencies(
+            observe=Mock(
+                side_effect=[observation(1.0), observation(0.50)]
+            ),
+            compute_action=Mock(return_value=action("right", 0.08)),
+            compute_held_action=Mock(
+                side_effect=ValueError("malformed cached state")
+            ),
+            score=Mock(
+                side_effect=[scoring(0.10), scoring(0.08), scoring(0.08)]
+            ),
+        )
+
+        summary, rows = self.run_in_temp(
+            dependencies,
+            dict(BASE_CONFIG, max_control_steps=2),
+        )
+
+        self.assertEqual(summary["termination_reason"], "held_target_error")
+        self.assertEqual(rows[-1]["termination_reason"], "held_target_error")
+        self.assertFalse(rows[-1]["api_called"])
+
     def test_execute_exception_becomes_ik_error(self):
         dependencies = self.make_dependencies(
             compute_action=Mock(return_value=action("right", 0.08)),
