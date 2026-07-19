@@ -815,3 +815,46 @@ fresh VLM 定位、目标年龄不超过4且总 API 调用不超过30。新增�
 这些结果只证明离线状态机和证据契约满足设计，不证明 Qwen 在线定位或 PyBullet 闭环
 成功。下一步只审查三个固定案例、冻结校准和请求上限；真实付费 smoke 必须由用户再次
 明确批准。
+
+## 24. 首轮真实 Grounding 闭环 Smoke（2026-07-19）
+
+用户明确批准后运行：
+
+```text
+conda run -n vla_env vla-run-grounding-smoke --run-name run_20260719_target_hold_v1
+```
+
+运行前已完成无 API 预检：editable 包指向当前 `main` 的 `src/`，三个固定案例、冻结
+校准15个样本 ID、`max_stale_target_steps=4`、`api_max_retries=0` 和
+`max_total_api_calls=30` 均通过契约检查，相关定向测试为67/67通过。
+
+真实运行没有通过，进程退出码为1，只发生1次真实 API 调用：
+
+```text
+52-left：  visibility_out_of_scope，初始可见率270/378=0.7143，0次API，0次动作
+53-right：stale_target_limit，1次API，1步fresh + 4步held，5次动作
+54-front： start pose未收敛，误差0.053522m，批次抛异常退出
+```
+
+`53-right` 是本轮最重要的正向但不充分证据：真实 XY 距离从约10.05cm降到0.41cm；
+首步 VLM 给出世界目标后，连续4个低可见步骤均使用缓存目标和当前末端位置重新计算动作，
+没有再次请求 API。红块可见率依次从约0.844降为0.648、0.455、0.254、0.063，最后仅
+0.003；第5次失效尝试按设计停止。由于缓存预测目标与当前末端的距离仍约3.58cm，控制器
+没有预测 stop，因此该 episode 的 summary 仍为 `success=false`。这说明目标保持在这个
+案例中确实完成了有效运动，但尚未满足当前端到端通过契约。
+
+`54-front` 随后用独立无 API 初始化精确复现：请求起点为
+`[0.1654557627, 0.2964970011, 0.2]`，实际末端为
+`[0.1908597797, 0.3420210481, 0.1878824681]`，误差仍为0.053522m，证明失败发生在
+确定性的 IK/reset 起点边界，不是 VLM 或网络波动。
+
+证据目录：
+
+```text
+outputs/vlm_evaluations/grounding_world_smoke/run_20260719_target_hold_v1/
+```
+
+目录包含 episode 0、1 的逐步图片、trace 和 `episode_summary.jsonl`；由于 episode 2
+初始化时抛异常，没有完整 `batch_summary.json`。下一步不直接重跑付费实验：先建立
+批次级无 API 起点/首帧预检，并明确“动作不读真值”前提下事后成功评分与预测 stop 的
+关系，再决定固定案例和 runner 的最小修订。

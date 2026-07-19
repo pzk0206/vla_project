@@ -681,7 +681,7 @@ outputs/vlm_evaluations/grounding_qwen3_vl_flash_distance20_448_calibration_vali
 
 ## BUG-004：全程 clear 的闭环案例不存在
 
-- 状态：根因已确认，短时遮挡恢复状态机已实现，尚未完成在线验证
+- 状态：根因已确认，短时遮挡恢复状态机已有单案例在线运动证据，但批次未通过
 - 发现日期：2026-07-17
 - 影响模块：`run_grounding_smoke.py`、`screen_grounding_smoke_cases.py`
 - 证据批次：`vlm_smoke_screening_runs/run_20260717_231406/`
@@ -725,6 +725,17 @@ start_pose_error=7
 遮挡恢复掩盖其他问题。BUG-004 只有在自动测试通过并完成三个真实在线 smoke cases
 后才能更新状态；成功结论也只代表短时静态目标遮挡恢复，不外推到目标移动或永久遮挡。
 
+### 首轮真实在线证据（2026-07-19）
+
+真实批次 `run_20260719_target_hold_v1` 中，`53-right` 首帧可见率为0.844，发生1次
+真实 grounding；随后可见率依次降到0.648、0.455、0.254、0.063，连续4步使用 held
+目标且没有再次调用 API。真实 XY 距离从约10.05cm降到0.41cm，证明状态机在该案例中
+确实把机械臂移动到目标附近，而不只是通过 mock 测试。
+
+该案例仍不能关闭 BUG-004：缓存预测目标与末端的距离尚未满足2cm stop 条件，第5次
+不可见按设计触发 `stale_target_limit`，summary 为 `success=false`。此外另外两个固定
+案例没有进入相同闭环条件，因此尚无3/3端到端通过证据。
+
 ## BUG-005：held 计算异常被误记为反投影错误
 
 - 状态：已修复并有回归测试
@@ -744,3 +755,44 @@ start_pose_error=7
 `backprojection_error`，再把该分支改为独立的 `held_target_error`。fresh 路径的真实
 反投影异常仍保持 `backprojection_error`，两类证据不再混淆。完整自动测试为
 164/164通过，真实 API 调用为0。
+
+## BUG-006：真实 Smoke 缺少整批动态预检和完整失败摘要
+
+- 状态：问题已复现，尚未修复
+- 发现日期：2026-07-19
+- 影响模块：`src/vla_project/vlm/grounding_smoke/runner.py`
+- 证据批次：`outputs/vlm_evaluations/grounding_world_smoke/run_20260719_target_hold_v1/`
+
+### 现象
+
+首轮真实 smoke 在发送请求前只验证了静态配置、冻结校准、CLI 和自动测试，没有先把
+三个固定案例的起始姿态与首帧可见率全部动态验证一遍。实际顺序执行后得到：
+
+```text
+52-left：初始可见率270/378=0.7143，低于0.75，API调用0次
+53-right：进入闭环，API调用1次，最终stale_target_limit
+54-front：起始姿态误差0.053522m，高于0.005m，抛RuntimeError
+```
+
+第三个案例的异常使整个命令以退出码1结束。输出目录只包含 episode 0、1 的
+`episode_summary.jsonl`，没有 episode 2 的结构化失败记录，也没有完整
+`batch_summary.json`。因此不能把已落盘的0/2直接解释为三案例成功率。
+
+### 已确认原因与边界
+
+`54-front` 已用不调用 API 的独立初始化精确复现，姿态误差仍为0.053522m，说明它是
+当前 seed、front 起点、IK/reset 与5mm容差组合下的确定性失败，不是网络或 VLM 波动。
+`52-left` 的低可见率也发生在调用 API 前。问题不在请求重试或30次硬上限；本轮实际
+总调用数只有1。
+
+当前 runner 按案例串行执行“初始化 -> 可能调用 API -> 下一个案例初始化”，所以后置
+案例的动态资格尚未检查时，前置案例已经可能产生付费请求。单个案例起始姿态失败又以
+未捕获的批次级异常退出，导致完整摘要缺失。
+
+### 后续修复约束
+
+- 在任何真实 API 请求前，无 API 地验证整批案例的起始姿态和首帧可见率；
+- 动态预检失败时不得进入付费闭环，并输出可审计的案例级拒绝原因；
+- 即使单个案例初始化失败，也应生成结构化 episode 与 batch 摘要；
+- 另行明确事后真实距离已 `<=3cm`、但控制器未预测 stop 时的成功评分契约；
+- 修订完成并通过无 API 验证前，不直接重跑真实 smoke。
