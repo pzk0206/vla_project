@@ -420,14 +420,19 @@ def run_control_loop(
 
 
 def aggregate_smoke_summaries(summaries, smoke_config):
-    """只有固定三个 clear case 全部成功且未超调用上限才通过。"""
+    """只有固定三个可恢复案例全部成功且未超安全边界才通过。"""
     rows = list(summaries)
     successes = sum(row["success"] for row in rows)
     calls = sum(row["api_calls"] for row in rows)
     passed = (
         [row["seed"] for row in rows] == smoke_config["seeds"]
         and successes == smoke_config["required_successes"] == 3
-        and all(row["all_clear"] for row in rows)
+        and all(row["num_fresh_vlm_steps"] >= 1 for row in rows)
+        and all(
+            row["max_target_age_steps"]
+            <= smoke_config["max_stale_target_steps"]
+            for row in rows
+        )
         and calls <= smoke_config["max_total_api_calls"]
     )
     return {
@@ -436,6 +441,15 @@ def aggregate_smoke_summaries(summaries, smoke_config):
         "failure_count": len(rows) - successes,
         "success_rate": successes / len(rows) if rows else 0.0,
         "total_api_calls": calls,
+        "fresh_vlm_steps": sum(
+            row["num_fresh_vlm_steps"] for row in rows
+        ),
+        "held_target_steps": sum(
+            row["num_held_target_steps"] for row in rows
+        ),
+        "recovered_episode_count": sum(
+            row["recovered_from_occlusion"] for row in rows
+        ),
         "termination_reason_counts": dict(
             Counter(row["termination_reason"] for row in rows)
         ),

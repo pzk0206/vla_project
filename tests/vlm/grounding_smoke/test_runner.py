@@ -403,23 +403,31 @@ class SmokeLoopTests(unittest.TestCase):
         self.assertEqual(summary["termination_reason"], "ik_error")
         self.assertEqual(rows[-1]["termination_reason"], "ik_error")
 
-    def test_batch_pass_requires_exact_three_clear_successes(self):
+    def test_batch_pass_requires_three_successful_recoverable_episodes(self):
         episodes = [
             {
                 "seed": seed,
                 "success": True,
-                "all_clear": True,
-                "api_calls": 5,
+                "api_calls": 2,
                 "termination_reason": "success",
+                "num_fresh_vlm_steps": 2,
+                "num_held_target_steps": 3,
+                "max_target_age_steps": 3,
+                "recovered_from_occlusion": True,
             }
             for seed in (52, 53, 54)
         ]
-        self.assertTrue(aggregate_smoke_summaries(episodes, BASE_CONFIG)["passed"])
+        summary = aggregate_smoke_summaries(episodes, BASE_CONFIG)
+        self.assertTrue(summary["passed"])
+        self.assertEqual(summary["fresh_vlm_steps"], 6)
+        self.assertEqual(summary["held_target_steps"], 9)
+        self.assertEqual(summary["recovered_episode_count"], 3)
 
         variants = [
             episodes[:2],
             [dict(episodes[0], success=False)] + episodes[1:],
-            [dict(episodes[0], all_clear=False)] + episodes[1:],
+            [dict(episodes[0], num_fresh_vlm_steps=0)] + episodes[1:],
+            [dict(episodes[0], max_target_age_steps=5)] + episodes[1:],
             [dict(row, api_calls=11) for row in episodes],
         ]
         for rows in variants:
@@ -586,6 +594,10 @@ class SmokeBatchContractTests(unittest.TestCase):
                     "termination_reason": "success",
                     "api_calls": 1,
                     "all_clear": True,
+                    "num_fresh_vlm_steps": 1,
+                    "num_held_target_steps": 0,
+                    "max_target_age_steps": 0,
+                    "recovered_from_occlusion": False,
                     "num_control_steps": 1,
                     "final_true_distance_xy": 0.02,
                 }
