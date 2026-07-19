@@ -17,6 +17,7 @@ from vla_project.vlm.grounding_smoke.targeting import (
 )
 from vla_project.vlm.grounding_smoke.runner import (
     SmokeDependencies,
+    SmokePreflightError,
     _build_episode_dependencies,
     aggregate_smoke_summaries,
     build_smoke_cases,
@@ -37,6 +38,69 @@ BASE_CONFIG = {
     "required_successes": 3,
     "max_total_api_calls": 30,
 }
+
+
+def batch_config(temp_dir):
+    calibration_path = Path(temp_dir) / "calibration.json"
+    calibration_path.write_text("{}", encoding="utf-8")
+    config = {
+        "connection_mode": "DIRECT",
+        "gravity": [0, 0, -9.8],
+        "enable_time_sleep": False,
+        "simulation_hz": 240,
+        "robot": {
+            "ee_link_index": 6,
+            "controlled_joints": 7,
+        },
+        "task": {"initial_settle_steps": 1},
+        "dataset": {"instruction": "悬停在红色积木上方"},
+        "probe": {
+            "sim_steps_per_action": 1,
+            "api": {},
+        },
+        "camera": {
+            "workspace_center": [0.0, 0.4, 0.0],
+            "near_val": 0.1,
+            "far_val": 100.0,
+        },
+        "vlm_evaluation": {
+            "balanced_pose_tolerance": 0.005,
+            "balanced_pose_ik_iterations": 20,
+            "camera_override": {
+                "image_width": 448,
+                "image_height": 448,
+                "eye_offset_base": [0.0, 0.0, 3.0],
+                "eye_offset_random_range": [0.0, 0.0],
+                "up_vector": [0, 1, 0],
+                "fov": 45,
+            },
+        },
+        "grounding_smoke": {
+            **BASE_CONFIG,
+            "output_dir": temp_dir,
+            "calibration_path": str(calibration_path),
+            "expected_calibration_samples": 15,
+            "expected_calibration_sample_ids": [
+                f"seed_{seed}_d020_{direction}"
+                for seed in range(42, 47)
+                for direction in ("front", "left", "right")
+            ],
+            "api_max_retries": 0,
+            "expected_correction_x": 0.02492227406480192,
+            "expected_correction_y": -0.019467343494422532,
+            "start_directions": ["left", "right", "front"],
+            "start_offset_xy": 0.10,
+            "hover_z": 0.20,
+            "move_step_xy": 0.02,
+            "visibility_reference_pixels": 378,
+        },
+    }
+    fake_calibration = {
+        "num_clear_calibration_samples": 15,
+        "correction_x": 0.02492227406480192,
+        "correction_y": -0.019467343494422532,
+    }
+    return config, fake_calibration
 
 
 def observation(visibility_ratio=1.0):
@@ -670,67 +734,70 @@ class SmokeBatchContractTests(unittest.TestCase):
         self.assertEqual(metrics["block_reference_pixels"], 4)
         self.assertEqual(metrics["block_visibility_ratio"], 0.5)
 
+    def test_batch_preflights_all_cases_before_rejecting_without_api(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config, fake_calibration = batch_config(temp_dir)
+            rows = [
+                {
+                    "episode_idx": 0,
+                    "seed": 52,
+                    "start_direction": "left",
+                    "qualified": False,
+                    "rejection_reason": "visibility_below_threshold",
+                },
+                {
+                    "episode_idx": 1,
+                    "seed": 53,
+                    "start_direction": "right",
+                    "qualified": True,
+                    "rejection_reason": None,
+                },
+                {
+                    "episode_idx": 2,
+                    "seed": 54,
+                    "start_direction": "front",
+                    "qualified": False,
+                    "rejection_reason": "start_pose_error",
+                },
+            ]
+            with (
+                patch(
+                    "vla_project.vlm.grounding_smoke.runner.load_frozen_calibration",
+                    return_value=fake_calibration,
+                ),
+                patch(
+                    "vla_project.vlm.grounding_smoke.runner.preflight_smoke_case",
+                    side_effect=rows,
+                ) as preflight,
+                patch(
+                    "vla_project.vlm.grounding_smoke.runner.run_control_loop"
+                ) as loop,
+                patch(
+                    "vla_project.vlm.grounding_smoke.runner.call_openai_compatible_api"
+                ) as api,
+            ):
+                with self.assertRaises(SmokePreflightError):
+                    run_smoke_batch(config, run_name="run_rejected")
+
+            self.assertEqual(preflight.call_count, 3)
+            loop.assert_not_called()
+            api.assert_not_called()
+            run_dir = Path(temp_dir) / "run_rejected"
+            payload = json.loads(
+                (run_dir / "smoke_preflight.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(payload["num_cases"], 3)
+            self.assertEqual(payload["qualified_count"], 1)
+            self.assertFalse(payload["passed"])
+            self.assertEqual(payload["cases"], rows)
+            self.assertFalse((run_dir / "episode_summary.jsonl").exists())
+            self.assertFalse((run_dir / "smoke_summary.json").exists())
+
     def test_batch_uses_three_isolated_cases_and_writes_summary(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            calibration_path = Path(temp_dir) / "calibration.json"
-            calibration_path.write_text("{}", encoding="utf-8")
-            config = {
-                "connection_mode": "DIRECT",
-                "gravity": [0, 0, -9.8],
-                "enable_time_sleep": False,
-                "simulation_hz": 240,
-                "robot": {
-                    "ee_link_index": 6,
-                    "controlled_joints": 7,
-                },
-                "task": {"initial_settle_steps": 1},
-                "dataset": {"instruction": "悬停在红色积木上方"},
-                "probe": {
-                    "sim_steps_per_action": 1,
-                    "api": {},
-                },
-                "camera": {
-                    "workspace_center": [0.0, 0.4, 0.0],
-                    "near_val": 0.1,
-                    "far_val": 100.0,
-                },
-                "vlm_evaluation": {
-                    "balanced_pose_tolerance": 0.005,
-                    "balanced_pose_ik_iterations": 20,
-                    "camera_override": {
-                        "image_width": 448,
-                        "image_height": 448,
-                        "eye_offset_base": [0.0, 0.0, 3.0],
-                        "eye_offset_random_range": [0.0, 0.0],
-                        "up_vector": [0, 1, 0],
-                        "fov": 45,
-                    },
-                },
-                "grounding_smoke": {
-                    **BASE_CONFIG,
-                    "output_dir": temp_dir,
-                    "calibration_path": str(calibration_path),
-                    "expected_calibration_samples": 15,
-                    "expected_calibration_sample_ids": [
-                        f"seed_{seed}_d020_{direction}"
-                        for seed in range(42, 47)
-                        for direction in ("front", "left", "right")
-                    ],
-                    "api_max_retries": 0,
-                    "expected_correction_x": 0.02492227406480192,
-                    "expected_correction_y": -0.019467343494422532,
-                    "start_directions": ["left", "right", "front"],
-                    "start_offset_xy": 0.10,
-                    "hover_z": 0.20,
-                    "move_step_xy": 0.02,
-                    "visibility_reference_pixels": 378,
-                },
-            }
-            fake_calibration = {
-                "num_clear_calibration_samples": 15,
-                "correction_x": 0.02492227406480192,
-                "correction_y": -0.019467343494422532,
-            }
+            config, fake_calibration = batch_config(temp_dir)
 
             def fake_loop(smoke_config, case, calibration, episode_dir, dependencies):
                 episode_dir.mkdir(parents=True, exist_ok=False)
@@ -750,6 +817,19 @@ class SmokeBatchContractTests(unittest.TestCase):
 
             with (
                 patch("vla_project.vlm.grounding_smoke.runner.load_frozen_calibration", return_value=fake_calibration),
+                patch(
+                    "vla_project.vlm.grounding_smoke.runner.preflight_smoke_case",
+                    side_effect=[
+                        {
+                            **case,
+                            "qualified": True,
+                            "rejection_reason": None,
+                        }
+                        for case in build_smoke_cases(
+                            config["grounding_smoke"]
+                        )
+                    ],
+                ) as preflight,
                 patch("vla_project.vlm.grounding_smoke.runner.connect_physics"),
                 patch("vla_project.vlm.grounding_smoke.runner.setup_world", return_value=(1, 10)),
                 patch("vla_project.vlm.grounding_smoke.runner.load_block", return_value=20),
@@ -772,6 +852,7 @@ class SmokeBatchContractTests(unittest.TestCase):
             ):
                 batch_dir, summary = run_smoke_batch(config, run_name="run_test")
 
+            self.assertEqual(preflight.call_count, 3)
             self.assertEqual(loop.call_count, 3)
             self.assertEqual(
                 [call.args[1]["seed"] for call in loop.call_args_list],
@@ -782,6 +863,14 @@ class SmokeBatchContractTests(unittest.TestCase):
             )
             self.assertEqual(disconnect.call_count, 3)
             api.assert_not_called()
+            self.assertTrue((batch_dir / "smoke_preflight.json").is_file())
+            preflight_payload = json.loads(
+                (batch_dir / "smoke_preflight.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertTrue(preflight_payload["passed"])
+            self.assertEqual(preflight_payload["qualified_count"], 3)
             self.assertTrue((batch_dir / "smoke_summary.json").is_file())
             self.assertTrue((batch_dir / "episode_summary.jsonl").is_file())
             self.assertTrue(summary["passed"])

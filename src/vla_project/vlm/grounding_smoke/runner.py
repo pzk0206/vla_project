@@ -53,6 +53,10 @@ from vla_project.simulation.stage3_probe import (
 )
 
 
+class SmokePreflightError(RuntimeError):
+    """整批初始动态预检未通过。"""
+
+
 @dataclass(frozen=True)
 class SmokeDependencies:
     """闭环依赖边界；便于离线测试证明动作侧不读取真值。"""
@@ -702,6 +706,30 @@ def run_smoke_batch(config, run_name=None):
         smoke_config["expected_correction_y"],
     )
     batch_dir = make_run_dir(smoke_config["output_dir"], run_name)
+    preflight_rows = [
+        preflight_smoke_case(config, smoke_config, case)
+        for case in cases
+    ]
+    preflight_summary = {
+        "num_cases": len(preflight_rows),
+        "qualified_count": sum(
+            row["qualified"] for row in preflight_rows
+        ),
+        "passed": all(row["qualified"] for row in preflight_rows),
+        "cases": preflight_rows,
+    }
+    _write_json(batch_dir / "smoke_preflight.json", preflight_summary)
+    if not preflight_summary["passed"]:
+        failures = ", ".join(
+            f"episode={row['episode_idx']} seed={row['seed']} "
+            f"direction={row['start_direction']} "
+            f"reason={row['rejection_reason']}"
+            for row in preflight_rows
+            if not row["qualified"]
+        )
+        raise SmokePreflightError(
+            f"smoke 初始动态预检失败: {failures}"
+        )
     episode_summary_path = batch_dir / "episode_summary.jsonl"
     summaries = []
 
