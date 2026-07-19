@@ -12,6 +12,7 @@ import numpy as np
 from vla_project.simulation.stage3_probe import InvalidModelResponseError
 from vla_project.vlm.grounding_smoke.targeting import (
     SmokeSafetyAbort,
+    compute_action_from_world_target,
     compute_grounding_action,
 )
 from vla_project.vlm.grounding_smoke.runner import (
@@ -29,6 +30,7 @@ from vla_project.vlm.grounding_smoke.runner import (
 CASE = {"episode_idx": 0, "seed": 52, "start_direction": "left"}
 BASE_CONFIG = {
     "max_control_steps": 10,
+    "max_stale_target_steps": 4,
     "clear_visibility_threshold": 0.75,
     "seeds": [52, 53, 54],
     "required_successes": 3,
@@ -83,6 +85,7 @@ class SmokeLoopTests(unittest.TestCase):
         observe=None,
         ground=None,
         compute_action=None,
+        compute_held_action=None,
         execute=None,
         score=None,
     ):
@@ -91,6 +94,8 @@ class SmokeLoopTests(unittest.TestCase):
             ground=ground
             or Mock(return_value=({"red_block": [450, 450, 550, 550]}, "{}", 0.1)),
             compute_action=compute_action or Mock(return_value=action("stop", 0.01)),
+            compute_held_action=compute_held_action
+            or Mock(return_value=action("right", 0.06)),
             execute=execute or Mock(return_value={"target_pos": [0.02, 0.4, 0.2]}),
             score=score or Mock(return_value=scoring(0.01)),
             save_images=Mock(return_value=("raw.jpg", "annotated.jpg")),
@@ -128,6 +133,139 @@ class SmokeLoopTests(unittest.TestCase):
         self.assertEqual(rows[-1]["termination_reason"], "visibility_out_of_scope")
         self.assertEqual(summary["api_calls"], 0)
         ground.assert_not_called()
+
+    def test_visibility_without_cached_target_still_aborts(self):
+        ground = Mock()
+        held = Mock()
+        dependencies = self.make_dependencies(
+            observe=Mock(return_value=observation(0.50)),
+            ground=ground,
+            compute_held_action=held,
+        )
+
+        summary, rows = self.run_in_temp(dependencies)
+
+        self.assertEqual(
+            summary["termination_reason"], "visibility_out_of_scope"
+        )
+        self.assertIsNone(rows[-1]["decision_source"])
+        self.assertFalse(rows[-1]["api_called"])
+        ground.assert_not_called()
+        held.assert_not_called()
+
+    def test_low_visibility_reuses_cached_target_without_api_call(self):
+        fresh = action("right", 0.08)
+        held = action("right", 0.06)
+        ground = Mock(
+            return_value=(
+                {"red_block": [450, 450, 550, 550]},
+                "fresh",
+                0.1,
+            )
+        )
+        compute_held = Mock(return_value=held)
+        dependencies = self.make_dependencies(
+            observe=Mock(
+                side_effect=[observation(1.0), observation(0.50)]
+            ),
+            ground=ground,
+            compute_action=Mock(return_value=fresh),
+            compute_held_action=compute_held,
+            score=Mock(
+                side_effect=[scoring(0.10), scoring(0.08), scoring(0.06)]
+            ),
+        )
+
+        summary, rows = self.run_in_temp(
+            dependencies,
+            dict(BASE_CONFIG, max_control_steps=2),
+        )
+
+        self.assertEqual(summary["termination_reason"], "max_control_steps")
+        self.assertEqual(ground.call_count, 1)
+        self.assertEqual(rows[0]["decision_source"], "fresh_vlm")
+        self.assertEqual(rows[0]["target_age_steps"], 0)
+        self.assertEqual(rows[1]["decision_source"], "held_vlm_target")
+        self.assertEqual(rows[1]["target_age_steps"], 1)
+        self.assertFalse(rows[1]["api_called"])
+        self.assertEqual(
+            compute_held.call_args.kwargs["target_world"],
+            fresh["corrected_target_world"],
+        )
+
+    def test_fifth_held_attempt_aborts_without_action(self):
+        observations = [observation(1.0)] + [observation(0.50)] * 5
+        dependencies = self.make_dependencies(
+            observe=Mock(side_effect=observations),
+            compute_action=Mock(return_value=action("right", 0.10)),
+            compute_held_action=Mock(
+                side_effect=[
+                    action("right", 0.08),
+                    action("right", 0.06),
+                    action("right", 0.04),
+                    action("right", 0.02),
+                ]
+            ),
+            score=Mock(side_effect=[scoring(0.12)] * 7),
+        )
+
+        summary, rows = self.run_in_temp(
+            dependencies,
+            dict(BASE_CONFIG, max_control_steps=6),
+        )
+
+        self.assertEqual(summary["termination_reason"], "stale_target_limit")
+        self.assertEqual(
+            [row["target_age_steps"] for row in rows[:-1]],
+            [0, 1, 2, 3, 4],
+        )
+        self.assertIsNone(rows[-1]["decision_source"])
+        self.assertEqual(summary["num_held_target_steps"], 4)
+        self.assertEqual(summary["num_actions"], 5)
+
+    def test_new_fresh_target_resets_target_age(self):
+        dependencies = self.make_dependencies(
+            observe=Mock(
+                side_effect=[
+                    observation(1.0),
+                    observation(0.50),
+                    observation(1.0),
+                ]
+            ),
+            ground=Mock(
+                side_effect=[
+                    ({"red_block": [450, 450, 550, 550]}, "one", 0.1),
+                    ({"red_block": [451, 450, 551, 550]}, "two", 0.1),
+                ]
+            ),
+            compute_action=Mock(
+                side_effect=[action("right", 0.08), action("stop", 0.01)]
+            ),
+            compute_held_action=Mock(return_value=action("right", 0.04)),
+            score=Mock(
+                side_effect=[
+                    scoring(0.10),
+                    scoring(0.08),
+                    scoring(0.04),
+                    scoring(0.01),
+                ]
+            ),
+        )
+
+        summary, rows = self.run_in_temp(dependencies)
+
+        self.assertTrue(summary["success"])
+        self.assertEqual(
+            [
+                (row["decision_source"], row["target_age_steps"])
+                for row in rows
+            ],
+            [
+                ("fresh_vlm", 0),
+                ("held_vlm_target", 1),
+                ("fresh_vlm", 0),
+            ],
+        )
 
     def test_two_frame_success_regrounds_and_executes_once(self):
         ground = Mock(

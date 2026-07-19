@@ -42,6 +42,7 @@ from vla_project.vlm.diagnose_vlm_grounding import (
 
 from vla_project.vlm.grounding_smoke.targeting import (
     SmokeSafetyAbort,
+    compute_action_from_world_target,
     compute_grounding_action,
     load_frozen_calibration,
 )
@@ -59,6 +60,7 @@ class SmokeDependencies:
     observe: object
     ground: object
     compute_action: object
+    compute_held_action: object
     execute: object
     score: object
     save_images: object
@@ -83,6 +85,10 @@ def run_control_loop(
         "previous_predicted_distance": None,
         "no_progress_count": 0,
     }
+    target_memory = {
+        "last_valid_target_world": None,
+        "stale_target_steps": 0,
+    }
     rows = []
     api_calls = 0
     termination = "max_control_steps"
@@ -99,6 +105,10 @@ def run_control_loop(
                 else dependencies.score()
             ),
             "termination_reason": reason,
+            "decision_source": None,
+            "target_age_steps": None,
+            "used_target_hold": False,
+            "api_called": False,
             **(payload or {}),
         }
         _append_jsonl(trace_path, row)
@@ -109,126 +119,203 @@ def run_control_loop(
         observation = dependencies.observe()
         visibility = observation["visibility"]
 
-        if (
+        low_visibility = (
             visibility["block_visibility_ratio"]
             < smoke_config["clear_visibility_threshold"]
-        ):
-            termination = "visibility_out_of_scope"
-            raw_path, annotated_path = dependencies.save_images(
-                step, observation["image_bgr"], {}
-            )
-            record(
-                visibility,
-                termination,
-                {
-                    "image_path": raw_path,
-                    "annotated_path": annotated_path,
-                },
-            )
-            break
-
-        api_calls += 1
-        try:
-            boxes, raw_response, latency = dependencies.ground(
-                observation["image_bgr"]
-            )
-        except InvalidModelResponseError as exc:
-            termination = "invalid_box"
-            raw_path, annotated_path = dependencies.save_images(
-                step, observation["image_bgr"], {}
-            )
-            record(
-                visibility,
-                termination,
-                {
-                    "error": repr(exc),
-                    "image_path": raw_path,
-                    "annotated_path": annotated_path,
-                },
-            )
-            break
-        except Exception as exc:
-            termination = "api_error"
-            raw_path, annotated_path = dependencies.save_images(
-                step, observation["image_bgr"], {}
-            )
-            record(
-                visibility,
-                termination,
-                {
-                    "error": repr(exc),
-                    "image_path": raw_path,
-                    "annotated_path": annotated_path,
-                },
-            )
-            break
-
-        if not boxes or not boxes.get("red_block"):
-            termination = "invalid_box"
-            raw_path, annotated_path = dependencies.save_images(
-                step, observation["image_bgr"], boxes or {}
-            )
-            record(
-                visibility,
-                termination,
-                {
-                    "raw_response": raw_response,
-                    "boxes": boxes,
-                    "latency_seconds": latency,
-                    "image_path": raw_path,
-                    "annotated_path": annotated_path,
-                },
-            )
-            break
-
-        raw_path, annotated_path = dependencies.save_images(
-            step, observation["image_bgr"], boxes
         )
-        try:
-            computed_action = dependencies.compute_action(
-                red_block_box=boxes["red_block"],
-                image_size=(
-                    observation["image_bgr"].shape[1],
-                    observation["image_bgr"].shape[0],
-                ),
-                view_matrix=observation["view_matrix"],
-                projection_matrix=observation["projection_matrix"],
-                calibration=calibration,
-                ee_pos=observation["ee_pos"],
-                safety_state=safety_state,
-                settings=smoke_config,
+        if low_visibility:
+            raw_path, annotated_path = dependencies.save_images(
+                step, observation["image_bgr"], {}
             )
-            safety_state = computed_action["safety_state"]
-        except SmokeSafetyAbort as exc:
-            termination = exc.reason
-            record(
-                visibility,
-                termination,
-                {
-                    "raw_response": raw_response,
-                    "boxes": boxes,
-                    "latency_seconds": latency,
-                    "error": str(exc),
-                    "image_path": raw_path,
-                    "annotated_path": annotated_path,
-                },
+            cached_target = target_memory["last_valid_target_world"]
+            if cached_target is None:
+                termination = "visibility_out_of_scope"
+                record(
+                    visibility,
+                    termination,
+                    {
+                        "image_path": raw_path,
+                        "annotated_path": annotated_path,
+                    },
+                )
+                break
+            if (
+                target_memory["stale_target_steps"]
+                >= smoke_config["max_stale_target_steps"]
+            ):
+                termination = "stale_target_limit"
+                record(
+                    visibility,
+                    termination,
+                    {
+                        "image_path": raw_path,
+                        "annotated_path": annotated_path,
+                    },
+                )
+                break
+
+            target_memory["stale_target_steps"] += 1
+            raw_response = None
+            boxes = {}
+            latency = None
+            decision_source = "held_vlm_target"
+            target_age_steps = target_memory["stale_target_steps"]
+            api_called = False
+            try:
+                computed_action = dependencies.compute_held_action(
+                    target_world=cached_target,
+                    ee_pos=observation["ee_pos"],
+                    safety_state=safety_state,
+                    settings=smoke_config,
+                )
+                safety_state = computed_action["safety_state"]
+            except SmokeSafetyAbort as exc:
+                termination = exc.reason
+                record(
+                    visibility,
+                    termination,
+                    {
+                        "error": str(exc),
+                        "image_path": raw_path,
+                        "annotated_path": annotated_path,
+                    },
+                )
+                break
+            except Exception as exc:
+                termination = "backprojection_error"
+                record(
+                    visibility,
+                    termination,
+                    {
+                        "error": repr(exc),
+                        "image_path": raw_path,
+                        "annotated_path": annotated_path,
+                    },
+                )
+                break
+        else:
+            api_calls += 1
+            api_called = True
+            try:
+                boxes, raw_response, latency = dependencies.ground(
+                    observation["image_bgr"]
+                )
+            except InvalidModelResponseError as exc:
+                termination = "invalid_box"
+                raw_path, annotated_path = dependencies.save_images(
+                    step, observation["image_bgr"], {}
+                )
+                record(
+                    visibility,
+                    termination,
+                    {
+                        "api_called": True,
+                        "error": repr(exc),
+                        "image_path": raw_path,
+                        "annotated_path": annotated_path,
+                    },
+                )
+                break
+            except Exception as exc:
+                termination = "api_error"
+                raw_path, annotated_path = dependencies.save_images(
+                    step, observation["image_bgr"], {}
+                )
+                record(
+                    visibility,
+                    termination,
+                    {
+                        "api_called": True,
+                        "error": repr(exc),
+                        "image_path": raw_path,
+                        "annotated_path": annotated_path,
+                    },
+                )
+                break
+
+            if not boxes or not boxes.get("red_block"):
+                termination = "invalid_box"
+                raw_path, annotated_path = dependencies.save_images(
+                    step, observation["image_bgr"], boxes or {}
+                )
+                record(
+                    visibility,
+                    termination,
+                    {
+                        "api_called": True,
+                        "raw_response": raw_response,
+                        "boxes": boxes,
+                        "latency_seconds": latency,
+                        "image_path": raw_path,
+                        "annotated_path": annotated_path,
+                    },
+                )
+                break
+
+            raw_path, annotated_path = dependencies.save_images(
+                step, observation["image_bgr"], boxes
             )
-            break
-        except Exception as exc:
-            termination = "backprojection_error"
-            record(
-                visibility,
-                termination,
-                {
-                    "raw_response": raw_response,
-                    "boxes": boxes,
-                    "latency_seconds": latency,
-                    "error": repr(exc),
-                    "image_path": raw_path,
-                    "annotated_path": annotated_path,
-                },
+            try:
+                computed_action = dependencies.compute_action(
+                    red_block_box=boxes["red_block"],
+                    image_size=(
+                        observation["image_bgr"].shape[1],
+                        observation["image_bgr"].shape[0],
+                    ),
+                    view_matrix=observation["view_matrix"],
+                    projection_matrix=observation["projection_matrix"],
+                    calibration=calibration,
+                    ee_pos=observation["ee_pos"],
+                    safety_state=safety_state,
+                    settings=smoke_config,
+                )
+                safety_state = computed_action["safety_state"]
+            except SmokeSafetyAbort as exc:
+                termination = exc.reason
+                record(
+                    visibility,
+                    termination,
+                    {
+                        "api_called": True,
+                        "raw_response": raw_response,
+                        "boxes": boxes,
+                        "latency_seconds": latency,
+                        "error": str(exc),
+                        "image_path": raw_path,
+                        "annotated_path": annotated_path,
+                    },
+                )
+                break
+            except Exception as exc:
+                termination = "backprojection_error"
+                record(
+                    visibility,
+                    termination,
+                    {
+                        "api_called": True,
+                        "raw_response": raw_response,
+                        "boxes": boxes,
+                        "latency_seconds": latency,
+                        "error": repr(exc),
+                        "image_path": raw_path,
+                        "annotated_path": annotated_path,
+                    },
+                )
+                break
+
+            target_memory["last_valid_target_world"] = list(
+                computed_action["corrected_target_world"]
             )
-            break
+            target_memory["stale_target_steps"] = 0
+            decision_source = "fresh_vlm"
+            target_age_steps = 0
+
+        decision_payload = {
+            "decision_source": decision_source,
+            "target_age_steps": target_age_steps,
+            "used_target_hold": decision_source == "held_vlm_target",
+            "api_called": api_called,
+        }
 
         execution = None
         if computed_action["direction"] != "stop":
@@ -245,6 +332,7 @@ def run_control_loop(
                         "raw_response": raw_response,
                         "boxes": boxes,
                         "latency_seconds": latency,
+                        **decision_payload,
                         **computed_action,
                         "error": repr(exc),
                         "image_path": raw_path,
@@ -272,6 +360,7 @@ def run_control_loop(
                 "raw_response": raw_response,
                 "boxes": boxes,
                 "latency_seconds": latency,
+                **decision_payload,
                 **computed_action,
                 "execution": execution,
                 "image_path": raw_path,
@@ -282,6 +371,18 @@ def run_control_loop(
         if termination != "running":
             break
 
+    fresh_steps = sum(
+        row.get("decision_source") == "fresh_vlm" for row in rows
+    )
+    held_steps = sum(
+        row.get("decision_source") == "held_vlm_target" for row in rows
+    )
+    target_ages = [
+        row["target_age_steps"]
+        for row in rows
+        if isinstance(row.get("target_age_steps"), int)
+    ]
+
     return {
         **case,
         "success": termination == "success",
@@ -289,6 +390,11 @@ def run_control_loop(
         "num_control_steps": len(rows),
         "num_actions": sum(row.get("execution") is not None for row in rows),
         "api_calls": api_calls,
+        "num_fresh_vlm_steps": fresh_steps,
+        "num_held_target_steps": held_steps,
+        "max_target_age_steps": max(target_ages, default=0),
+        "recovered_from_occlusion": termination == "success"
+        and held_steps > 0,
         "initial_true_distance_xy": initial_scoring["true_distance_xy"],
         "final_true_distance_xy": (
             rows[-1]["true_distance_xy"]
@@ -502,6 +608,7 @@ def _build_episode_dependencies(
         observe=observe,
         ground=ground,
         compute_action=compute_grounding_action,
+        compute_held_action=compute_action_from_world_target,
         execute=execute,
         score=score,
         save_images=save_images,
