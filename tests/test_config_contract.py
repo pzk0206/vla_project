@@ -55,6 +55,7 @@ class ConfigContractTests(unittest.TestCase):
         self.assertEqual(smoke["start_directions"], ["left", "right", "front"])
         self.assertEqual(smoke["start_offset_xy"], 0.10)
         self.assertEqual(smoke["max_control_steps"], 10)
+        self.assertEqual(smoke["max_stale_target_steps"], 4)
         self.assertEqual(smoke["move_step_xy"], 0.02)
         self.assertEqual(smoke["hover_z"], 0.20)
         self.assertEqual(smoke["stop_distance_xy"], 0.02)

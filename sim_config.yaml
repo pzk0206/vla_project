@@ -174,6 +174,7 @@ grounding_smoke:
   start_directions: ["left", "right", "front"]
   start_offset_xy: 0.10              # 末端从红块相应一侧相距 10cm 起步。
   max_control_steps: 10              # 每个 episode 最多重新观察和定位 10 次。
+  max_stale_target_steps: 4          # 最多连续复用4步可靠VLM目标，第5步仍不可见则停止。
   move_step_xy: 0.02                 # 每次只沿主误差轴移动 2cm。
   hover_z: 0.20                      # 闭环动作使用固定世界坐标悬停高度。
   stop_distance_xy: 0.02             # X/Y 两轴都在 2cm 内才允许预测 stop。
