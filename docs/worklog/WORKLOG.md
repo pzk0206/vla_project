@@ -858,3 +858,41 @@ outputs/vlm_evaluations/grounding_world_smoke/run_20260719_target_hold_v1/
 初始化时抛异常，没有完整 `batch_summary.json`。下一步不直接重跑付费实验：先建立
 批次级无 API 起点/首帧预检，并明确“动作不读真值”前提下事后成功评分与预测 stop 的
 关系，再决定固定案例和 runner 的最小修订。
+
+## 25. Grounding Smoke 整批无 API 动态预检（2026-07-19）
+
+首轮真实 smoke 暴露出顺序执行漏洞：后置案例尚未验证动态资格时，前置案例已经可能
+产生付费请求。本轮没有重跑真实 API，而是以两阶段门禁修复该问题。第一阶段对三个固定
+案例分别创建独立 PyBullet 场景，只检查固定10cm起点能否在5mm容差内到达，以及首帧
+红块可见率是否达到0.75；三个全部合格后，第二阶段才允许进入原有 VLM 闭环。
+
+实现新增 `preflight_smoke_case()`、`SmokePreflightError` 和
+`smoke_preflight.json`。预检记录 seed、方向、请求/实际起点、姿态误差、可见像素、
+可见率与拒绝原因。任一初始预检失败时仍完成三个案例检查，但不调用
+`run_control_loop()`，不构建 episode trace，也不调用 VLM。正式闭环运行中后续出现
+遮挡时，已有“最近可靠目标 + 最多4步 held”逻辑保持不变。
+
+TDD 先确认接口缺失和门禁缺失的 RED，再验证起点失败、低可见率、阈值包含性、异常连接
+清理、整批拒绝和3/3合格放行。grounding smoke 定向测试为72/72，全量测试由164项增加
+到169/169；`compileall` 通过。
+
+随后在真实 PyBullet 中运行无 API 动态验收，并从进程环境显式移除 API 地址、密钥和
+模型名。结果与首轮证据一致：
+
+```text
+52-left：  起点误差0.000817m，可见率270/378=0.714286，拒绝
+53-right： 起点误差0.000771m，可见率319/378=0.843915，合格
+54-front： 起点误差0.053522m，可见率215/378=0.568783，以起点误差优先拒绝
+整批：     qualified_count=1/3，passed=false，API调用0次
+```
+
+证据保存在：
+
+```text
+outputs/vlm_evaluations/grounding_world_smoke/run_20260719_batch_preflight_validation_v1/smoke_preflight.json
+```
+
+该目录只包含预检 JSON，没有 `episode_summary.jsonl`、`smoke_summary.json` 或 episode
+图片。这是门禁按设计成功拒绝一个不具备3/3资格的批次，不是第二轮在线 smoke 失败。
+下一步仍需分别解决事后真实成功与预测 stop 的评分契约，以及选择三个能够通过初始预检
+的固定案例；完成前不再申请付费运行。

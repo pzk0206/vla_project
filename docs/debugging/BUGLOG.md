@@ -758,7 +758,7 @@ start_pose_error=7
 
 ## BUG-006：真实 Smoke 缺少整批动态预检和完整失败摘要
 
-- 状态：问题已复现，尚未修复
+- 状态：部分修复；整批初始动态预检已完成，正式闭环异常的完整摘要仍待处理
 - 发现日期：2026-07-19
 - 影响模块：`src/vla_project/vlm/grounding_smoke/runner.py`
 - 证据批次：`outputs/vlm_evaluations/grounding_world_smoke/run_20260719_target_hold_v1/`
@@ -791,8 +791,33 @@ start_pose_error=7
 
 ### 后续修复约束
 
-- 在任何真实 API 请求前，无 API 地验证整批案例的起始姿态和首帧可见率；
-- 动态预检失败时不得进入付费闭环，并输出可审计的案例级拒绝原因；
-- 即使单个案例初始化失败，也应生成结构化 episode 与 batch 摘要；
+- 在任何真实 API 请求前，无 API 地验证整批案例的起始姿态和首帧可见率；（已完成）
+- 动态预检失败时不得进入付费闭环，并输出可审计的案例级拒绝原因；（已完成）
+- 正式闭环开始后的单案例异常仍应生成结构化 episode 与 batch 摘要；（未完成）
 - 另行明确事后真实距离已 `<=3cm`、但控制器未预测 stop 时的成功评分契约；
-- 修订完成并通过无 API 验证前，不直接重跑真实 smoke。
+- 修订固定案例和成功评分并通过无 API 验证前，不直接重跑真实 smoke。
+
+### 整批初始动态预检修复与验证
+
+以 TDD 增加 `preflight_smoke_case()` 和 `SmokePreflightError`。单案例预检独立创建并释放
+PyBullet 场景，记录请求/实际起点、姿态误差、首帧可见像素、可见率和稳定拒绝原因；
+批次先执行全部三个预检并写 `smoke_preflight.json`，只有3/3合格才进入原有控制循环。
+测试证明任意初始预检失败时仍收集三个案例，`run_control_loop()` 与真实 API 边界均为
+0次；阈值相等时合格，异常时 physics 连接仍释放。全量自动测试为169/169通过。
+
+真实 PyBullet 验收显式移除了 `VLA_API_BASE_URL`、`VLA_API_KEY` 和
+`VLA_MODEL_NAME`，结果为：
+
+```text
+num_cases=3
+qualified_count=1
+52-left：visibility_below_threshold，270/378=0.714286，起点误差0.000817m
+53-right：qualified，319/378=0.843915，起点误差0.000771m
+54-front：start_pose_error，215/378=0.568783，起点误差0.053522m
+```
+
+证据位于
+`outputs/vlm_evaluations/grounding_world_smoke/run_20260719_batch_preflight_validation_v1/smoke_preflight.json`。
+目录中没有 `episode_summary.jsonl`、`smoke_summary.json` 或 episode trace，证明当前固定
+案例在任何在线控制和付费请求前被整体拒绝。本修复不改变运行中遮挡的4步 held 行为，
+也不解决正式闭环已经开始后的通用异常汇总。
