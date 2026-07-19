@@ -788,3 +788,28 @@ smoke 专用 API `max_retries=0`，从而保证3个 episode × 10步就是最多
 动态筛选的0/138结果仍然有效，说明不能直接进入付费 clear-only smoke。下一步按已确认
 设计实现“最近可靠 grounding 目标 + 最多4步保持”，完成 mock 验证后再请求真实实验
 批准。
+
+## 23. 最近可靠 Grounding 目标保持状态机（2026-07-19）
+
+本轮按既有设计以 TDD 实现短时遮挡恢复，没有调用真实 API。`sim_config.yaml` 冻结
+`max_stale_target_steps=4`；`targeting.py` 抽出“已校验世界目标 + 当前末端位置 ->
+安全动作”的纯计算入口，fresh 与 held 共用同一方向、停止距离和无进展规则。缓存只
+保存已通过反投影、冻结补偿、工作区和目标跳变检查的 VLM 世界坐标，不保存旧动作，
+也不读取 PyBullet 红块真值。
+
+runner 现在维护最近可靠目标和连续失效年龄。首帧低可见且没有缓存时仍以
+`visibility_out_of_scope` 中止；第1至第4次低可见步骤不调用 VLM，而是使用当前
+`ee_pos` 重新计算动作；第5次尝试以 `stale_target_limit` 中止且不执行动作。新的
+fresh 定位会更新缓存并把年龄重置为0。trace 和 episode summary 增加
+`decision_source`、`target_age_steps`、`used_target_hold`、`api_called`、fresh/held
+步数、最大目标年龄和是否从遮挡恢复等证据字段。
+
+批次通过条件不再要求 `all_clear=true`，改为三个固定案例全部成功、每个至少一次
+fresh VLM 定位、目标年龄不超过4且总 API 调用不超过30。新增测试按 RED->GREEN
+验证首帧拒绝、缓存复用、4步边界、第5步停止、重新定位重置、真值隔离和批次汇总；
+全量自动测试为163/163通过，`compileall`、`git diff --check` 和动作接口真值隔离审计
+通过。
+
+这些结果只证明离线状态机和证据契约满足设计，不证明 Qwen 在线定位或 PyBullet 闭环
+成功。下一步只审查三个固定案例、冻结校准和请求上限；真实付费 smoke 必须由用户再次
+明确批准。
