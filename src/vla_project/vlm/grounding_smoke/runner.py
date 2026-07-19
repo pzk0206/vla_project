@@ -436,6 +436,10 @@ def aggregate_smoke_summaries(summaries, smoke_config):
     """只有固定三个可恢复案例全部成功且未超安全边界才通过。"""
     rows = list(summaries)
     successes = sum(row["success"] for row in rows)
+    task_successes = sum(row["task_success"] for row in rows)
+    autonomous_stop_successes = sum(
+        row["autonomous_stop_success"] for row in rows
+    )
     calls = sum(row["api_calls"] for row in rows)
     passed = (
         [row["seed"] for row in rows] == smoke_config["seeds"]
@@ -453,6 +457,13 @@ def aggregate_smoke_summaries(summaries, smoke_config):
         "success_count": successes,
         "failure_count": len(rows) - successes,
         "success_rate": successes / len(rows) if rows else 0.0,
+        "task_success_count": task_successes,
+        "task_failure_count": len(rows) - task_successes,
+        "task_success_rate": task_successes / len(rows) if rows else 0.0,
+        "autonomous_stop_success_count": autonomous_stop_successes,
+        "autonomous_stop_success_rate": (
+            autonomous_stop_successes / len(rows) if rows else 0.0
+        ),
         "total_api_calls": calls,
         "fresh_vlm_steps": sum(
             row["num_fresh_vlm_steps"] for row in rows

@@ -9,7 +9,8 @@
 保持把真实 XY 距离降到约0.41cm，随后因持续遮挡以 `stale_target_limit` 停止；
 `54-front` 的固定起点无法满足5mm姿态容差，批次以异常退出。现在已增加整批无 API
 动态预检：三个固定案例的起点与首帧可见率全部合格后才允许进入在线闭环。当前案例已
-被门禁在任何 API 请求前整体拒绝；当前阶段是不调用付费 API 地修订案例和成功评分。
+被门禁在任何 API 请求前整体拒绝。事后成功评分已完成拆分；当前阶段是在不调用付费
+API 的情况下修订固定案例，使三个案例都满足运行前提。
 
 ## 已完成且仍有效
 
@@ -24,8 +25,12 @@
   `visibility_below_threshold`、7个 `start_pose_error`。
 - held 路径只复用已校验的 VLM 世界目标，每步依据当前末端位置重新计算动作；第5次
   连续失效尝试以 `stale_target_limit` 安全中止，且 held 步骤不调用 VLM。
-- trace/summary 已记录 fresh/held、目标年龄、API 调用和遮挡恢复字段；完整自动测试为
-  169/169通过。
+- trace/summary 已记录 fresh/held、目标年龄、API 调用和遮挡恢复字段；当前完整自动
+  测试为173/173通过。
+- episode 与 batch summary 现在分别报告主 `success`、真实到达 `task_success` 和自主
+  停止 `autonomous_stop_success`。主成功允许真实到达后的 `success` 或
+  `stale_target_limit`，但拒绝系统错误和步数耗尽；相关定向契约测试为76/76通过，
+  完整自动测试为173/173通过，本轮没有调用真实 API。
 - 首轮真实 smoke 证据保存在
   `outputs/vlm_evaluations/grounding_world_smoke/run_20260719_target_hold_v1/`；本轮仅发生
   1次真实 API 调用，批次退出码为1，没有生成完整 `batch_summary.json`。
@@ -39,8 +44,9 @@
 
 1. 三个固定案例本身不满足当前运行前提：`52-left` 初始可见率为0.714，低于0.75；
    `54-front` 起始姿态误差为0.053522m，高于0.005m容差。
-2. `53-right` 在真实距离已小于3cm后仍因预测目标尚未满足 stop 条件继续保持，最终以
-   `stale_target_limit` 结束；需要明确“控制停止”和“事后成功评分”的契约关系。
+2. `53-right` 的历史摘要仍按旧口径记录 `success=false`；新口径下同类结果会记为
+   `task_success=true`、`autonomous_stop_success=false`、`success=true`。旧批次未包含
+   新字段，其 `success_rate` 不可与新批次直接合并比较。
 3. 初始动态资格现在已有完整预检 JSON；但正式闭环开始后的普通案例异常仍可能中断批次
    并缺少完整 summary，该部分不在本轮预检修复范围。
 4. 永久遮挡、目标移动和 severe 遮挡恢复仍不在当前范围。
@@ -49,11 +55,9 @@
 
 ## 下一步优先级
 
-1. 明确事后真实距离 `<=3cm` 是否可将 episode 计为成功，同时保持真值不能进入动作或
-   stop 决策；据此补测试并修订 runner。
-2. 在整批预检门禁下修订固定案例，使三个案例都满足初始姿态和首帧可见率；不得跳过或
+1. 在整批预检门禁下修订固定案例，使三个案例都满足初始姿态和首帧可见率；不得跳过或
    自动替换失败案例。
-3. 修订成功评分与固定案例后先运行无 API 验证；再次运行真实 smoke 仍需用户明确批准。
+2. 固定案例修订后先运行无 API 验证；再次运行真实 smoke 仍需用户明确批准。
 
 ## 当前任务入口
 
@@ -63,6 +67,8 @@
 - 已按当前 `src/` 结构修订的 Smoke 实施计划：[2026-07-17-grounding-world-closed-loop-smoke.md](../superpowers/plans/2026-07-17-grounding-world-closed-loop-smoke.md)
 - 目标保持设计：[2026-07-17-grounding-target-hold-design.md](../superpowers/specs/2026-07-17-grounding-target-hold-design.md)
 - 目标保持计划：[2026-07-18-grounding-target-hold.md](../superpowers/plans/2026-07-18-grounding-target-hold.md)
+- 成功评分设计：[2026-07-19-grounding-smoke-success-scoring-design.md](../superpowers/specs/2026-07-19-grounding-smoke-success-scoring-design.md)
+- 成功评分计划：[2026-07-19-grounding-smoke-success-scoring.md](../superpowers/plans/2026-07-19-grounding-smoke-success-scoring.md)
 - Smoke targeting：[targeting.py](../../src/vla_project/vlm/grounding_smoke/targeting.py)
 - Smoke runner：[runner.py](../../src/vla_project/vlm/grounding_smoke/runner.py)
 - 动态筛选：[screening.py](../../src/vla_project/vlm/grounding_smoke/screening.py)

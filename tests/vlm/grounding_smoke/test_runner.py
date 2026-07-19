@@ -580,6 +580,8 @@ class SmokeLoopTests(unittest.TestCase):
             {
                 "seed": seed,
                 "success": True,
+                "task_success": True,
+                "autonomous_stop_success": True,
                 "api_calls": 2,
                 "termination_reason": "success",
                 "num_fresh_vlm_steps": 2,
@@ -607,6 +609,60 @@ class SmokeLoopTests(unittest.TestCase):
                 self.assertFalse(
                     aggregate_smoke_summaries(rows, BASE_CONFIG)["passed"]
                 )
+
+    def test_batch_reports_task_and_autonomous_stop_metrics_separately(self):
+        episodes = [
+            {
+                "seed": 52,
+                "success": True,
+                "task_success": True,
+                "autonomous_stop_success": True,
+                "api_calls": 1,
+                "termination_reason": "success",
+                "num_fresh_vlm_steps": 1,
+                "num_held_target_steps": 0,
+                "max_target_age_steps": 0,
+                "recovered_from_occlusion": False,
+            },
+            {
+                "seed": 53,
+                "success": True,
+                "task_success": True,
+                "autonomous_stop_success": False,
+                "api_calls": 1,
+                "termination_reason": "stale_target_limit",
+                "num_fresh_vlm_steps": 1,
+                "num_held_target_steps": 4,
+                "max_target_age_steps": 4,
+                "recovered_from_occlusion": False,
+            },
+            {
+                "seed": 54,
+                "success": False,
+                "task_success": True,
+                "autonomous_stop_success": False,
+                "api_calls": 1,
+                "termination_reason": "api_error",
+                "num_fresh_vlm_steps": 1,
+                "num_held_target_steps": 0,
+                "max_target_age_steps": 0,
+                "recovered_from_occlusion": False,
+            },
+        ]
+
+        summary = aggregate_smoke_summaries(episodes, BASE_CONFIG)
+
+        self.assertEqual(summary["success_count"], 2)
+        self.assertAlmostEqual(summary["success_rate"], 2 / 3)
+        self.assertEqual(summary["task_success_count"], 3)
+        self.assertEqual(summary["task_failure_count"], 0)
+        self.assertEqual(summary["task_success_rate"], 1.0)
+        self.assertEqual(summary["autonomous_stop_success_count"], 1)
+        self.assertAlmostEqual(
+            summary["autonomous_stop_success_rate"],
+            1 / 3,
+        )
+        self.assertFalse(summary["passed"])
 
 
 class SmokeBatchContractTests(unittest.TestCase):
@@ -888,6 +944,8 @@ class SmokeBatchContractTests(unittest.TestCase):
                 return {
                     **case,
                     "success": True,
+                    "task_success": True,
+                    "autonomous_stop_success": True,
                     "termination_reason": "success",
                     "api_calls": 1,
                     "all_clear": True,

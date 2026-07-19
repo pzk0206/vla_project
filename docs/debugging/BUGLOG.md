@@ -821,3 +821,33 @@ qualified_count=1
 目录中没有 `episode_summary.jsonl`、`smoke_summary.json` 或 episode trace，证明当前固定
 案例在任何在线控制和付费请求前被整体拒绝。本修复不改变运行中遮挡的4步 held 行为，
 也不解决正式闭环已经开始后的通用异常汇总。
+
+## BUG-007：单一 Smoke success 混淆物理到达与自主停止
+
+- 状态：已修复并有回归测试
+- 发现日期：2026-07-19
+- 影响模块：`src/vla_project/vlm/grounding_smoke/runner.py`
+
+### 现象与根因
+
+旧 episode summary 只用 `termination_reason == "success"` 生成 `success`。因此像首轮
+`53-right` 这样最终真实 XY 距离已经降到0.41cm、但因遮挡耗尽以
+`stale_target_limit` 结束的案例，会把“已经到达任务目标”和“控制器没有自主预测
+stop”压成同一个失败值。反过来，如果只改成最终距离 `<=3cm`，API、反投影或 IK
+错误发生时的偶然达标又可能被误计为通过。
+
+### 修复与验证
+
+评分改为循环结束后一次性计算三层字段：`task_success` 表示最终真实 XY 距离
+`<=3cm`；`autonomous_stop_success` 表示终止原因为 `success`；主要 `success` 要求
+`task_success=true`，且终止原因只能是 `success` 或 `stale_target_limit`。批次同时
+报告三组 count/rate，`passed` 继续使用主要 `success`。回归测试覆盖自主 stop、到达后
+stale、未到达 stale、API/反投影/IK 错误和步数耗尽，并验证真值不进入动作接口；相关
+定向契约测试76/76通过，真实 API 调用0次。
+
+完成文档更新后，全量自动测试为173/173通过，`compileall`、补丁格式检查和动作接口
+真值隔离审计均通过。
+
+这是评分语义版本边界：旧输出中的 `success_rate` 不可与新输出直接合并比较。历史
+`run_20260719_target_hold_v1` 文件不回写；按新规则解释时，`53-right` 是任务到达但未
+自主停止。此次修复未选择新固定案例，也未运行第二轮真实 smoke。

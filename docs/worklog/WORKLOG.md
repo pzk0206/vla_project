@@ -896,3 +896,33 @@ outputs/vlm_evaluations/grounding_world_smoke/run_20260719_batch_preflight_valid
 图片。这是门禁按设计成功拒绝一个不具备3/3资格的批次，不是第二轮在线 smoke 失败。
 下一步仍需分别解决事后真实成功与预测 stop 的评分契约，以及选择三个能够通过初始预检
 的固定案例；完成前不再申请付费运行。
+
+## 26. Grounding Smoke 成功评分拆分（2026-07-19）
+
+为避免把首轮 `53-right` 的真实任务到达与自主 stop 混成同一个布尔值，本轮按批准的
+设计拆分 episode 和 batch 指标。循环控制逻辑、held 状态机与真值隔离边界均未改变；
+所有新字段只在循环结束后根据已有评分证据计算：
+
+```text
+task_success = final_true_distance_xy <= 0.03
+autonomous_stop_success = termination_reason == "success"
+success = task_success and termination_reason in {"success", "stale_target_limit"}
+```
+
+系统错误和控制预算耗尽不在允许终止原因中，所以即使最后真实距离碰巧不超过3cm，
+API、反投影、IK 错误或 `max_control_steps` 也不能成为主要成功。batch summary 新增
+`task_success_count/rate` 与 `autonomous_stop_success_count/rate`，原有
+`success_count/rate` 和 `passed` 使用新的主要成功语义。
+
+TDD 先用5个 episode 场景和1个混合 batch 场景确认旧实现缺字段，再完成最小实现；
+grounding smoke runner 为32/32通过，配置、包入口、targeting、runner、screening 的
+定向契约测试为76/76通过。测试使用 mock，不调用真实 API。本轮没有选择或替换三个
+固定案例，也没有运行第二轮真实 smoke；下一步仍是让三个固定案例先通过整批无 API
+动态预检。
+
+最终全量自动测试为173/173通过，`compileall`、`git diff --check` 和动作接口真值隔离
+审计通过。
+
+本次变更构成指标语义版本边界。历史输出不回写，旧 `success_rate` 不能与新批次直接
+合并比较；历史 `53-right` 应解释为“真实任务到达，但未自主 stop”，而不是宣称当时的
+整批实验已经通过。
