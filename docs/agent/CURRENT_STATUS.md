@@ -21,17 +21,14 @@
 
 1. 冻结补偿后的 grounding 坐标尚无在线机械臂闭环证据。
 2. severe 遮挡仍未解决；现有 clear 结论不能外推。
-3. 2026-07-17 smoke 实施计划早于 `src/` 包迁移，文件路径和命令需要先按当前结构
-   修订。
-4. README、学习计划、BUGLOG 和 WORKLOG 的阶段表述可能存在时间差；实验结论以
+3. README、学习计划、BUGLOG 和 WORKLOG 的阶段表述可能存在时间差；实验结论以
    原始摘要和对应证据链为准。
 
 ## 下一步优先级
 
-1. 按当前包结构修订 grounding 世界坐标闭环 smoke 实施计划，不改变已批准的真值
-   隔离、安全中止、3 个 clear cases 和最多 30 次 API 请求约束。
-2. 实现并用 mock 测试纯 targeting、安全状态机和闭环编排，确认测试不会调用真实
+1. 按已修订计划实现并用 mock 测试纯 targeting、安全状态机和闭环编排，确认测试不会调用真实
    API。
+2. 同步注册 `vla-run-grounding-smoke` 命令和新子包结构，但不运行付费请求。
 3. 经用户明确批准付费实验后，运行一次 seeds 52–54 的真实 smoke，并根据唯一主导
    失败类型决定后续工作。
 
@@ -40,7 +37,7 @@
 - 项目简介：[PROJECT_OVERVIEW.md](PROJECT_OVERVIEW.md)
 - 文件路由：[PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md)
 - Smoke 设计：[2026-07-17-grounding-world-closed-loop-smoke-design.md](../superpowers/specs/2026-07-17-grounding-world-closed-loop-smoke-design.md)
-- 旧实施计划：[2026-07-17-grounding-world-closed-loop-smoke.md](../superpowers/plans/2026-07-17-grounding-world-closed-loop-smoke.md)
+- 已按当前 `src/` 结构修订的实施计划：[2026-07-17-grounding-world-closed-loop-smoke.md](../superpowers/plans/2026-07-17-grounding-world-closed-loop-smoke.md)
 - 校准实现：[validate_grounding_calibration.py](../../src/vla_project/vlm/validate_grounding_calibration.py)
 - 相机几何：[camera_geometry.py](../../src/vla_project/simulation/camera_geometry.py)
 - 单次闭环基线：[stage3_probe.py](../../src/vla_project/simulation/stage3_probe.py)

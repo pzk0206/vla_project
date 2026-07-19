@@ -1,10 +1,12 @@
 # Grounding 世界坐标闭环 Smoke Test 实施计划
 
+**结构适配日期：** 2026-07-19
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 用 3 个 clear episode 验证 Qwen grounding、相机反投影、冻结补偿、主轴2cm单步控制和安全中止组成的真实视觉闭环能否达到3/3、最终 XY 误差不超过3cm。
 
-**Architecture:** 新增纯计算模块 `grounding_targeting.py`，其动作接口不接收 PyBullet 红块真值；新增独立入口 `run_grounding_smoke.py`，用可注入依赖的闭环编排连接 Qwen、PyBullet、trace 和评分层。现有 `stage3_probe.py` 只提供已验证的 API、IK 和单步控制函数，不增加新控制模式。
+**Architecture:** 在 `vla_project.vlm` 下新增独立 `grounding_smoke` 子包：`targeting.py` 只负责不接收 PyBullet 红块真值的纯定位与安全动作计算，`runner.py` 用可注入依赖连接 Qwen、PyBullet、trace 和评分层。现有 `stage3_probe.py` 只提供已验证的 API 与单步方向映射，不增加新控制模式；通过 `vla-run-grounding-smoke` 独立命令运行。
 
 **Tech Stack:** Python 3.10、PyBullet、OpenCV、NumPy、标准库 `unittest`、JSON/JSONL、Qwen OpenAI-compatible API、Git。
 
@@ -13,39 +15,46 @@
 - 只运行 seeds 52、53、54，初始方向依次为 left、right、front，起始 XY 距离为0.10m。
 - 使用固定448×448正俯视相机，每一步重新调用 Qwen；每个 episode 最多10步，单次完整运行最多30次 API 请求。
 - 每次动作只沿主误差轴移动0.02m，悬停 Z 固定为0.20m；预测 stop 阈值为 X/Y 各不超过0.02m。
+- Smoke 专用 API 配置强制 `max_retries=0`，使 3×10 控制步的上限同时也是最多30次真实 HTTP 请求；失败立即记录 `api_error`，不得由底层 helper 隐式重试突破预算。
 - 控制决策函数不得接收 `block_pos`；真值只允许用于场景搭建、动作后 trace 和最终评分。
-- 运行时只读取已有 `calibration.json`，要求 clear 校准样本数为15，冻结补偿为 `(+0.02492227406480192, -0.019467343494422532)m`，不得重新拟合。
+- 运行时只读取已有 `calibration.json`，要求校准 ID 精确等于 seeds 42–46 的 front/left/right 共15项，冻结补偿为 `(+0.02492227406480192, -0.019467343494422532)m`，不得重新拟合。
 - 预测工作区固定为 X `[-0.30, 0.30]`、Y `[0.30, 0.70]`。
 - clear 资格使用参考像素378和阈值0.75；低于阈值立即以 `visibility_out_of_scope` 失败。
 - 相邻补偿目标跳变大于0.03m时中止；连续两个动作的预测距离均未至少改善0.005m时中止。
 - 只有3/3都在10步内由预测坐标触发 stop，且真实 XY 误差均 `<=0.03m`，整批才通过。
 - 已有运行目录只读；中断后创建新的时间戳目录并从场景初态重跑，不复用旧 step 回复。
 - 所有 Python 测试和脚本使用 conda 环境 `vla_env`。
-- 实验图片和运行结果保存在本地，不强制提交批量生成物。
+- 实验图片和运行结果固定保存在 `outputs/vlm_evaluations/grounding_world_smoke/`；现有 `.gitignore` 已忽略整个 `outputs/`，不得新增仓库根级输出目录。
+- 所有源码使用绝对包导入 `vla_project.*`；测试镜像源码目录，不在仓库根目录创建 Python 文件。
 
 ---
 
 ## 文件结构
 
-- Create: `grounding_targeting.py` — 校准加载、框反投影、补偿、工作区、主轴动作和安全状态纯函数。
-- Create: `tests/test_grounding_targeting.py` — 保护真值无关的定位与动作边界。
-- Create: `run_grounding_smoke.py` — 场景搭建、可注入闭环、PyBullet适配、输出和 CLI。
-- Create: `tests/test_run_grounding_smoke.py` — 模拟逐步重定位、终止原因、trace 和 summary。
-- Modify: `sim_config.yaml`、`tests/test_config_contract.py`、`.gitignore` — 冻结配置并隔离本地输出。
-- Modify: `README.md`、`docs/worklog/WORKLOG.md`、`docs/planning/vla_robotic_study_plan.md`、`docs/debugging/BUGLOG.md` — 同步真实结论。
+- Create: `src/vla_project/vlm/grounding_smoke/__init__.py` — 声明在线 grounding smoke 子包，不导出不稳定实现细节。
+- Create: `src/vla_project/vlm/grounding_smoke/targeting.py` — 校准加载、框反投影、补偿、工作区、主轴动作和安全状态纯函数。
+- Create: `src/vla_project/vlm/grounding_smoke/runner.py` — 场景搭建、可注入闭环、PyBullet 适配、输出和 CLI。
+- Create: `tests/vlm/grounding_smoke/__init__.py` — 保持 `unittest` 模块定位与源码层级一致。
+- Create: `tests/vlm/grounding_smoke/test_targeting.py` — 保护真值无关的定位与动作边界。
+- Create: `tests/vlm/grounding_smoke/test_runner.py` — 模拟逐步重定位、终止原因、trace 和 summary。
+- Modify: `sim_config.yaml`、`tests/test_config_contract.py` — 冻结配置与统一输出位置。
+- Modify: `pyproject.toml`、`tests/test_package_metadata.py` — 注册并保护第 11 个命令 `vla-run-grounding-smoke`。
+- Modify after implementation: `docs/agent/PROJECT_STRUCTURE.md` — 登记新子包、镜像测试和命令入口。
+- Modify after real run: `README.md`、`docs/agent/PROJECT_OVERVIEW.md`、`docs/agent/CURRENT_STATUS.md`、`docs/worklog/WORKLOG.md`、`docs/planning/vla_robotic_study_plan.md`；仅在出现可复现 Bug 时更新 `docs/debugging/BUGLOG.md`。
 
 ---
 
-### Task 1: Smoke 配置契约与本地输出隔离
+### Task 1: Smoke 包与配置契约
 
 **Files:**
+- Create: `src/vla_project/vlm/grounding_smoke/__init__.py`
+- Create: `tests/vlm/grounding_smoke/__init__.py`
 - Modify: `sim_config.yaml`
 - Modify: `tests/test_config_contract.py`
-- Modify: `.gitignore`
 
 **Interfaces:**
 - Consumes: 无。
-- Produces: `config["grounding_smoke"]: dict`。
+- Produces: `config["grounding_smoke"]: dict` 和可导入的镜像包目录。
 
 - [ ] **Step 1: 写配置失败测试**
 
@@ -54,7 +63,14 @@
 ```python
 def test_grounding_smoke_config_is_frozen_and_safe(self):
     smoke = self.config["grounding_smoke"]
-    self.assertEqual(smoke["output_dir"], "vlm_smoke_runs")
+    self.assertEqual(
+        smoke["output_dir"],
+        "outputs/vlm_evaluations/grounding_world_smoke",
+    )
+    self.assertEqual(
+        smoke["calibration_path"],
+        "outputs/vlm_evaluations/grounding_qwen3_vl_flash_distance20_448_calibration_validation_v1/calibration_validation/calibration.json",
+    )
     self.assertEqual(smoke["seeds"], [52, 53, 54])
     self.assertEqual(smoke["start_directions"], ["left", "right", "front"])
     self.assertEqual(smoke["start_offset_xy"], 0.10)
@@ -71,10 +87,21 @@ def test_grounding_smoke_config_is_frozen_and_safe(self):
     self.assertEqual(smoke["workspace_y"], [0.30, 0.70])
     self.assertEqual(smoke["required_successes"], 3)
     self.assertEqual(smoke["max_total_api_calls"], 30)
+    self.assertEqual(smoke["api_max_retries"], 0)
     self.assertEqual(smoke["expected_calibration_samples"], 15)
+    self.assertEqual(
+        smoke["expected_calibration_sample_ids"],
+        [
+            f"seed_{seed}_d020_{direction}"
+            for seed in range(42, 47)
+            for direction in ("front", "left", "right")
+        ],
+    )
 ```
 
-同时把 `"grounding_smoke"` 加入 `test_required_sections_exist`。
+同时把 `"grounding_smoke"` 加入 `test_required_sections_exist`，并在
+`test_generated_outputs_are_grouped_under_outputs` 中断言
+`smoke["output_dir"].startswith("outputs/vlm_evaluations/")`。
 
 - [ ] **Step 2: 运行测试并确认先失败**
 
@@ -86,13 +113,29 @@ conda run -n vla_env python -m unittest \
 
 Expected: FAIL/ERROR，`grounding_smoke` 尚不存在。
 
-- [ ] **Step 3: 写入精确配置和忽略规则**
+- [ ] **Step 3: 写入精确配置和包骨架**
 
 ```yaml
 grounding_smoke:
-  output_dir: "vlm_smoke_runs"
-  calibration_path: "vlm_eval_runs/grounding_qwen3_vl_flash_distance20_448_calibration_validation_v1/calibration_validation/calibration.json"
+  output_dir: "outputs/vlm_evaluations/grounding_world_smoke"
+  calibration_path: "outputs/vlm_evaluations/grounding_qwen3_vl_flash_distance20_448_calibration_validation_v1/calibration_validation/calibration.json"
   expected_calibration_samples: 15
+  expected_calibration_sample_ids:
+    - seed_42_d020_front
+    - seed_42_d020_left
+    - seed_42_d020_right
+    - seed_43_d020_front
+    - seed_43_d020_left
+    - seed_43_d020_right
+    - seed_44_d020_front
+    - seed_44_d020_left
+    - seed_44_d020_right
+    - seed_45_d020_front
+    - seed_45_d020_left
+    - seed_45_d020_right
+    - seed_46_d020_front
+    - seed_46_d020_left
+    - seed_46_d020_right
   expected_correction_x: 0.02492227406480192
   expected_correction_y: -0.019467343494422532
   seeds: [52, 53, 54]
@@ -112,16 +155,18 @@ grounding_smoke:
   no_progress_limit: 2
   required_successes: 3
   max_total_api_calls: 30
+  api_max_retries: 0
 ```
 
-在 `.gitignore` 增加 `vlm_smoke_runs/`。
+创建两个空的 `__init__.py`。
+不要修改 `.gitignore`：已有 `outputs/` 规则会覆盖全部 smoke 生成物。
 
 - [ ] **Step 4: 验证并提交**
 
 ```bash
 conda run -n vla_env python -m unittest tests.test_config_contract -v
-git check-ignore -v vlm_smoke_runs/example/smoke_summary.json
-git add sim_config.yaml tests/test_config_contract.py .gitignore
+git check-ignore -v outputs/vlm_evaluations/grounding_world_smoke/run_example/smoke_summary.json
+git add sim_config.yaml tests/test_config_contract.py src/vla_project/vlm/grounding_smoke/__init__.py tests/vlm/grounding_smoke/__init__.py
 git commit -m "test: freeze grounding smoke configuration"
 ```
 
@@ -132,11 +177,11 @@ Expected: 配置测试全部 PASS，路径被新规则忽略。
 ### Task 2: 真值无关的定位、补偿和动作策略
 
 **Files:**
-- Create: `grounding_targeting.py`
-- Create: `tests/test_grounding_targeting.py`
+- Create: `src/vla_project/vlm/grounding_smoke/targeting.py`
+- Create: `tests/vlm/grounding_smoke/test_targeting.py`
 
 **Interfaces:**
-- Produces: `SmokeSafetyAbort`、`load_frozen_calibration(path, expected_count, expected_x, expected_y) -> dict`、`compute_grounding_action(red_block_box, image_size, view_matrix, projection_matrix, calibration, ee_pos, safety_state, settings) -> dict`。
+- Produces: `SmokeSafetyAbort`、`load_frozen_calibration(path, expected_ids, expected_x, expected_y) -> dict`、`compute_grounding_action(red_block_box, image_size, view_matrix, projection_matrix, calibration, ee_pos, safety_state, settings) -> dict`。
 
 - [ ] **Step 1: 写核心失败测试**
 
@@ -148,7 +193,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from grounding_targeting import (
+from vla_project.vlm.grounding_smoke.targeting import (
     SmokeSafetyAbort,
     compute_grounding_action,
     load_frozen_calibration,
@@ -156,6 +201,11 @@ from grounding_targeting import (
 
 CALIBRATION = {
     "num_clear_calibration_samples": 15,
+    "calibration_sample_ids": [
+        f"seed_{seed}_d020_{direction}"
+        for seed in range(42, 47)
+        for direction in ("front", "left", "right")
+    ],
     "correction_x": 0.02492227406480192,
     "correction_y": -0.019467343494422532,
 }
@@ -172,12 +222,15 @@ class GroundingTargetingTests(unittest.TestCase):
             path = Path(temp_dir) / "calibration.json"
             path.write_text(json.dumps(CALIBRATION), encoding="utf-8")
             loaded = load_frozen_calibration(
-                path, 15, 0.02492227406480192, -0.019467343494422532
+                path,
+                CALIBRATION["calibration_sample_ids"],
+                0.02492227406480192,
+                -0.019467343494422532,
             )
         self.assertEqual(loaded, CALIBRATION)
 
-    @patch("grounding_targeting.pixel_to_world_on_plane")
-    @patch("grounding_targeting.normalized_box_center_to_pixel")
+    @patch("vla_project.vlm.grounding_smoke.targeting.pixel_to_world_on_plane")
+    @patch("vla_project.vlm.grounding_smoke.targeting.normalized_box_center_to_pixel")
     def test_applies_correction_and_selects_dominant_axis(
         self, center_to_pixel, pixel_to_world
     ):
@@ -222,12 +275,13 @@ class GroundingTargetingTests(unittest.TestCase):
 - `test_two_consecutive_subthreshold_improvements_abort`：两次改善都小于0.005m后抛出 `no_progress`；
 - `test_one_sufficient_improvement_resets_no_progress_counter`：改善恰好0.005m将计数清零；
 - `test_calibration_rejects_boolean_and_non_finite_values`：`True`、`NaN`、`inf` 均被拒绝；
+- `test_calibration_rejects_missing_duplicate_or_wrong_ids`：ID 缺失、重复、乱序或包含 back 样本均被拒绝；
 - `test_public_action_signature_has_no_block_truth`：用 `inspect.signature` 断言参数中没有 `block_pos`、`true_block_pos`。
 
 - [ ] **Step 2: 运行并确认模块缺失**
 
 ```bash
-conda run -n vla_env python -m unittest tests.test_grounding_targeting -v
+conda run -n vla_env python -m unittest tests.vlm.grounding_smoke.test_targeting -v
 ```
 
 Expected: ERROR，模块尚不存在。
@@ -241,7 +295,7 @@ import json
 import math
 from pathlib import Path
 
-from camera_geometry import (
+from vla_project.simulation.camera_geometry import (
     normalized_box_center_to_pixel,
     pixel_to_world_on_plane,
 )
@@ -251,10 +305,12 @@ class SmokeSafetyAbort(RuntimeError):
         self.reason = reason
         super().__init__(f"{reason}: {message}")
 
-def load_frozen_calibration(path, expected_count, expected_x, expected_y):
+def load_frozen_calibration(path, expected_ids, expected_x, expected_y):
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
-    if payload.get("num_clear_calibration_samples") != expected_count:
+    if payload.get("num_clear_calibration_samples") != len(expected_ids):
         raise ValueError("冻结校准样本数不匹配")
+    if payload.get("calibration_sample_ids") != list(expected_ids):
+        raise ValueError("冻结校准样本 ID 不匹配")
     for field, expected in (
         ("correction_x", expected_x),
         ("correction_y", expected_y),
@@ -335,8 +391,8 @@ def compute_grounding_action(
 - [ ] **Step 4: 验证并提交**
 
 ```bash
-conda run -n vla_env python -m unittest tests.test_grounding_targeting -v
-git add grounding_targeting.py tests/test_grounding_targeting.py
+conda run -n vla_env python -m unittest tests.vlm.grounding_smoke.test_targeting -v
+git add src/vla_project/vlm/grounding_smoke/targeting.py tests/vlm/grounding_smoke/test_targeting.py
 git commit -m "feat: add truth-isolated grounding action policy"
 ```
 
@@ -347,8 +403,8 @@ Expected: 全部 PASS，公共动作接口没有 `block_pos`。
 ### Task 3: 可注入依赖的闭环编排和摘要
 
 **Files:**
-- Create: `run_grounding_smoke.py`
-- Create: `tests/test_run_grounding_smoke.py`
+- Create: `src/vla_project/vlm/grounding_smoke/runner.py`
+- Create: `tests/vlm/grounding_smoke/test_runner.py`
 
 **Interfaces:**
 - Produces: `SmokeDependencies`、`run_control_loop(smoke_config, case, calibration, episode_dir, dependencies) -> dict`、`aggregate_smoke_summaries(summaries, smoke_config) -> dict`。
@@ -356,13 +412,14 @@ Expected: 全部 PASS，公共动作接口没有 `block_pos`。
 - [ ] **Step 1: 写模拟闭环失败测试**
 
 ```python
+import inspect
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import Mock
 import numpy as np
 
-from run_grounding_smoke import (
+from vla_project.vlm.grounding_smoke.runner import (
     SmokeDependencies,
     aggregate_smoke_summaries,
     run_control_loop,
@@ -415,7 +472,8 @@ class SmokeLoopTests(unittest.TestCase):
 - `test_false_stop_is_scored_only_after_predicted_stop`：预测 stop 但真实距离0.031m，终止为 `false_stop` 且不执行动作；
 - `test_last_allowed_action_records_max_control_steps`：达到第10步仍非 stop，最后一行 trace 的终止原因为 `max_control_steps`；
 - `test_safety_abort_reason_is_preserved_in_trace`：参数化或分开覆盖 `target_jump`、`target_out_of_workspace`、`no_progress`；
-- `test_grounding_exception_becomes_api_error`：API 异常记录 `api_error`，且 API 尝试次数为1；
+- `test_grounding_transport_exception_becomes_api_error`：网络/API 异常记录 `api_error`，且 HTTP 尝试次数为1；
+- `test_parser_rejection_becomes_invalid_box`：`InvalidModelResponseError` 记录 `invalid_box`，不能误记为传输错误；
 - `test_missing_red_box_becomes_invalid_box`：返回空框记录 `invalid_box`；
 - `test_geometry_exception_becomes_backprojection_error`：`compute_action` 的非安全异常记录 `backprojection_error`；
 - `test_execute_exception_becomes_ik_error`：执行器异常记录 `ik_error`；
@@ -426,7 +484,7 @@ class SmokeLoopTests(unittest.TestCase):
 - [ ] **Step 2: 运行并确认模块缺失**
 
 ```bash
-conda run -n vla_env python -m unittest tests.test_run_grounding_smoke -v
+conda run -n vla_env python -m unittest tests.vlm.grounding_smoke.test_runner -v
 ```
 
 Expected: ERROR，模块尚不存在。
@@ -438,7 +496,8 @@ from collections import Counter
 from dataclasses import dataclass
 import json
 
-from grounding_targeting import SmokeSafetyAbort
+from vla_project.simulation.stage3_probe import InvalidModelResponseError
+from vla_project.vlm.grounding_smoke.targeting import SmokeSafetyAbort
 
 @dataclass(frozen=True)
 class SmokeDependencies:
@@ -506,6 +565,17 @@ def run_control_loop(
             boxes, raw_response, latency = dependencies.ground(
                 observation["image_bgr"]
             )
+        except InvalidModelResponseError as exc:
+            termination = "invalid_box"
+            raw_path, annotated_path = dependencies.save_images(
+                step, observation["image_bgr"], {}
+            )
+            record(step, observation, visibility, termination, {
+                "error": repr(exc),
+                "image_path": raw_path,
+                "annotated_path": annotated_path,
+            })
+            break
         except Exception as exc:
             termination = "api_error"
             raw_path, annotated_path = dependencies.save_images(
@@ -668,8 +738,8 @@ def aggregate_smoke_summaries(summaries, smoke_config):
 - [ ] **Step 4: 验证所有终止原因并提交**
 
 ```bash
-conda run -n vla_env python -m unittest tests.test_run_grounding_smoke -v
-git add run_grounding_smoke.py tests/test_run_grounding_smoke.py
+conda run -n vla_env python -m unittest tests.vlm.grounding_smoke.test_runner -v
+git add src/vla_project/vlm/grounding_smoke/runner.py tests/vlm/grounding_smoke/test_runner.py
 git commit -m "feat: orchestrate grounding smoke control loop"
 ```
 
@@ -680,11 +750,17 @@ Expected: 全部 PASS；可见率失败不调用 API，stop 不执行动作，�
 ### Task 4: PyBullet 适配器、运行目录和 CLI
 
 **Files:**
-- Modify: `run_grounding_smoke.py`
-- Modify: `tests/test_run_grounding_smoke.py`
+- Modify: `src/vla_project/vlm/grounding_smoke/runner.py`
+- Modify: `tests/vlm/grounding_smoke/test_runner.py`
+- Modify: `pyproject.toml`
+- Modify: `tests/test_package_metadata.py`
+- Modify: `README.md`
+- Modify: `docs/agent/PROJECT_OVERVIEW.md`
+- Modify: `docs/agent/CURRENT_STATUS.md`
+- Modify: `docs/agent/PROJECT_STRUCTURE.md`
 
 **Interfaces:**
-- Produces: `build_smoke_cases(smoke_config) -> list[dict]`、`make_run_dir(output_root, run_name=None) -> Path`、`run_smoke_batch(config, run_name=None) -> tuple[Path,dict]`。
+- Produces: `build_smoke_cases(smoke_config) -> list[dict]`、`make_run_dir(output_root, run_name=None) -> Path`、`run_smoke_batch(config, run_name=None) -> tuple[Path,dict]`、`main()` 和 console script `vla-run-grounding-smoke`。
 
 - [ ] **Step 1: 写 batch 契约失败测试**
 
@@ -713,22 +789,32 @@ def test_run_directory_never_overwrites(self):
 
 ```bash
 conda run -n vla_env python -m unittest \
-  tests.test_run_grounding_smoke.SmokeBatchContractTests -v
+  tests.vlm.grounding_smoke.test_runner.SmokeBatchContractTests -v
 ```
 
 Expected: ERROR，两个函数尚不存在。
 
 - [ ] **Step 3: 实现真实适配器**
 
-`run_grounding_smoke.py` 必须导入并复用：
+`src/vla_project/vlm/grounding_smoke/runner.py` 必须导入并复用：
 
 ```python
-from camera_geometry import compute_camera_matrices
-from collect_vlm_eval_samples import (
+import copy
+from datetime import datetime
+from pathlib import Path
+import random
+import time
+
+import cv2
+import numpy as np
+import pybullet as p
+
+from vla_project.simulation.camera_geometry import compute_camera_matrices
+from vla_project.vlm.collect_vlm_eval_samples import (
     build_balanced_ee_positions,
     reset_robot_to_target,
 )
-from control_arm import (
+from vla_project.simulation.control_arm import (
     apply_joint_targets,
     calculate_target_joints,
     capture_rgb_and_segmentation,
@@ -740,16 +826,20 @@ from control_arm import (
     settle_object,
     setup_world,
 )
-from diagnose_vlm_grounding import (
+from vla_project.vlm.diagnose_vlm_grounding import (
     build_grounding_prompt,
     draw_grounding_boxes,
     parse_grounding_boxes,
 )
-from grounding_targeting import (
+from vla_project.vlm.grounding_smoke.targeting import (
     compute_grounding_action,
     load_frozen_calibration,
 )
-from stage3_probe import call_openai_compatible_api, direction_to_target
+from vla_project.simulation.stage3_probe import (
+    InvalidModelResponseError,
+    call_openai_compatible_api,
+    direction_to_target,
+)
 ```
 
 实现精确 case 和目录函数：
@@ -788,15 +878,17 @@ def compute_visibility(segmentation, block_id, reference_pixels):
 
 `run_smoke_batch()` 对每个 case 必须按以下固定顺序执行：
 
-1. `random.seed(seed)`、DIRECT连接、`setup_world`、`load_block`、settle；
-2. 读取一次真值，只用 `build_balanced_ee_positions(..., 0.10)` 和 `reset_robot_to_target` 搭建起点；
-3. 复制配置并应用 `vlm_evaluation.camera_override`，固定 camera eye 和相机矩阵；
-4. 构造 `observe/ground/execute/score/save_images` 五个闭包；
-5. `observe` 不返回 `block_pos`；`score` 才读取红块真值；
-6. `ground` 调用既有 prompt/parser；`execute` 使用 `direction_to_target(..., 0.20, 0.02)`；
-7. 调用 `run_control_loop`；不得用宽泛的 `error` 覆盖具体原因：grounding、空框、几何、安全检查和执行异常必须分别保留为 `api_error`、`invalid_box`、`backprojection_error`、`SmokeSafetyAbort.reason` 和 `ik_error`；场景初始化或配置错误则让 batch 明确失败，不伪造 episode 结果；
-8. 每个 episode 的 `finally` 必须断开 PyBullet；
-9. 写 `episode_summary.jsonl` 和 `smoke_summary.json`。
+1. 在连接 PyBullet 前调用 `load_frozen_calibration(calibration_path, expected_calibration_sample_ids, expected_correction_x, expected_correction_y)`，加载失败时不创建运行目录、不调用 API；
+2. 断言 `connection_mode == "DIRECT"`、`api_max_retries == 0`，再构造固定 cases 和不可覆盖的运行目录；
+3. 对每个 case 执行 `random.seed(seed)`、DIRECT连接、`setup_world`、`load_block`、settle；
+4. 读取一次真值，只用 `build_balanced_ee_positions(block_pos, task.hover_height, 0.10)` 和 `reset_robot_to_target` 搭建起点，并验证实际起点误差不超过 `balanced_pose_tolerance`；
+5. 深复制基础相机配置并应用 `vlm_evaluation.camera_override`，固定 camera eye 和相机矩阵；
+6. 构造 `observe/ground/execute/score/save_images` 五个闭包；
+7. `observe` 不返回 `block_pos`；`score` 才读取红块真值；
+8. `ground` 用 `time.perf_counter()` 包住既有 prompt/parser API 调用并返回 `(boxes, raw_response, latency_seconds)`；`execute` 使用 `direction_to_target(..., 0.20, 0.02)`；
+9. 调用 `run_control_loop`；不得用宽泛的 `error` 覆盖具体原因：传输错误、解析/空框、几何、安全检查和执行异常必须分别保留为 `api_error`、`invalid_box`、`backprojection_error`、`SmokeSafetyAbort.reason` 和 `ik_error`；场景初始化或配置错误则让 batch 明确失败，不伪造 episode 结果；
+10. 每个 episode 的 `finally` 必须断开 PyBullet；
+11. 每个 episode 完成后立即追加 `episode_summary.jsonl`，整批结束后原子写入 `smoke_summary.json`。
 
 CLI 提供可选 `--run-name`，默认时间戳目录；打印运行目录、成功数、API调用数和 `passed`。
 
@@ -817,12 +909,59 @@ self.assertNotIn(
 )
 ```
 
-- [ ] **Step 5: 全量验证并提交**
+真实 `ground` 闭包必须复制 `config["probe"]["api"]`，先断言
+`smoke_config["api_max_retries"] == 0`，再设置
+`api_config["max_retries"] = smoke_config["api_max_retries"]` 后调用
+`call_openai_compatible_api`。测试 patch 该 helper，并断言三 episode、十步上限下
+helper 最多调用30次且接收的 `api_config["max_retries"] == 0`。
+
+- [ ] **Step 5: 注册独立命令并刷新可编辑安装**
+
+在 `pyproject.toml` 的 `[project.scripts]` 增加：
+
+```toml
+vla-run-grounding-smoke = "vla_project.vlm.grounding_smoke.runner:main"
+```
+
+在 `tests/test_package_metadata.py` 的 `EXPECTED_SCRIPTS` 增加：
+
+```python
+"vla-run-grounding-smoke": "vla_project.vlm.grounding_smoke.runner:main",
+```
+
+运行：
+
+```bash
+conda run -n vla_env python -m pip install -e .
+conda run -n vla_env python -m unittest tests.test_package_metadata -v
+conda run -n vla_env vla-run-grounding-smoke --help
+```
+
+Expected: 可编辑安装成功；元数据测试 PASS；帮助文本包含 `--run-name`，且不启动 PyBullet 或调用 API。
+
+- [ ] **Step 6: 同步实现后的项目入口与状态**
+
+更新以下权威位置：
+
+- `PROJECT_STRUCTURE.md`：在 `vlm/` 下登记 `grounding_smoke/targeting.py`、`runner.py` 及镜像测试，并把命令数量从10改为11；
+- `PROJECT_OVERVIEW.md`：只记录新架构与 `vla-run-grounding-smoke` 入口，不写尚未运行的成功结论；
+- `CURRENT_STATUS.md`：改为“实现与 mock 验证完成，等待用户批准付费 seeds 52–54 smoke”；
+- `README.md`：加入 `vla-run-grounding-smoke --help` 和明确的付费运行审批提示。
+
+用以下命令检查所有入口表述一致：
+
+```bash
+rg -n "grounding_smoke|vla-run-grounding-smoke|11 个|等待用户批准" README.md docs/agent/PROJECT_OVERVIEW.md docs/agent/CURRENT_STATUS.md docs/agent/PROJECT_STRUCTURE.md
+```
+
+Expected: 四份文档各自只保存职责范围内的事实，没有声称真实 smoke 已通过。
+
+- [ ] **Step 7: 全量验证并提交**
 
 ```bash
 conda run -n vla_env python -m unittest discover -s tests -v
 git diff --check
-git add run_grounding_smoke.py tests/test_run_grounding_smoke.py
+git add src/vla_project/vlm/grounding_smoke/runner.py tests/vlm/grounding_smoke/test_runner.py pyproject.toml tests/test_package_metadata.py README.md docs/agent/PROJECT_OVERVIEW.md docs/agent/CURRENT_STATUS.md docs/agent/PROJECT_STRUCTURE.md
 git commit -m "feat: add pybullet grounding smoke runner"
 ```
 
@@ -830,15 +969,17 @@ Expected: 全部测试 PASS，测试过程真实 API 调用数为0。
 
 ---
 
-### Task 5: 真实 3-Episode Smoke Test
+### Task 5: 经用户批准的真实 3-Episode Smoke Test
 
 **Files:**
-- Generate: `vlm_smoke_runs/run_<timestamp>/`
+- Generate: `outputs/vlm_evaluations/grounding_world_smoke/run_seeds_52_54_smoke_01/`
+
+**Authority gate:** Task 1–4 完成和全量 mock 测试通过后必须停止；只有用户明确批准本次付费请求，才能执行本任务。此前的“同意修订计划”不等于批准真实 API 调用。
 
 - [ ] **Step 1: 检查 API 和冻结校准**
 
 ```bash
-conda run -n vla_env python -c "import os,yaml,json; from pathlib import Path; c=yaml.safe_load(open('sim_config.yaml')); s=c['grounding_smoke']; assert all(os.getenv(c['probe']['api'][n]) for n in ('base_url_env','api_key_env','model_env')); d=json.loads(Path(s['calibration_path']).read_text()); assert d['num_clear_calibration_samples']==15; assert d['correction_x']==s['expected_correction_x']; assert d['correction_y']==s['expected_correction_y']; print('api_env=ready calibration=frozen cases=3 max_calls=30')"
+conda run -n vla_env python -c "import os,yaml,json; from pathlib import Path; c=yaml.safe_load(Path('sim_config.yaml').read_text()); s=c['grounding_smoke']; assert all(os.getenv(c['probe']['api'][n]) for n in ('base_url_env','api_key_env','model_env')); assert s['api_max_retries']==0; d=json.loads(Path(s['calibration_path']).read_text()); assert d['num_clear_calibration_samples']==15; assert d['calibration_sample_ids']==s['expected_calibration_sample_ids']; assert d['correction_x']==s['expected_correction_x']; assert d['correction_y']==s['expected_correction_y']; print('api_env=ready calibration=frozen retries=0 cases=3 max_http_requests=30')"
 ```
 
 Expected: 只打印就绪状态，不打印密钥。
@@ -854,17 +995,15 @@ Expected: 全部 PASS。
 - [ ] **Step 3: 执行真实 smoke test**
 
 ```bash
-conda run -n vla_env python run_grounding_smoke.py
+conda run -n vla_env vla-run-grounding-smoke --run-name run_seeds_52_54_smoke_01
 ```
 
-Expected: 创建新时间戳目录；无论通过或失败都保留证据。中断后重新执行会新建目录。
+Expected: `run_seeds_52_54_smoke_01` 必须原先不存在并被原子创建；无论通过或失败都保留证据。若运行中断，不得删除或复用该目录；经再次批准后使用精确新名称 `run_seeds_52_54_smoke_02` 从初始场景重跑。
 
 - [ ] **Step 4: 审计固定 cases、调用上限和接口边界**
 
-将 `<run_dir>` 替换为真实目录：
-
 ```bash
-conda run -n vla_env python -c "import json,inspect; from pathlib import Path; from grounding_targeting import compute_grounding_action; root=Path('<run_dir>'); s=json.loads((root/'smoke_summary.json').read_text()); traces=[json.loads(x) for p in sorted(root.glob('episode_*/smoke_trace.jsonl')) for x in p.read_text().splitlines() if x.strip()]; assert s['num_episodes']==3; assert [e['seed'] for e in s['episodes']]==[52,53,54]; assert s['total_api_calls']<=30; assert 'block_pos' not in inspect.signature(compute_grounding_action).parameters; print(json.dumps(s,ensure_ascii=False,indent=2))"
+conda run -n vla_env python -c "import json,inspect; from pathlib import Path; from vla_project.vlm.grounding_smoke.targeting import compute_grounding_action; root=Path('outputs/vlm_evaluations/grounding_world_smoke/run_seeds_52_54_smoke_01'); s=json.loads((root/'smoke_summary.json').read_text()); traces=[json.loads(x) for p in sorted(root.glob('episode_*/smoke_trace.jsonl')) for x in p.read_text().splitlines() if x.strip()]; assert s['num_episodes']==3; assert [e['seed'] for e in s['episodes']]==[52,53,54]; assert s['total_api_calls']<=30; assert 'block_pos' not in inspect.signature(compute_grounding_action).parameters; print(json.dumps(s,ensure_ascii=False,indent=2))"
 ```
 
 Expected: 断言通过并打印真实摘要。`passed=false` 仍保留原阈值和原 seeds。
@@ -876,7 +1015,7 @@ Expected: 断言通过并打印真实摘要。`passed=false` 仍保留原阈值�
 - [ ] **Step 6: 确认生成物保持本地**
 
 ```bash
-git check-ignore -v <run_dir>/smoke_summary.json
+git check-ignore -v outputs/vlm_evaluations/grounding_world_smoke/run_seeds_52_54_smoke_01/smoke_summary.json
 git status --short
 ```
 
@@ -888,21 +1027,26 @@ Expected: 运行目录被忽略，Git 状态没有批量图片。
 
 **Files:**
 - Modify: `README.md`
+- Modify: `docs/agent/PROJECT_OVERVIEW.md`
+- Modify: `docs/agent/CURRENT_STATUS.md`
+- Modify: `docs/agent/PROJECT_STRUCTURE.md`
 - Modify: `docs/worklog/WORKLOG.md`
 - Modify: `docs/planning/vla_robotic_study_plan.md`
-- Modify: `docs/debugging/BUGLOG.md`
+- Modify only on reproducible defect: `docs/debugging/BUGLOG.md`
 
 - [ ] **Step 1: 提取唯一可信指标**
 
 ```bash
-conda run -n vla_env python -c "import json; from pathlib import Path; s=json.loads(Path('<run_dir>/smoke_summary.json').read_text()); print('passed=',s['passed']); print('success=',s['success_count'],'/',s['num_episodes']); print('api_calls=',s['total_api_calls']); print('reasons=',s['termination_reason_counts']); [(print(e['seed'],e['start_direction'],e['num_control_steps'],e['final_true_distance_xy'])) for e in s['episodes']]"
+conda run -n vla_env python -c "import json; from pathlib import Path; s=json.loads(Path('outputs/vlm_evaluations/grounding_world_smoke/run_seeds_52_54_smoke_01/smoke_summary.json').read_text()); print('passed=',s['passed']); print('success=',s['success_count'],'/',s['num_episodes']); print('api_calls=',s['total_api_calls']); print('reasons=',s['termination_reason_counts']); [(print(e['seed'],e['start_direction'],e['num_control_steps'],e['final_true_distance_xy'])) for e in s['episodes']]"
 ```
 
 Expected: 输出一组摘要直接读取的指标。
 
-- [ ] **Step 2: 用同一组指标更新四份文档**
+- [ ] **Step 2: 用同一组指标更新权威文档**
 
-每份文档必须写明：
+`WORKLOG.md` 保存完整实验指标；`CURRENT_STATUS.md` 改写当前阶段、未解决问题和唯一下一步；`PROJECT_OVERVIEW.md` 只加入已经由真实结果验证的稳定结论；`README.md` 更新命令与阶段摘要；学习计划更新阶段门槛。`PROJECT_STRUCTURE.md` 登记新子包、镜像测试和第 11 个命令。只有出现可复现代码缺陷时才把证据、根因和修复验证写入 `BUGLOG.md`。
+
+实验相关文档必须写明：
 
 ```text
 固定 seeds 52–54、left/right/front、10cm起点、2cm单步、最多10步。
@@ -916,8 +1060,8 @@ clear-only 结论不能外推到 severe 遮挡。
 - [ ] **Step 3: 检查一致性和全量测试**
 
 ```bash
-rg -n "smoke|52|53|54|API|3cm|下一步" README.md docs/worklog/WORKLOG.md docs/planning/vla_robotic_study_plan.md docs/debugging/BUGLOG.md
-rg -n "T[B]D|T[O]DO|待.定|占.位" README.md docs/worklog/WORKLOG.md docs/planning/vla_robotic_study_plan.md docs/debugging/BUGLOG.md
+rg -n "smoke|52|53|54|API|3cm|下一步" README.md docs/agent/PROJECT_OVERVIEW.md docs/agent/CURRENT_STATUS.md docs/worklog/WORKLOG.md docs/planning/vla_robotic_study_plan.md
+rg -n "T[B]D|T[O]DO|待.定|占.位" README.md docs/agent/PROJECT_OVERVIEW.md docs/agent/CURRENT_STATUS.md docs/agent/PROJECT_STRUCTURE.md docs/worklog/WORKLOG.md docs/planning/vla_robotic_study_plan.md
 git diff --check
 conda run -n vla_env python -m unittest discover -s tests -v
 ```
@@ -927,7 +1071,7 @@ Expected: 指标一致、未完成标记扫描无输出、格式检查无输出�
 - [ ] **Step 4: 提交文档证据**
 
 ```bash
-git add README.md docs/worklog/WORKLOG.md docs/planning/vla_robotic_study_plan.md docs/debugging/BUGLOG.md
+git add README.md docs/agent/PROJECT_OVERVIEW.md docs/agent/CURRENT_STATUS.md docs/agent/PROJECT_STRUCTURE.md docs/worklog/WORKLOG.md docs/planning/vla_robotic_study_plan.md
 git commit -m "docs: analyze grounding closed-loop smoke test"
 ```
 
