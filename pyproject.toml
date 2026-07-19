@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vla-project"
+version = "0.1.0"
+requires-python = ">=3.10"
+
+[project.scripts]
+vla-collect = "vla_project.simulation.control_arm:main"
+vla-probe = "vla_project.simulation.stage3_probe:main"
+vla-evaluate-probe = "vla_project.simulation.evaluate_probe:main"
+vla-collect-vlm-samples = "vla_project.vlm.collect_vlm_eval_samples:main"
+vla-evaluate-vlm-decisions = "vla_project.vlm.evaluate_vlm_decisions:main"
+vla-diagnose-grounding = "vla_project.vlm.diagnose_vlm_grounding:main"
+vla-ground-then-decide = "vla_project.vlm.evaluate_ground_then_decide:main"
+vla-evaluate-backprojection = "vla_project.vlm.evaluate_grounding_backprojection:main"
+vla-validate-grounding-calibration = "vla_project.vlm.validate_grounding_calibration:main"
+vla-migrate-generated-outputs = "vla_project.tools.migrate_generated_outputs:main"
+vla-run-grounding-smoke = "vla_project.vlm.grounding_smoke.runner:main"
+vla-screen-grounding-smoke = "vla_project.vlm.grounding_smoke.screening:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

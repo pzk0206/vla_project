@@ -6,7 +6,7 @@
 
 import unittest
 
-from control_arm import load_config
+from vla_project.simulation.control_arm import load_config
 
 
 class ConfigContractTests(unittest.TestCase):
@@ -43,7 +43,14 @@ class ConfigContractTests(unittest.TestCase):
         """在线小测必须锁定案例、标定、步长和安全阈值。"""
         smoke = self.config["grounding_smoke"]
 
-        self.assertEqual(smoke["output_dir"], "vlm_smoke_runs")
+        self.assertEqual(
+            smoke["output_dir"],
+            "outputs/vlm_evaluations/grounding_world_smoke",
+        )
+        self.assertEqual(
+            smoke["calibration_path"],
+            "outputs/vlm_evaluations/grounding_qwen3_vl_flash_distance20_448_calibration_validation_v1/calibration_validation/calibration.json",
+        )
         self.assertEqual(smoke["seeds"], [52, 53, 54])
         self.assertEqual(smoke["start_directions"], ["left", "right", "front"])
         self.assertEqual(smoke["start_offset_xy"], 0.10)
@@ -60,9 +67,21 @@ class ConfigContractTests(unittest.TestCase):
         self.assertEqual(smoke["workspace_y"], [0.30, 0.70])
         self.assertEqual(smoke["required_successes"], 3)
         self.assertEqual(smoke["max_total_api_calls"], 30)
+        self.assertEqual(smoke["api_max_retries"], 0)
         self.assertEqual(smoke["expected_calibration_samples"], 15)
+        self.assertEqual(
+            smoke["expected_calibration_sample_ids"],
+            [
+                f"seed_{seed}_d020_{direction}"
+                for seed in range(42, 47)
+                for direction in ("front", "left", "right")
+            ],
+        )
         screening = smoke["screening"]
-        self.assertEqual(screening["output_dir"], "vlm_smoke_screening_runs")
+        self.assertEqual(
+            screening["output_dir"],
+            "outputs/vlm_evaluations/grounding_world_smoke_screening",
+        )
         self.assertEqual(screening["seed_range"], [55, 100])
         self.assertEqual(
             screening["directions"], ["left", "right", "front"]
@@ -76,7 +95,7 @@ class ConfigContractTests(unittest.TestCase):
         evaluation = self.config["vlm_evaluation"]
         self.assertEqual(
             evaluation["sample_output_dir"],
-            "vlm_eval_samples_448_calibration_validation_d020",
+            "outputs/vlm_samples/448_calibration_validation_d020",
         )
         self.assertEqual(
             evaluation["grounding_run_name"],
@@ -106,6 +125,33 @@ class ConfigContractTests(unittest.TestCase):
         self.assertGreater(evaluation["max_samples_per_episode"], 0)
         self.assertGreater(evaluation["online_smoke_episodes"], 0)
         self.assertGreater(evaluation["online_eval_episodes"], 0)
+
+    def test_generated_outputs_are_grouped_under_outputs(self):
+        """所有生成图片和实验记录必须进入统一 outputs 根目录。"""
+        self.assertEqual(self.config["dataset"]["output_dir"], "outputs/dataset")
+        self.assertEqual(self.config["probe"]["output_dir"], "outputs/probe")
+        self.assertEqual(
+            self.config["probe_evaluation"]["output_dir"],
+            "outputs/probe_evaluations",
+        )
+        self.assertEqual(
+            self.config["vlm_evaluation"]["sample_output_dir"],
+            "outputs/vlm_samples/448_calibration_validation_d020",
+        )
+        self.assertEqual(
+            self.config["vlm_evaluation"]["run_output_dir"],
+            "outputs/vlm_evaluations",
+        )
+        self.assertTrue(
+            self.config["grounding_smoke"]["output_dir"].startswith(
+                "outputs/vlm_evaluations/"
+            )
+        )
+        self.assertTrue(
+            self.config["grounding_smoke"]["screening"]["output_dir"].startswith(
+                "outputs/vlm_evaluations/"
+            )
+        )
 
     def test_probe_evaluation_config_is_valid(self):
         """批量评估必须有正数次数、非空目录和可复现的整数种子。"""

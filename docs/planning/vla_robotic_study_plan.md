@@ -11,14 +11,16 @@
 - IK 专家规则控制机械臂悬停到目标上方。
 - RGB 图像、语言指令、动作标签 JSONL 输出。
 - episode 级诊断摘要，包括 `termination_reason`、最终距离、最终目标位置等。
-- 阶段三 `stage3_probe.py`，可以用启发式或 API 模式做在线闭环探路。
+- 阶段三 `src/vla_project/simulation/stage3_probe.py`，可以用启发式或 API 模式做在线闭环探路。
+- 标准 `src/vla_project/` 包结构，正式代码按 `simulation`、`vlm`、`tools` 分层，测试在 `tests/` 中镜像组织。
+- 安装 `pip install -e .` 后可通过稳定的 `vla-*` 命令运行采集和评估流程。
 
 当前数据状态：
 
 ```text
-dataset/episode_summary.jsonl: 50 条 episode
+outputs/dataset/episode_summary.jsonl: 50 条 episode
 termination_reason: 50 条 success
-dataset/trajectory_expert.jsonl: 286 帧训练样本
+outputs/dataset/trajectory_expert.jsonl: 286 帧训练样本
 final_distance: min 0.0098m, median 0.0293m, max 0.0300m
 ```
 
@@ -90,7 +92,7 @@ partial 4/4 低于 3cm，但唯一 severe 样本仍为 `3.27cm`。因此清晰�
 
 要做的事：
 
-- 批量运行 `stage3_probe.py`，先从 20 次开始，再扩到 50-100 次。
+- 批量运行 `src/vla_project/simulation/stage3_probe.py`，先从 20 次开始，再扩到 50-100 次。
 - 统计每次最终 `distance_to_hover`、控制步数、是否到达停止阈值。
 - 检查 `left/right/front/back/stop` 的方向映射是否持续让距离下降。
 - 保存失败 trace，单独分析失败时的红块位置、末端位置和动作序列。
@@ -114,7 +116,7 @@ partial 4/4 低于 3cm，但唯一 severe 样本仍为 `3.27cm`。因此清晰�
 
 要做的事：
 
-- 新增 `evaluate_probe.py`。
+- 新增 `src/vla_project/simulation/evaluate_probe.py`。
 - 支持配置评估次数、输出目录和是否保存图片。
 - 自动汇总：
   - success rate

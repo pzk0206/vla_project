@@ -1,6 +1,7 @@
 # Python cache and virtual environments
 __pycache__/
 *.py[cod]
+*.egg-info/
 .venv/
 venv/
 env/
@@ -11,6 +12,7 @@ env/
 .idea/
 
 # Generated simulation outputs
+# Legacy local output paths retained only so historical worktree evidence stays untracked.
 dataset/
 probe_runs/
 probe_eval_runs/
@@ -21,6 +23,8 @@ vlm_eval_samples_448_calibration_validation_d020/
 vlm_eval_runs/
 vlm_smoke_runs/
 vlm_smoke_screening_runs/
+# All new generated evidence belongs under this unified root.
+outputs/
 
 # Logs and temporary files
 *.log

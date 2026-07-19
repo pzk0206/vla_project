@@ -1,0 +1,495 @@
+"""验证 grounding smoke 闭环编排、证据留存和批次判定。"""
+
+import inspect
+import json
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import Mock, patch
+
+import numpy as np
+
+from vla_project.simulation.stage3_probe import InvalidModelResponseError
+from vla_project.vlm.grounding_smoke.targeting import (
+    SmokeSafetyAbort,
+    compute_grounding_action,
+)
+from vla_project.vlm.grounding_smoke.runner import (
+    SmokeDependencies,
+    _build_episode_dependencies,
+    aggregate_smoke_summaries,
+    build_smoke_cases,
+    compute_visibility,
+    make_run_dir,
+    run_control_loop,
+    run_smoke_batch,
+)
+
+
+CASE = {"episode_idx": 0, "seed": 52, "start_direction": "left"}
+BASE_CONFIG = {
+    "max_control_steps": 10,
+    "clear_visibility_threshold": 0.75,
+    "seeds": [52, 53, 54],
+    "required_successes": 3,
+    "max_total_api_calls": 30,
+}
+
+
+def observation(visibility_ratio=1.0):
+    """构造不含红块真值的控制侧观测。"""
+    return {
+        "image_bgr": np.zeros((448, 448, 3), dtype=np.uint8),
+        "view_matrix": [1.0] * 16,
+        "projection_matrix": [1.0] * 16,
+        "ee_pos": [0.0, 0.4, 0.2],
+        "visibility": {
+            "block_visible_pixels": round(378 * visibility_ratio),
+            "block_reference_pixels": 378,
+            "block_visibility_ratio": visibility_ratio,
+        },
+    }
+
+
+def action(direction, distance=0.08):
+    """构造策略层动作结果。"""
+    return {
+        "direction": direction,
+        "box_center_pixel": [223.5, 223.5],
+        "raw_target_world": [0.1, 0.4, 0.0],
+        "corrected_target_world": [0.1, 0.4, 0.0],
+        "predicted_distance_xy": distance,
+        "target_jump_xy": 0.0,
+        "safety_state": {
+            "previous_target_xy": [0.1, 0.4],
+            "previous_predicted_distance": distance,
+            "no_progress_count": 0,
+        },
+    }
+
+
+def scoring(distance):
+    """真值只存在于独立评分返回值中。"""
+    return {
+        "true_block_pos": [0.1, 0.4, 0.05],
+        "true_distance_xy": distance,
+    }
+
+
+class SmokeLoopTests(unittest.TestCase):
+    def make_dependencies(
+        self,
+        *,
+        observe=None,
+        ground=None,
+        compute_action=None,
+        execute=None,
+        score=None,
+    ):
+        return SmokeDependencies(
+            observe=observe or Mock(return_value=observation()),
+            ground=ground
+            or Mock(return_value=({"red_block": [450, 450, 550, 550]}, "{}", 0.1)),
+            compute_action=compute_action or Mock(return_value=action("stop", 0.01)),
+            execute=execute or Mock(return_value={"target_pos": [0.02, 0.4, 0.2]}),
+            score=score or Mock(return_value=scoring(0.01)),
+            save_images=Mock(return_value=("raw.jpg", "annotated.jpg")),
+        )
+
+    def run_in_temp(self, dependencies, config=None):
+        temp_dir = tempfile.TemporaryDirectory()
+        episode_dir = Path(temp_dir.name) / "episode_000"
+        summary = run_control_loop(
+            config or BASE_CONFIG,
+            CASE,
+            {},
+            episode_dir,
+            dependencies,
+        )
+        trace_rows = [
+            json.loads(line)
+            for line in (episode_dir / "smoke_trace.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+            if line.strip()
+        ]
+        temp_dir.cleanup()
+        return summary, trace_rows
+
+    def test_visibility_aborts_before_paid_grounding(self):
+        ground = Mock()
+        dependencies = self.make_dependencies(
+            observe=Mock(return_value=observation(100 / 378)), ground=ground
+        )
+
+        summary, rows = self.run_in_temp(dependencies)
+
+        self.assertEqual(summary["termination_reason"], "visibility_out_of_scope")
+        self.assertEqual(rows[-1]["termination_reason"], "visibility_out_of_scope")
+        self.assertEqual(summary["api_calls"], 0)
+        ground.assert_not_called()
+
+    def test_two_frame_success_regrounds_and_executes_once(self):
+        ground = Mock(
+            side_effect=[
+                ({"red_block": [450, 450, 550, 550]}, "first", 0.1),
+                ({"red_block": [451, 450, 551, 550]}, "second", 0.1),
+            ]
+        )
+        compute_action = Mock(side_effect=[action("right", 0.08), action("stop", 0.01)])
+        execute = Mock(return_value={"target_pos": [0.02, 0.4, 0.2]})
+        score = Mock(side_effect=[scoring(0.10), scoring(0.08), scoring(0.02)])
+        dependencies = self.make_dependencies(
+            observe=Mock(side_effect=[observation(), observation()]),
+            ground=ground,
+            compute_action=compute_action,
+            execute=execute,
+            score=score,
+        )
+
+        summary, rows = self.run_in_temp(dependencies)
+
+        self.assertTrue(summary["success"])
+        self.assertEqual(summary["initial_true_distance_xy"], 0.10)
+        self.assertEqual(summary["final_true_distance_xy"], 0.02)
+        self.assertEqual(summary["num_actions"], 1)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(ground.call_count, 2)
+        self.assertEqual(execute.call_count, 1)
+
+    def test_action_call_never_receives_block_truth(self):
+        compute_action = Mock(return_value=action("stop", 0.01))
+        dependencies = self.make_dependencies(compute_action=compute_action)
+
+        self.run_in_temp(dependencies)
+
+        for call in compute_action.call_args_list:
+            self.assertNotIn("block_pos", call.kwargs)
+            self.assertNotIn("true_block_pos", call.kwargs)
+
+    def test_false_stop_is_scored_only_after_predicted_stop(self):
+        execute = Mock()
+        dependencies = self.make_dependencies(
+            compute_action=Mock(return_value=action("stop", 0.01)),
+            execute=execute,
+            score=Mock(side_effect=[scoring(0.10), scoring(0.031)]),
+        )
+
+        summary, rows = self.run_in_temp(dependencies)
+
+        self.assertEqual(summary["termination_reason"], "false_stop")
+        self.assertEqual(rows[-1]["true_distance_xy"], 0.031)
+        execute.assert_not_called()
+
+    def test_last_allowed_action_records_max_control_steps(self):
+        config = dict(BASE_CONFIG, max_control_steps=2)
+        dependencies = self.make_dependencies(
+            observe=Mock(side_effect=[observation(), observation()]),
+            ground=Mock(
+                side_effect=[
+                    ({"red_block": [450, 450, 550, 550]}, "one", 0.1),
+                    ({"red_block": [450, 450, 550, 550]}, "two", 0.1),
+                ]
+            ),
+            compute_action=Mock(side_effect=[action("right", 0.08), action("right", 0.06)]),
+            score=Mock(side_effect=[scoring(0.10), scoring(0.08), scoring(0.06)]),
+        )
+
+        summary, rows = self.run_in_temp(dependencies, config)
+
+        self.assertEqual(summary["termination_reason"], "max_control_steps")
+        self.assertEqual(rows[-1]["termination_reason"], "max_control_steps")
+        self.assertEqual(summary["num_actions"], 2)
+
+    def test_safety_abort_reason_is_preserved_in_trace(self):
+        for reason in ("target_jump", "target_out_of_workspace", "no_progress"):
+            with self.subTest(reason=reason):
+                dependencies = self.make_dependencies(
+                    compute_action=Mock(
+                        side_effect=SmokeSafetyAbort(reason, "test abort")
+                    )
+                )
+                summary, rows = self.run_in_temp(dependencies)
+                self.assertEqual(summary["termination_reason"], reason)
+                self.assertEqual(rows[-1]["termination_reason"], reason)
+
+    def test_grounding_exception_becomes_api_error(self):
+        dependencies = self.make_dependencies(
+            ground=Mock(side_effect=TimeoutError("timeout"))
+        )
+
+        summary, rows = self.run_in_temp(dependencies)
+
+        self.assertEqual(summary["termination_reason"], "api_error")
+        self.assertEqual(summary["api_calls"], 1)
+        self.assertEqual(rows[-1]["termination_reason"], "api_error")
+
+    def test_parser_rejection_becomes_invalid_box(self):
+        dependencies = self.make_dependencies(
+            ground=Mock(side_effect=InvalidModelResponseError("bad boxes"))
+        )
+
+        summary, rows = self.run_in_temp(dependencies)
+
+        self.assertEqual(summary["termination_reason"], "invalid_box")
+        self.assertEqual(rows[-1]["termination_reason"], "invalid_box")
+
+    def test_missing_red_box_becomes_invalid_box(self):
+        dependencies = self.make_dependencies(
+            ground=Mock(return_value=({}, "{}", 0.1))
+        )
+
+        summary, rows = self.run_in_temp(dependencies)
+
+        self.assertEqual(summary["termination_reason"], "invalid_box")
+        self.assertEqual(rows[-1]["termination_reason"], "invalid_box")
+
+    def test_geometry_exception_becomes_backprojection_error(self):
+        dependencies = self.make_dependencies(
+            compute_action=Mock(side_effect=ValueError("bad matrix"))
+        )
+
+        summary, rows = self.run_in_temp(dependencies)
+
+        self.assertEqual(summary["termination_reason"], "backprojection_error")
+        self.assertEqual(rows[-1]["termination_reason"], "backprojection_error")
+
+    def test_execute_exception_becomes_ik_error(self):
+        dependencies = self.make_dependencies(
+            compute_action=Mock(return_value=action("right", 0.08)),
+            execute=Mock(side_effect=RuntimeError("ik failed")),
+        )
+
+        summary, rows = self.run_in_temp(dependencies)
+
+        self.assertEqual(summary["termination_reason"], "ik_error")
+        self.assertEqual(rows[-1]["termination_reason"], "ik_error")
+
+    def test_batch_pass_requires_exact_three_clear_successes(self):
+        episodes = [
+            {
+                "seed": seed,
+                "success": True,
+                "all_clear": True,
+                "api_calls": 5,
+                "termination_reason": "success",
+            }
+            for seed in (52, 53, 54)
+        ]
+        self.assertTrue(aggregate_smoke_summaries(episodes, BASE_CONFIG)["passed"])
+
+        variants = [
+            episodes[:2],
+            [dict(episodes[0], success=False)] + episodes[1:],
+            [dict(episodes[0], all_clear=False)] + episodes[1:],
+            [dict(row, api_calls=11) for row in episodes],
+        ]
+        for rows in variants:
+            with self.subTest(rows=rows):
+                self.assertFalse(
+                    aggregate_smoke_summaries(rows, BASE_CONFIG)["passed"]
+                )
+
+
+class SmokeBatchContractTests(unittest.TestCase):
+    def test_grounding_dependency_disables_retries_without_mutating_probe_config(self):
+        config = {
+            "robot": {"ee_link_index": 6},
+            "dataset": {"instruction": "悬停在红色积木上方"},
+            "probe": {"api": {"max_retries": 2}},
+        }
+        smoke_config = {
+            "api_max_retries": 0,
+            "visibility_reference_pixels": 378,
+        }
+        image = np.zeros((448, 448, 3), dtype=np.uint8)
+        with patch(
+            "vla_project.vlm.grounding_smoke.runner.call_openai_compatible_api",
+            return_value=({"red_block": [1, 1, 2, 2]}, "{}"),
+        ) as api:
+            dependencies = _build_episode_dependencies(
+                config,
+                smoke_config,
+                CASE,
+                Path("episode_000"),
+                10,
+                20,
+                {},
+                [0.0, 0.4, 3.0],
+                [1.0] * 16,
+                [1.0] * 16,
+            )
+            dependencies.ground(image)
+
+        self.assertEqual(api.call_args.args[1]["max_retries"], 0)
+        self.assertEqual(config["probe"]["api"]["max_retries"], 2)
+
+    def test_builds_exact_three_cases_without_back(self):
+        self.assertEqual(
+            build_smoke_cases(
+                {
+                    "seeds": [52, 53, 54],
+                    "start_directions": ["left", "right", "front"],
+                }
+            ),
+            [
+                {"episode_idx": 0, "seed": 52, "start_direction": "left"},
+                {"episode_idx": 1, "seed": 53, "start_direction": "right"},
+                {"episode_idx": 2, "seed": 54, "start_direction": "front"},
+            ],
+        )
+
+    def test_rejects_changed_case_set(self):
+        for smoke_config in (
+            {"seeds": [52, 53], "start_directions": ["left", "right"]},
+            {
+                "seeds": [52, 52, 54],
+                "start_directions": ["left", "right", "front"],
+            },
+            {
+                "seeds": [52, 53, 54],
+                "start_directions": ["left", "right", "back"],
+            },
+        ):
+            with self.subTest(smoke_config=smoke_config):
+                with self.assertRaises(ValueError):
+                    build_smoke_cases(smoke_config)
+
+    def test_run_directory_never_overwrites(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            created = make_run_dir(temp_dir, "run_fixed")
+            self.assertTrue(created.is_dir())
+            with self.assertRaises(FileExistsError):
+                make_run_dir(temp_dir, "run_fixed")
+
+    def test_visibility_decodes_pybullet_object_id(self):
+        block_id = 7
+        segmentation = np.array(
+            [
+                [-1, block_id],
+                [block_id | (3 << 24), 2],
+            ],
+            dtype=np.int64,
+        )
+
+        metrics = compute_visibility(segmentation, block_id, reference_pixels=4)
+
+        self.assertEqual(metrics["block_visible_pixels"], 2)
+        self.assertEqual(metrics["block_reference_pixels"], 4)
+        self.assertEqual(metrics["block_visibility_ratio"], 0.5)
+
+    def test_batch_uses_three_isolated_cases_and_writes_summary(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            calibration_path = Path(temp_dir) / "calibration.json"
+            calibration_path.write_text("{}", encoding="utf-8")
+            config = {
+                "connection_mode": "DIRECT",
+                "gravity": [0, 0, -9.8],
+                "enable_time_sleep": False,
+                "simulation_hz": 240,
+                "robot": {
+                    "ee_link_index": 6,
+                    "controlled_joints": 7,
+                },
+                "task": {"initial_settle_steps": 1},
+                "dataset": {"instruction": "悬停在红色积木上方"},
+                "probe": {
+                    "sim_steps_per_action": 1,
+                    "api": {},
+                },
+                "camera": {
+                    "workspace_center": [0.0, 0.4, 0.0],
+                    "near_val": 0.1,
+                    "far_val": 100.0,
+                },
+                "vlm_evaluation": {
+                    "balanced_pose_tolerance": 0.005,
+                    "balanced_pose_ik_iterations": 20,
+                    "camera_override": {
+                        "image_width": 448,
+                        "image_height": 448,
+                        "eye_offset_base": [0.0, 0.0, 3.0],
+                        "eye_offset_random_range": [0.0, 0.0],
+                        "up_vector": [0, 1, 0],
+                        "fov": 45,
+                    },
+                },
+                "grounding_smoke": {
+                    **BASE_CONFIG,
+                    "output_dir": temp_dir,
+                    "calibration_path": str(calibration_path),
+                    "expected_calibration_samples": 15,
+                    "expected_calibration_sample_ids": [
+                        f"seed_{seed}_d020_{direction}"
+                        for seed in range(42, 47)
+                        for direction in ("front", "left", "right")
+                    ],
+                    "api_max_retries": 0,
+                    "expected_correction_x": 0.02492227406480192,
+                    "expected_correction_y": -0.019467343494422532,
+                    "start_directions": ["left", "right", "front"],
+                    "start_offset_xy": 0.10,
+                    "hover_z": 0.20,
+                    "move_step_xy": 0.02,
+                    "visibility_reference_pixels": 378,
+                },
+            }
+            fake_calibration = {
+                "num_clear_calibration_samples": 15,
+                "correction_x": 0.02492227406480192,
+                "correction_y": -0.019467343494422532,
+            }
+
+            def fake_loop(smoke_config, case, calibration, episode_dir, dependencies):
+                episode_dir.mkdir(parents=True, exist_ok=False)
+                return {
+                    **case,
+                    "success": True,
+                    "termination_reason": "success",
+                    "api_calls": 1,
+                    "all_clear": True,
+                    "num_control_steps": 1,
+                    "final_true_distance_xy": 0.02,
+                }
+
+            with (
+                patch("vla_project.vlm.grounding_smoke.runner.load_frozen_calibration", return_value=fake_calibration),
+                patch("vla_project.vlm.grounding_smoke.runner.connect_physics"),
+                patch("vla_project.vlm.grounding_smoke.runner.setup_world", return_value=(1, 10)),
+                patch("vla_project.vlm.grounding_smoke.runner.load_block", return_value=20),
+                patch("vla_project.vlm.grounding_smoke.runner.settle_object"),
+                patch("vla_project.vlm.grounding_smoke.runner.get_object_position", return_value=[0.1, 0.45, 0.05]),
+                patch("vla_project.vlm.grounding_smoke.runner.build_balanced_ee_positions", return_value={
+                    "left": [0.2, 0.45, 0.20],
+                    "right": [0.0, 0.45, 0.20],
+                    "front": [0.1, 0.35, 0.20],
+                }),
+                patch(
+                    "vla_project.vlm.grounding_smoke.runner.reset_robot_to_target",
+                    side_effect=lambda robot_id, robot_config, target_pos, **kwargs: list(target_pos),
+                ),
+                patch("vla_project.vlm.grounding_smoke.runner.sample_camera_eye", return_value=[0.0, 0.4, 3.0]),
+                patch("vla_project.vlm.grounding_smoke.runner.compute_camera_matrices", return_value=([1.0] * 16, [1.0] * 16)),
+                patch("vla_project.vlm.grounding_smoke.runner.run_control_loop", side_effect=fake_loop) as loop,
+                patch("vla_project.vlm.grounding_smoke.runner.call_openai_compatible_api") as api,
+                patch("vla_project.vlm.grounding_smoke.runner.p.disconnect") as disconnect,
+            ):
+                batch_dir, summary = run_smoke_batch(config, run_name="run_test")
+
+            self.assertEqual(loop.call_count, 3)
+            self.assertEqual(
+                [call.args[1]["seed"] for call in loop.call_args_list],
+                [52, 53, 54],
+            )
+            self.assertNotIn(
+                "block_pos", inspect.signature(compute_grounding_action).parameters
+            )
+            self.assertEqual(disconnect.call_count, 3)
+            api.assert_not_called()
+            self.assertTrue((batch_dir / "smoke_summary.json").is_file())
+            self.assertTrue((batch_dir / "episode_summary.jsonl").is_file())
+            self.assertTrue(summary["passed"])
+
+
+if __name__ == "__main__":
+    unittest.main()

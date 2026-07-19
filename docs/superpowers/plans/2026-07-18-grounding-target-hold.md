@@ -4,7 +4,7 @@
 
 **Goal:** 在红块短暂不可见时复用最近一次合法 VLM 世界坐标，结合当前末端位置重新计算动作，并在连续使用4步后仍无法重新定位时安全停止。
 
-**Architecture:** 在 `grounding_targeting.py` 中抽出“世界目标坐标 + 当前末端坐标 -> 安全动作”的纯计算入口，使 fresh VLM 目标和 held VLM 目标共用同一控制规则。`run_grounding_smoke.py` 维护目标缓存与年龄，只在低可见率且已有缓存时进入 held 路径；PyBullet 红块真值继续只存在于独立评分闭包。
+**Architecture:** 在 `src/vla_project/vlm/grounding_smoke/targeting.py` 中抽出“世界目标坐标 + 当前末端坐标 -> 安全动作”的纯计算入口，使 fresh VLM 目标和 held VLM 目标共用同一控制规则。`src/vla_project/vlm/grounding_smoke/runner.py` 维护目标缓存与年龄，只在低可见率且已有缓存时进入 held 路径；PyBullet 红块真值继续只存在于独立评分闭包。
 
 **Tech Stack:** Python 3.10、PyBullet、OpenCV、NumPy、YAML、标准库 `unittest`、JSON/JSONL、Git、conda 环境 `vla_env`。
 
@@ -25,10 +25,10 @@
 
 - Modify: `sim_config.yaml` — 冻结最大连续历史目标步数。
 - Modify: `tests/test_config_contract.py` — 保护 `max_stale_target_steps=4`。
-- Modify: `grounding_targeting.py` — 新增从已补偿世界目标生成安全动作的纯计算入口。
-- Modify: `tests/test_grounding_targeting.py` — 验证 held 目标会随当前末端位置重新计算且不接收真值。
-- Modify: `run_grounding_smoke.py` — 维护目标缓存、目标年龄、fresh/held 状态机和摘要字段。
-- Modify: `tests/test_run_grounding_smoke.py` — 覆盖首帧拒绝、4步保持、第5步中止、重新定位重置和批次判定。
+- Modify: `src/vla_project/vlm/grounding_smoke/targeting.py` — 新增从已补偿世界目标生成安全动作的纯计算入口。
+- Modify: `tests/vlm/grounding_smoke/test_targeting.py` — 验证 held 目标会随当前末端位置重新计算且不接收真值。
+- Modify: `src/vla_project/vlm/grounding_smoke/runner.py` — 维护目标缓存、目标年龄、fresh/held 状态机和摘要字段。
+- Modify: `tests/vlm/grounding_smoke/test_runner.py` — 覆盖首帧拒绝、4步保持、第5步中止、重新定位重置和批次判定。
 - Modify after real run: `README.md`、`docs/worklog/WORKLOG.md`、`docs/planning/vla_robotic_study_plan.md`、`docs/debugging/BUGLOG.md` — 写入真实 smoke 指标，不能预写成功。
 
 ---
@@ -87,8 +87,8 @@ git commit -m "test: freeze grounding target hold limit"
 ### Task 2: 抽出缓存世界目标的安全动作策略
 
 **Files:**
-- Modify: `tests/test_grounding_targeting.py`
-- Modify: `grounding_targeting.py`
+- Modify: `tests/vlm/grounding_smoke/test_targeting.py`
+- Modify: `src/vla_project/vlm/grounding_smoke/targeting.py`
 
 **Interfaces:**
 - Produces: `compute_action_from_world_target(target_world, ee_pos, safety_state, settings, target_jump_xy=0.0) -> dict`。
@@ -96,10 +96,10 @@ git commit -m "test: freeze grounding target hold limit"
 
 - [ ] **Step 1: 写 held 目标失败测试**
 
-在 `tests/test_grounding_targeting.py` 导入新函数并加入：
+在 `tests/vlm/grounding_smoke/test_targeting.py` 导入新函数并加入：
 
 ```python
-from grounding_targeting import compute_action_from_world_target
+from vla_project.vlm.grounding_smoke.targeting import compute_action_from_world_target
 
 
 def test_held_target_recomputes_direction_from_current_ee(self):
@@ -139,7 +139,7 @@ Expected: ERROR，`compute_action_from_world_target` 尚不存在。
 
 - [ ] **Step 3: 实现最小纯计算入口**
 
-在 `grounding_targeting.py` 中加入：
+在 `src/vla_project/vlm/grounding_smoke/targeting.py` 中加入：
 
 ```python
 def compute_action_from_world_target(
@@ -213,7 +213,7 @@ Expected: 所有既有 fresh 行为和新增 held 行为全部 PASS。
 - [ ] **Step 5: 提交策略拆分**
 
 ```bash
-git add grounding_targeting.py tests/test_grounding_targeting.py
+git add src/vla_project/vlm/grounding_smoke/targeting.py tests/vlm/grounding_smoke/test_targeting.py
 git commit -m "feat: compute actions from held VLM targets"
 ```
 
@@ -222,8 +222,8 @@ git commit -m "feat: compute actions from held VLM targets"
 ### Task 3: 实现 fresh/held 目标状态机
 
 **Files:**
-- Modify: `tests/test_run_grounding_smoke.py`
-- Modify: `run_grounding_smoke.py`
+- Modify: `tests/vlm/grounding_smoke/test_runner.py`
+- Modify: `src/vla_project/vlm/grounding_smoke/runner.py`
 
 **Interfaces:**
 - Consumes: `compute_action_from_world_target(...) -> dict`。
@@ -488,7 +488,7 @@ Expected: 策略和闭环测试全部 PASS，held 测试中的 VLM 调用数保�
 - [ ] **Step 8: 提交状态机**
 
 ```bash
-git add run_grounding_smoke.py tests/test_run_grounding_smoke.py
+git add src/vla_project/vlm/grounding_smoke/runner.py tests/vlm/grounding_smoke/test_runner.py
 git commit -m "feat: hold recent VLM target through occlusion"
 ```
 
@@ -497,8 +497,8 @@ git commit -m "feat: hold recent VLM target through occlusion"
 ### Task 4: 更新批次通过条件与证据契约
 
 **Files:**
-- Modify: `tests/test_run_grounding_smoke.py`
-- Modify: `run_grounding_smoke.py`
+- Modify: `tests/vlm/grounding_smoke/test_runner.py`
+- Modify: `src/vla_project/vlm/grounding_smoke/runner.py`
 
 **Interfaces:**
 - Modifies: `aggregate_smoke_summaries(summaries, smoke_config) -> dict`。
@@ -578,7 +578,7 @@ Expected: 全部 PASS；批次允许受控 held 步骤，但不允许无 fresh �
 - [ ] **Step 5: 提交批次契约**
 
 ```bash
-git add run_grounding_smoke.py tests/test_run_grounding_smoke.py
+git add src/vla_project/vlm/grounding_smoke/runner.py tests/vlm/grounding_smoke/test_runner.py
 git commit -m "test: define target hold smoke acceptance"
 ```
 
@@ -587,7 +587,7 @@ git commit -m "test: define target hold smoke acceptance"
 ### Task 5: 全量验证、真实 smoke 与文档收尾
 
 **Files:**
-- Generate: `vlm_smoke_runs/run_<timestamp>/`
+- Generate: `outputs/vlm_evaluations/grounding_world_smoke/run_<timestamp>/`
 - Modify after evidence: `README.md`
 - Modify after evidence: `docs/worklog/WORKLOG.md`
 - Modify after evidence: `docs/planning/vla_robotic_study_plan.md`
@@ -617,15 +617,15 @@ Expected: 输出 `ready cases=` 和三个冻结 seed；此步骤 API 调用为0�
 - [ ] **Step 3: 执行三个真实在线 smoke cases**
 
 ```bash
-conda run -n vla_env python run_grounding_smoke.py
+conda run -n vla_env vla-run-grounding-smoke
 ```
 
-Expected: 创建一个全新的 `vlm_smoke_runs/run_<timestamp>/`，无论通过或失败都保留完整中止前证据。
+Expected: 创建一个全新的 `outputs/vlm_evaluations/grounding_world_smoke/run_<timestamp>/`，无论通过或失败都保留完整中止前证据。
 
 - [ ] **Step 4: 审计真值隔离和状态机证据**
 
 ```bash
-conda run -n vla_env python -c "import inspect,json,yaml; from pathlib import Path; from grounding_targeting import compute_action_from_world_target,compute_grounding_action; c=yaml.safe_load(Path('sim_config.yaml').read_text()); root=sorted(Path('vlm_smoke_runs').glob('run_*'))[-1]; s=json.loads((root/'smoke_summary.json').read_text()); traces=[json.loads(x) for p in sorted(root.glob('episode_*/smoke_trace.jsonl')) for x in p.read_text().splitlines() if x.strip()]; assert s['num_episodes']==3; assert s['total_api_calls']<=30; assert all(t.get('decision_source') in (None,'fresh_vlm','held_vlm_target') for t in traces); assert all(not t.get('api_called') for t in traces if t.get('decision_source')=='held_vlm_target'); assert all(n not in inspect.signature(compute_grounding_action).parameters for n in ('block_pos','true_block_pos')); assert all(n not in inspect.signature(compute_action_from_world_target).parameters for n in ('block_pos','true_block_pos')); print(json.dumps(s,ensure_ascii=False,indent=2))"
+conda run -n vla_env python -c "import inspect,json,yaml; from pathlib import Path; from vla_project.vlm.grounding_smoke.targeting import compute_action_from_world_target,compute_grounding_action; c=yaml.safe_load(Path('sim_config.yaml').read_text()); root=sorted(Path('outputs/vlm_evaluations/grounding_world_smoke').glob('run_*'))[-1]; s=json.loads((root/'smoke_summary.json').read_text()); traces=[json.loads(x) for p in sorted(root.glob('episode_*/smoke_trace.jsonl')) for x in p.read_text().splitlines() if x.strip()]; assert s['num_episodes']==3; assert s['total_api_calls']<=30; assert all(t.get('decision_source') in (None,'fresh_vlm','held_vlm_target') for t in traces); assert all(not t.get('api_called') for t in traces if t.get('decision_source')=='held_vlm_target'); assert all(n not in inspect.signature(compute_grounding_action).parameters for n in ('block_pos','true_block_pos')); assert all(n not in inspect.signature(compute_action_from_world_target).parameters for n in ('block_pos','true_block_pos')); print(json.dumps(s,ensure_ascii=False,indent=2))"
 ```
 
 Expected: 结构断言全部通过，并打印真实 success、fresh/held 步数、终止原因和 API 调用数；不得要求 `passed=true` 才保存结果。

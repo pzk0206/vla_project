@@ -90,7 +90,7 @@ Baseline 0 的目标是让整个数据采集流程先能工作。我先关心这
 抽样看红色积木和机械臂都在画面里
 ```
 
-这次判断对应的是当前 `dataset/` 目录和当前 `sim_config.yaml` 的 Baseline 1 配置：
+这次判断对应的是当前 `outputs/dataset/` 目录和当前 `sim_config.yaml` 的 Baseline 1 配置：
 
 ```text
 block_position.y_range = [0.38, 0.5]
@@ -114,7 +114,7 @@ final_distance max    = 0.0300m
 
 ## 6. 阶段三：为什么要做 probe
 
-`stage3_probe.py` 的目的不是继续采训练数据，而是验证在线闭环。
+`src/vla_project/simulation/stage3_probe.py` 的目的不是继续采训练数据，而是验证在线闭环。
 
 我想验证的是：
 
@@ -122,10 +122,10 @@ final_distance max    = 0.0300m
 观察当前状态 -> 判断下一步方向 -> 控制机械臂移动 -> 再观察 -> 再判断
 ```
 
-这和 `control_arm.py` 不一样：
+这和 `src/vla_project/simulation/control_arm.py` 不一样：
 
-- `control_arm.py` 是离线专家数据采集。
-- `stage3_probe.py` 是在线闭环探路。
+- `src/vla_project/simulation/control_arm.py` 是离线专家数据采集。
+- `src/vla_project/simulation/stage3_probe.py` 是在线闭环探路。
 
 我先用启发式规则，而不是一开始就接大模型。原因是如果简单规则都不能让机械臂接近目标，那问题很可能在控制逻辑、坐标映射或仿真参数，而不是模型能力。
 
@@ -181,7 +181,7 @@ probe 每一步都要记录机械臂末端位置和它离目标悬停点的距�
 
 审查旧版 probe 时发现过一个控制路径 bug：heuristic 虽然输出了 `front/right/left/back`，执行分支却直接把完整 `hover_target` 交给 IK。因此旧版 13 步、`1.1567m -> 0.0161m` 的结果只能证明 IK 能接近目标，不能证明方向词真正控制了动作。
 
-修复后 heuristic 和 API 统一经过 `direction -> PyBullet 世界坐标 delta -> 单步 target_pos`。当前有效证据来自重新生成的 `probe_runs/probe_trace.jsonl`：
+修复后 heuristic 和 API 统一经过 `direction -> PyBullet 世界坐标 delta -> 单步 target_pos`。当前有效证据来自重新生成的 `outputs/probe/probe_trace.jsonl`：
 
 ```text
 63 步闭环控制
@@ -214,7 +214,7 @@ API 多模态模型
 
 ## 10. 首批批量评估与失败诊断
 
-在修复单次方向执行后，我新增了 `evaluate_probe.py`，用固定种子 42 连续评估 20 个随机 episode。配置为 `max_control_steps=80`、`sim_steps_per_action=60`、`move_step_xy=0.03`，结果是：
+在修复单次方向执行后，我新增了 `src/vla_project/simulation/evaluate_probe.py`，用固定种子 42 连续评估 20 个随机 episode。配置为 `max_control_steps=80`、`sim_steps_per_action=60`、`move_step_xy=0.03`，结果是：
 
 ```text
 success: 5/20
@@ -248,7 +248,7 @@ move_step_xy = 0.03m
 success_distance = 0.03m
 ```
 
-正式验收结果来自 `probe_eval_runs/run_20260712_221135/`：
+正式验收结果来自 `outputs/probe_evaluations/run_20260712_221135/`：
 
 ```text
 success: 50/50
@@ -320,7 +320,7 @@ Stage 3 probe 稳定化
 - 数据质量：通过 `episode_summary.jsonl` 记录 `termination_reason`、最终距离、最终目标位置，让每条轨迹都能被诊断。
 - 失败分析：遇到 `stuck` 时没有直接放宽成功阈值，而是先拆分失败类型，再根据红块位置和最终距离调整采样范围。
 - 配置驱动：把随机范围、成功阈值、相机参数、采集数量等实验变量放进 `sim_config.yaml`，让实验可复盘。
-- 闭环控制：用 `stage3_probe.py` 验证“观察 -> 决策 -> 控制 -> 再观察”的在线闭环，而不是只停留在离线数据采集。
+- 闭环控制：用 `src/vla_project/simulation/stage3_probe.py` 验证“观察 -> 决策 -> 控制 -> 再观察”的在线闭环，而不是只停留在离线数据采集。
 - 模型接口：先保留 heuristic 作为 sanity check，再准备 VLM 决策替换接口，使 heuristic、API VLM 和未来本地微调模型可以在同一套评估框架下比较。
 - 深度扩展：后续通过 action tokenization 和 LoRA/QLoRA 微调验证，把项目从规则控制推进到真正的 image-instruction-action 学习问题。
 
@@ -348,8 +348,8 @@ API 地址、Key 和模型名称通过环境变量读取，没有写入代码或
 
 为了避免每次改 prompt 都重新运行仿真，我新增了两段离线工具链：
 
-- `collect_vlm_eval_samples.py`：使用固定种子的 heuristic trace 生成图片和标准方向。
-- `evaluate_vlm_decisions.py`：只读取固定图片，调用 VLM，保存逐样本预测并支持断点续跑。
+- `src/vla_project/vlm/collect_vlm_eval_samples.py`：使用固定种子的 heuristic trace 生成图片和标准方向。
+- `src/vla_project/vlm/evaluate_vlm_decisions.py`：只读取固定图片，调用 VLM，保存逐样本预测并支持断点续跑。
 
 当前离线样本共 50 张，每个样本只向模型提供图片和任务指令；`block_pos`、
 `ee_pos` 等仿真真值只用于采集标准答案，不进入模型 prompt。评估指标包括合法
@@ -391,7 +391,7 @@ use_dual_view          = false
 同时避免双面板交叉配对。对应结果目录为：
 
 ```text
-vlm_eval_runs/offline_qwen3_vl_flash_high_topdown_v9/
+outputs/vlm_evaluations/offline_qwen3_vl_flash_high_topdown_v9/
 ```
 
 10 张评估结果：
@@ -434,7 +434,7 @@ v12 连接链结构 prompt：4 张准确率仍为 50%，输出与 v11 完全相�
 潜力的直接方向基线”，后续保留为消融对照，而不是直接放弃。
 
 这说明剩余问题不能靠增加醒目颜色或继续堆叠末端描述解决。为了直接观察模型选中
-的参照物，我新增 `diagnose_vlm_grounding.py`，让 Qwen 分别返回机械臂末端与红块
+的参照物，我新增 `src/vla_project/vlm/diagnose_vlm_grounding.py`，让 Qwen 分别返回机械臂末端与红块
 的归一化框，并由代码绘制诊断图。四张图片均返回合法框，模型基本能找到机械臂
 连接链末梢；真正的问题是接近目标后两个框明显重叠，部分框中心的图像方向与
 PyBullet 世界动作标签不一致。
@@ -501,7 +501,7 @@ right recall：3/3
 front recall：3/3
 back recall：0/3
 平均 API 延迟：约 0.97s
-输出：vlm_eval_runs/offline_qwen3_vl_flash_distance_stratified_v13/
+输出：outputs/vlm_evaluations/offline_qwen3_vl_flash_distance_stratified_v13/
 ```
 
 三个距离得到完全相同的方向模式：`left/back` 都被预测为 `right`，`right/front`
@@ -519,7 +519,7 @@ left：两个预测框的相对中心关系支持 left；直接方向仍错误�
 right：框中心关系支持 right；直接方向正确
 front：框中心关系以向上偏差为主；直接方向正确输出 front
 back：红块框没有稳定覆盖真实红块，框中心关系也不支持 back；直接方向错误
-输出：vlm_eval_runs/grounding_qwen3_vl_flash_distance20_v2/
+输出：outputs/vlm_evaluations/grounding_qwen3_vl_flash_distance20_v2/
 ```
 
 这证明 50% 不是一个单一故障。`left` 是“预测框的相对中心关系已经支持正确方向，
@@ -538,9 +538,9 @@ left/front 等姿态约有 87 个纯红像素，而 back 只有 50 个，约 43%
 224×224 提升到 448×448。使用独立目录保存图片，避免覆盖 v13：
 
 ```text
-样本：vlm_eval_samples_448/
-方向结果：vlm_eval_runs/offline_qwen3_vl_flash_distance20_448_v14/
-画框结果：vlm_eval_runs/grounding_qwen3_vl_flash_distance20_448_v3/
+样本：outputs/vlm_samples/448/
+方向结果：outputs/vlm_evaluations/offline_qwen3_vl_flash_distance20_448_v14/
+画框结果：outputs/vlm_evaluations/grounding_qwen3_vl_flash_distance20_448_v3/
 ```
 
 像素测量显示红块主体从约 `10×9` 增加到 `20×18`；back 的纯红像素从 50 增加
@@ -567,7 +567,7 @@ back：仍错误输出 right
 
 ### 17.1 Ground-then-decide 内部一致性实验
 
-新增 `evaluate_ground_then_decide.py`，要求同一个 API 回复同时包含两个归一化框和
+新增 `src/vla_project/vlm/evaluate_ground_then_decide.py`，要求同一个 API 回复同时包含两个归一化框和
 一个 `screen_*` 方向；代码独立根据框中心主轴计算第二个方向，用于检查模型是否
 遵循自己输出的空间关系。448px 四方向结果：
 
@@ -575,7 +575,7 @@ back：仍错误输出 right
 模型最终方向：3/4
 框中心推导方向：4/4
 模型方向与框中心内部一致：3/4
-输出：vlm_eval_runs/ground_then_decide_qwen3_vl_flash_448_v1/
+输出：outputs/vlm_evaluations/ground_then_decide_qwen3_vl_flash_448_v1/
 ```
 
 left/right/front 三张完全一致且正确。back 回复为：
@@ -612,9 +612,9 @@ VLM 输入。实际可见率为：15 张 left/right/front 全部 `1.0`；back �
 输出目录：
 
 ```text
-样本：vlm_eval_samples_448_multiseed_d020/
-grounding：vlm_eval_runs/grounding_qwen3_vl_flash_distance20_448_multiseed_v4/
-反投影：vlm_eval_runs/grounding_qwen3_vl_flash_distance20_448_multiseed_v4/backprojection/
+样本：outputs/vlm_samples/448_multiseed_d020/
+grounding：outputs/vlm_evaluations/grounding_qwen3_vl_flash_distance20_448_multiseed_v4/
+反投影：outputs/vlm_evaluations/grounding_qwen3_vl_flash_distance20_448_multiseed_v4/backprojection/
 ```
 
 20/20 返回合法框，`num_failed=0`。整体指标：
@@ -665,10 +665,10 @@ correction_y = -0.019467343494422532 m
 输出目录：
 
 ```text
-样本：vlm_eval_samples_448_calibration_validation_d020/
-grounding：vlm_eval_runs/grounding_qwen3_vl_flash_distance20_448_calibration_validation_v1/
-反投影：vlm_eval_runs/grounding_qwen3_vl_flash_distance20_448_calibration_validation_v1/backprojection/
-校准验证：vlm_eval_runs/grounding_qwen3_vl_flash_distance20_448_calibration_validation_v1/calibration_validation/
+样本：outputs/vlm_samples/448_calibration_validation_d020/
+grounding：outputs/vlm_evaluations/grounding_qwen3_vl_flash_distance20_448_calibration_validation_v1/
+反投影：outputs/vlm_evaluations/grounding_qwen3_vl_flash_distance20_448_calibration_validation_v1/backprojection/
+校准验证：outputs/vlm_evaluations/grounding_qwen3_vl_flash_distance20_448_calibration_validation_v1/calibration_validation/
 ```
 
 独立验证指标：
@@ -697,7 +697,7 @@ severe corrected error:             3.27cm（0/1 <=3cm）
 ### 19.1 今日工程收尾与下一阶段约束
 
 本轮不仅生成了实验结论，也把验证过程固化为可重复执行的工程接口：采样器使用显式
-seeds 47–51；`validate_grounding_calibration.py` 负责冻结校准、检查数据集 ID 隔离、
+seeds 47–51；`src/vla_project/vlm/validate_grounding_calibration.py` 负责冻结校准、检查数据集 ID 隔离、
 输出逐样本补偿结果和严格通过判定；新增测试覆盖空 clear、clear 定位失败、超过 3cm、
 校准/验证 ID 重叠和遮挡分组。最终完整测试为 `98/98` 通过，相关代码和四份项目文档
 已通过功能分支快进合并回 `main`。20 张原图、Qwen 标注图、反投影结果和校准验证
@@ -759,3 +759,32 @@ vlm_smoke_screening_runs/run_20260717_231406/candidate_trace.jsonl
 下一步只实现并验证该状态机：先用自动测试证明 fresh/held 切换、4 步边界、日志字段
 和真值隔离，再重新运行三个固定在线 smoke cases。双相机、主动避让和长期遮挡恢复
 仍作为后续独立对照，不在本轮同时加入。
+
+## 21. Python 源码按标准包结构整理（2026-07-18）
+
+为避免根目录同时混放配置、正式代码和维护脚本，源码已统一迁移到标准 `src/`
+布局：仿真与控制放在 `src/vla_project/simulation/`，VLM 评估放在
+`src/vla_project/vlm/`，仓库维护工具放在 `src/vla_project/tools/`；测试继续独立
+放在 `tests/`，并按相同领域镜像分组。
+
+新增 `pyproject.toml` 和 10 个 `vla-*` 命令入口。开发环境执行 `pip install -e .`
+后，可以用 `vla-collect`、`vla-probe`、`vla-evaluate-probe` 等稳定命令运行流程，
+不再依赖根目录 Python 文件名。迁移过程中保持业务逻辑不变，包导入、命令元数据和
+原有行为测试合计 `109/109` 通过。
+
+## 22. Grounding smoke 合入正式包结构（2026-07-19）
+
+将 `feat/grounding-world-smoke` 已有的 targeting、runner 和无 API screening 与主分支
+`src/` 迁移结果合并，正式放入 `src/vla_project/vlm/grounding_smoke/`，测试镜像到
+`tests/vlm/grounding_smoke/`。新增 `vla-run-grounding-smoke` 和
+`vla-screen-grounding-smoke` 两个命令，所有新输出统一进入
+`outputs/vlm_evaluations/`。
+
+本轮没有调用真实 API。新增契约要求校准文件精确匹配 seeds 42–46 的15个固定 ID，
+smoke 专用 API `max_retries=0`，从而保证3个 episode × 10步就是最多30次真实 HTTP
+请求；模型框解析失败记录为 `invalid_box`，与网络/API 的 `api_error` 分开。迁移前旧
+分支基线为143/143通过，迁移及新增契约完成后的全量测试为157/157通过。
+
+动态筛选的0/138结果仍然有效，说明不能直接进入付费 clear-only smoke。下一步按已确认
+设计实现“最近可靠 grounding 目标 + 最多4步保持”，完成 mock 验证后再请求真实实验
+批准。
