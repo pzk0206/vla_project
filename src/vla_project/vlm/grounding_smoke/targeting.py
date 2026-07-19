@@ -69,6 +69,47 @@ def _dominant_direction(dx, dy, stop_distance):
     return "front" if dy > 0 else "back"
 
 
+def compute_action_from_world_target(
+    target_world,
+    ee_pos,
+    safety_state,
+    settings,
+    target_jump_xy=0.0,
+):
+    """使用已校验的 VLM 世界目标和当前末端位置重新计算安全动作。"""
+    corrected = list(target_world)
+    dx = corrected[0] - ee_pos[0]
+    dy = corrected[1] - ee_pos[1]
+    distance = math.hypot(dx, dy)
+    direction = _dominant_direction(dx, dy, settings["stop_distance_xy"])
+
+    previous_distance = safety_state["previous_predicted_distance"]
+    no_progress_count = safety_state["no_progress_count"]
+    if direction != "stop" and previous_distance is not None:
+        improvement = previous_distance - distance
+        no_progress_count = (
+            0
+            if _at_least(improvement, settings["min_progress_xy"])
+            else no_progress_count + 1
+        )
+        if no_progress_count >= settings["no_progress_limit"]:
+            raise SmokeSafetyAbort(
+                "no_progress", f"improvement={improvement}"
+            )
+
+    return {
+        "direction": direction,
+        "corrected_target_world": corrected,
+        "predicted_distance_xy": distance,
+        "target_jump_xy": target_jump_xy,
+        "safety_state": {
+            "previous_target_xy": corrected[:2],
+            "previous_predicted_distance": distance,
+            "no_progress_count": no_progress_count,
+        },
+    }
+
+
 def compute_grounding_action(
     red_block_box,
     image_size,
@@ -114,35 +155,15 @@ def compute_grounding_action(
     if not _at_most(jump, settings["max_target_jump_xy"]):
         raise SmokeSafetyAbort("target_jump", f"jump={jump}")
 
-    dx = corrected[0] - ee_pos[0]
-    dy = corrected[1] - ee_pos[1]
-    distance = math.hypot(dx, dy)
-    direction = _dominant_direction(dx, dy, settings["stop_distance_xy"])
-
-    previous_distance = safety_state["previous_predicted_distance"]
-    no_progress_count = safety_state["no_progress_count"]
-    if direction != "stop" and previous_distance is not None:
-        improvement = previous_distance - distance
-        no_progress_count = (
-            0
-            if _at_least(improvement, settings["min_progress_xy"])
-            else no_progress_count + 1
-        )
-        if no_progress_count >= settings["no_progress_limit"]:
-            raise SmokeSafetyAbort(
-                "no_progress", f"improvement={improvement}"
-            )
-
+    action = compute_action_from_world_target(
+        target_world=corrected,
+        ee_pos=ee_pos,
+        safety_state=safety_state,
+        settings=settings,
+        target_jump_xy=jump,
+    )
     return {
-        "direction": direction,
+        **action,
         "box_center_pixel": list(pixel),
         "raw_target_world": raw_world,
-        "corrected_target_world": corrected,
-        "predicted_distance_xy": distance,
-        "target_jump_xy": jump,
-        "safety_state": {
-            "previous_target_xy": corrected[:2],
-            "previous_predicted_distance": distance,
-            "no_progress_count": no_progress_count,
-        },
     }

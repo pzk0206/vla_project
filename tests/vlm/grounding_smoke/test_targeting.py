@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from vla_project.vlm.grounding_smoke.targeting import (
     SmokeSafetyAbort,
+    compute_action_from_world_target,
     compute_grounding_action,
     load_frozen_calibration,
 )
@@ -84,6 +85,34 @@ class GroundingTargetingTests(unittest.TestCase):
 
     def test_decision_interface_cannot_receive_block_truth(self):
         parameters = inspect.signature(compute_grounding_action).parameters
+
+        self.assertNotIn("block_pos", parameters)
+        self.assertNotIn("true_block_pos", parameters)
+
+    def test_held_target_recomputes_direction_from_current_ee(self):
+        first = compute_action_from_world_target(
+            target_world=[0.10, 0.45, 0.0],
+            ee_pos=[0.00, 0.45, 0.20],
+            safety_state=empty_safety_state(),
+            settings=SETTINGS,
+        )
+        second = compute_action_from_world_target(
+            target_world=[0.10, 0.45, 0.0],
+            ee_pos=[0.09, 0.45, 0.20],
+            safety_state=first["safety_state"],
+            settings=SETTINGS,
+        )
+
+        self.assertEqual(first["direction"], "right")
+        self.assertEqual(second["direction"], "stop")
+        self.assertEqual(
+            second["corrected_target_world"], [0.10, 0.45, 0.0]
+        )
+
+    def test_held_target_interface_cannot_receive_block_truth(self):
+        parameters = inspect.signature(
+            compute_action_from_world_target
+        ).parameters
 
         self.assertNotIn("block_pos", parameters)
         self.assertNotIn("true_block_pos", parameters)
