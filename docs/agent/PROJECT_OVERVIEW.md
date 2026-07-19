@@ -16,8 +16,10 @@
 ## 当前范围
 
 - 已覆盖：PyBullet 仿真、KUKA IK 控制、专家轨迹采集、闭环 probe、批量评估、
-  Qwen 离线方向基线、grounding、相机反投影和独立校准验证。
-- 正在推进：把 clear 场景中验证过的 grounding 世界坐标安全接入小规模在线闭环。
+  Qwen 离线方向基线、grounding、相机反投影、独立校准验证、真值隔离 smoke runner
+  、无 API 动态案例筛选和最多4步的最近可靠目标保持状态机。
+- 正在推进：审查三个固定在线案例的运行边界，并在用户另行批准后决定是否执行小规模
+  付费闭环；当前只有 mock/契约证据，没有真实在线结果。
 - 暂不覆盖：大型 VLA 训练、真实机械臂部署、复杂多物体任务、severe 遮挡恢复和
   正式大规模在线 VLM 评估。
 
@@ -48,13 +50,14 @@ PyBullet 红块真值只能用于离线评分、场景资格检查和受控 smok
 | --- | --- |
 | `src/vla_project/simulation/` | PyBullet 场景、相机、机械臂控制、单次 probe 和批量 probe 评估 |
 | `src/vla_project/vlm/` | VLM 样本、方向评估、grounding 诊断、反投影和校准验证 |
+| `src/vla_project/vlm/grounding_smoke/` | 在线 smoke 的 targeting、安全编排和无 API 动态筛选 |
 | `src/vla_project/tools/` | 仓库生成物迁移等维护工具 |
 | `tests/` | 按领域镜像源码，并保护配置、包元数据、几何、控制和评估契约 |
 | `sim_config.yaml` | 仿真、相机、任务、probe、VLM 和输出路径的统一参数来源 |
 | `outputs/` | 本地生成的图片、trace、预测和实验摘要；默认不提交 Git |
 | `docs/` | 当前知识、学习路线、Bug 证据以及历史设计和实施计划 |
 
-正式源码采用 `src/` 布局，`pyproject.toml` 注册 10 个 `vla-*` 命令。新增文件和
+正式源码采用 `src/` 布局，`pyproject.toml` 注册 12 个 `vla-*` 命令。新增文件和
 测试前查看 [文件路由手册](PROJECT_STRUCTURE.md)，不要在仓库根目录添加正式 Python
 脚本。
 
@@ -72,9 +75,14 @@ PyBullet 红块真值只能用于离线评分、场景资格检查和受控 smok
    seeds 47–51 的 15 个 clear 样本补偿误差 mean/median/max 为
    0.77/0.79/1.46cm，15/15 不超过 3cm。唯一 severe 样本仍为 3.27cm，因此结论
    只适用于固定相机 clear 场景。
-5. 在线 grounding 闭环 smoke test 已有 2026-07-17 设计和计划，但当前仓库没有
-   对应运行模块或真实运行证据；后续实施前必须把旧计划的根目录脚本路径适配到现有
-   `src/vla_project/` 包结构。
+5. 在线 grounding targeting、runner 和无 API screening 已迁入正式子包；动态筛选
+   seeds 55–100 × left/right/front 共138个候选，合格数为0，其中131个因可见率不足、
+   7个因起始姿态误差失败。这证明“全程 clear”不是可用的在线前提，因此选择了
+   短期目标保持，而不是扩大 seed 搜索或直接运行付费 smoke。
+6. 最近可靠目标保持已实现：低可见率时复用已校验的补偿后 VLM 世界坐标，并根据
+   当前末端位置重新计算动作；第1至第4次 held 允许，第5次以
+   `stale_target_limit` 中止。trace 和 summary 区分 fresh/held，完整离线测试为
+   164/164 通过，但这不构成真实 API 或真实在线闭环成功证据。
 
 详细证据与当时的设计边界：
 
@@ -97,7 +105,7 @@ PyBullet 红块真值只能用于离线评分、场景资格检查和受控 smok
 ## 学习路线
 
 当前路线是：可诊断专家数据 -> 稳定 heuristic 闭环 -> VLM 能力边界 -> grounding
-与世界坐标融合 -> clear 场景在线闭环 -> 专家数据规模化 -> action tokenization ->
+与世界坐标融合 -> 遮挡时的短期目标保持 -> 小规模在线闭环 -> 专家数据规模化 -> action tokenization ->
 轻量微调验证。是否进入下一阶段由当前阶段证据决定，不因计划日期自动推进。
 
 ## 关键入口

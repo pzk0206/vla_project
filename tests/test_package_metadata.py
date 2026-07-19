@@ -22,6 +22,10 @@ EXPECTED_SCRIPTS = {
     "vla-migrate-generated-outputs": (
         "vla_project.tools.migrate_generated_outputs:main"
     ),
+    "vla-run-grounding-smoke": "vla_project.vlm.grounding_smoke.runner:main",
+    "vla-screen-grounding-smoke": (
+        "vla_project.vlm.grounding_smoke.screening:main"
+    ),
 }
 
 
@@ -31,6 +35,7 @@ class PackageLayoutTests(unittest.TestCase):
             "vla_project",
             "vla_project.simulation",
             "vla_project.vlm",
+            "vla_project.vlm.grounding_smoke",
             "vla_project.tools",
         ):
             with self.subTest(module_name=module_name):

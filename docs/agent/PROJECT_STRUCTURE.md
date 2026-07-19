@@ -165,7 +165,7 @@ vla_project/
 | 文件 | 作用 | 什么时候修改 |
 | --- | --- | --- |
 | `.gitignore` | 指定不提交的缓存、生成输出和本机配置 | 新增可再生成或仅本机使用的文件类型时 |
-| `pyproject.toml` | 定义 `vla-project` 包、`src/` 布局和 10 个 `vla-*` 命令 | 增加包元数据或命令入口时 |
+| `pyproject.toml` | 定义 `vla-project` 包、`src/` 布局和 12 个 `vla-*` 命令 | 增加包元数据或命令入口时 |
 | `README.md` | 给使用者说明项目目标、安装方法、运行命令和当前阶段 | 使用方式或阶段结论变化时 |
 | `requirements.txt` | 记录 PyBullet、OpenCV、NumPy 等第三方依赖 | 正式代码新增或移除外部依赖时 |
 | `sim_config.yaml` | 保存仿真、相机、采集、probe、VLM 和输出目录参数 | 调整实验变量时，优先改这里而非写死在代码中 |
@@ -192,6 +192,14 @@ vla_project/
 | `evaluate_grounding_backprojection.py` | 把红块框中心反投影到工作平面并离线计算定位误差 |
 | `validate_grounding_calibration.py` | 在独立数据上验证冻结的 grounding XY 偏差补偿 |
 
+#### `vlm/grounding_smoke/`：在线 grounding 冒烟工作流
+
+| 文件 | 职责 |
+| --- | --- |
+| `targeting.py` | 冻结校准、框反投影、补偿、工作区校验和真值隔离动作策略 |
+| `runner.py` | 可注入闭环、安全中止、PyBullet/Qwen 适配、trace、summary 和正式 smoke CLI |
+| `screening.py` | 不调用 VLM 的动态候选轨迹筛选和遮挡证据汇总 |
+
 ### `tools/`：仓库维护
 
 | 文件 | 职责 |
@@ -211,7 +219,8 @@ src/vla_project/tools/x.py       -> tests/tools/test_x.py
 ```
 
 - `tests/test_config_contract.py`：保护 `sim_config.yaml` 的跨模块配置约束和统一输出路径。
-- `tests/test_package_metadata.py`：保护 `src/` 包结构和 10 个控制台命令入口。
+- `tests/test_package_metadata.py`：保护 `src/` 包结构和 12 个控制台命令入口。
+- `tests/vlm/grounding_smoke/`：镜像测试 targeting、runner 和 screening。
 - 新增或修复行为时，应同时新增对应领域测试；不要把测试文件放进 `src/`。
 
 ## 文档目录 `docs/`
@@ -280,6 +289,7 @@ Qwen annotated/evaluation image   -> outputs/vlm_evaluations/<experiment>/
 | 修改相机反投影数学 | `src/vla_project/simulation/camera_geometry.py` |
 | 修改 VLM 样本生成 | `src/vla_project/vlm/collect_vlm_eval_samples.py` |
 | 修改 Qwen 方向或 grounding 评估 | `src/vla_project/vlm/` 中对应评估模块 |
+| 修改在线 grounding smoke 或筛选 | `src/vla_project/vlm/grounding_smoke/` 中对应模块 |
 | 新增维护脚本 | `src/vla_project/tools/`，并在 `tests/tools/` 添加测试 |
 | 记录今天完成了什么 | `docs/worklog/WORKLOG.md` |
 | 记录新 Bug 和根因 | `docs/debugging/BUGLOG.md` |

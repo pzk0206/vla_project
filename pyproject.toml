@@ -18,6 +18,8 @@ vla-ground-then-decide = "vla_project.vlm.evaluate_ground_then_decide:main"
 vla-evaluate-backprojection = "vla_project.vlm.evaluate_grounding_backprojection:main"
 vla-validate-grounding-calibration = "vla_project.vlm.validate_grounding_calibration:main"
 vla-migrate-generated-outputs = "vla_project.tools.migrate_generated_outputs:main"
+vla-run-grounding-smoke = "vla_project.vlm.grounding_smoke.runner:main"
+vla-screen-grounding-smoke = "vla_project.vlm.grounding_smoke.screening:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

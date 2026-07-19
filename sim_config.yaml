@@ -146,3 +146,53 @@ vlm_evaluation:
     eye_offset_random_range: [0.0, 0.0]
     up_vector: [0, 1, 0]
     fov: 45
+
+# 11. Grounding 世界坐标在线闭环小测：只验证 clear 场景，不在运行时重新拟合标定。
+grounding_smoke:
+  output_dir: "outputs/vlm_evaluations/grounding_world_smoke" # 每次运行创建新目录，保留中止前证据。
+  calibration_path: "outputs/vlm_evaluations/grounding_qwen3_vl_flash_distance20_448_calibration_validation_v1/calibration_validation/calibration.json"
+  expected_calibration_samples: 15   # 防止误用其他批次或不完整标定。
+  expected_calibration_sample_ids:
+    - "seed_42_d020_front"
+    - "seed_42_d020_left"
+    - "seed_42_d020_right"
+    - "seed_43_d020_front"
+    - "seed_43_d020_left"
+    - "seed_43_d020_right"
+    - "seed_44_d020_front"
+    - "seed_44_d020_left"
+    - "seed_44_d020_right"
+    - "seed_45_d020_front"
+    - "seed_45_d020_left"
+    - "seed_45_d020_right"
+    - "seed_46_d020_front"
+    - "seed_46_d020_left"
+    - "seed_46_d020_right"
+  expected_correction_x: 0.02492227406480192
+  expected_correction_y: -0.019467343494422532
+  seeds: [52, 53, 54]                # 与拟合 seeds 42-46、验证 seeds 47-51 隔离。
+  start_directions: ["left", "right", "front"]
+  start_offset_xy: 0.10              # 末端从红块相应一侧相距 10cm 起步。
+  max_control_steps: 10              # 每个 episode 最多重新观察和定位 10 次。
+  max_stale_target_steps: 4          # 最多连续复用4步可靠VLM目标，第5步仍不可见则停止。
+  move_step_xy: 0.02                 # 每次只沿主误差轴移动 2cm。
+  hover_z: 0.20                      # 闭环动作使用固定世界坐标悬停高度。
+  stop_distance_xy: 0.02             # X/Y 两轴都在 2cm 内才允许预测 stop。
+  plane_z: 0.0                       # 红块框中心射线与工作平面 z=0 求交。
+  visibility_reference_pixels: 378   # clear 参考红块分割像素数。
+  clear_visibility_threshold: 0.75   # 低于参考值 75% 不进入付费定位。
+  workspace_x: [-0.30, 0.30]         # 补偿后目标必须处于已知安全工作区。
+  workspace_y: [0.30, 0.70]
+  max_target_jump_xy: 0.03           # 相邻预测跳变超过 3cm 立即中止。
+  min_progress_xy: 0.005             # 每步预测距离至少改善 5mm。
+  no_progress_limit: 2               # 连续两次不足 5mm 判为无进展。
+  required_successes: 3              # 固定三个 case 必须全部成功。
+  max_total_api_calls: 30            # 3 episodes × 10 steps 的硬上限。
+  api_max_retries: 0                 # 禁止底层重试把真实 HTTP 请求数推到 30 以上。
+  screening:                         # 正式调用 VLM 前的无 API 动态轨迹筛选。
+    output_dir: "outputs/vlm_evaluations/grounding_world_smoke_screening"
+    seed_range: [55, 100]            # 与既有校准、验证及首轮失败 seeds 隔离。
+    directions: ["left", "right", "front"]
+    num_actions: 4                   # 10cm 起点执行四次 2cm 动作，到达约 2cm。
+    max_pose_error: 0.005            # 起点与每个动作目标最多允许 5mm 误差。
+    max_final_distance_xy: 0.03      # 筛选轨迹最终真实 XY 必须进入 3cm。

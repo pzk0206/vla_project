@@ -714,7 +714,53 @@ API、框解析、反投影、工作区边界或运动趋势检查失败时必�
 证明保护机制工作，不算任务成功。下一次继续设计时，还需要确定每一步是否都重新调用
 Qwen。确定完整设计并审查通过前，不改在线控制代码。
 
-## 20. Python 源码按标准包结构整理（2026-07-18）
+## 20. Grounding 闭环前置筛选与遮挡恢复决策（2026-07-17 至 2026-07-18）
+
+闭环 smoke runner、真值隔离动作策略和无 API 动态筛选已经在
+`feat/grounding-world-smoke` worktree 中实现。为了先验证 clear-only 闭环，我曾要求
+候选轨迹从约 10cm 起点到约 2cm 终点的五个观察点全部满足红块可见率 `>=0.75`，并
+在 seeds 55–100 的 left/right/front 三个方向上执行确定性筛选。
+
+真实筛选结果为：
+
+```text
+候选总数：138
+合格案例：0
+visibility_below_threshold：131
+start_pose_error：7
+筛选结论：passed=false
+```
+
+证据保存在：
+
+```text
+vlm_smoke_screening_runs/run_20260717_231406/screening_summary.json
+vlm_smoke_screening_runs/run_20260717_231406/candidate_trace.jsonl
+```
+
+轨迹位置误差大多约为毫米级，主导失败不是机械臂没有按计划移动，而是末端靠近红块后
+从固定正俯视相机方向遮挡目标。因此，继续扩大 seed 范围寻找“全程无遮挡”案例会把
+系统性遮挡藏起来，不能作为当前主路线。
+
+本轮最终选择“最近可靠目标坐标 + 最大失效步数”，不选择“重复上一动作方向”：
+
+```text
+清晰且定位有效：VLM 框 -> 反投影 -> 冻结补偿 -> 更新目标缓存
+短暂不可见：缓存的 VLM 目标坐标 - 当前末端坐标 -> 重新计算本步动作
+连续保持上限：4 步
+第 5 次仍不可见：stale_target_limit，停止且不再执行动作
+```
+
+这个机制保存的是 VLM 曾经产生的目标估计，不是 PyBullet 红块真值，也不是旧动作。
+每一步仍根据 `getLinkState` 得到的当前末端位置重新判断主误差轴和 `stop`。清晰画面下
+出现 API、无效框、反投影、工作区、目标跳变、无进展或 IK 错误时仍按原原因中止，
+不能用缓存目标掩盖其他故障。
+
+下一步只实现并验证该状态机：先用自动测试证明 fresh/held 切换、4 步边界、日志字段
+和真值隔离，再重新运行三个固定在线 smoke cases。双相机、主动避让和长期遮挡恢复
+仍作为后续独立对照，不在本轮同时加入。
+
+## 21. Python 源码按标准包结构整理（2026-07-18）
 
 为避免根目录同时混放配置、正式代码和维护脚本，源码已统一迁移到标准 `src/`
 布局：仿真与控制放在 `src/vla_project/simulation/`，VLM 评估放在
@@ -725,3 +771,47 @@ Qwen。确定完整设计并审查通过前，不改在线控制代码。
 后，可以用 `vla-collect`、`vla-probe`、`vla-evaluate-probe` 等稳定命令运行流程，
 不再依赖根目录 Python 文件名。迁移过程中保持业务逻辑不变，包导入、命令元数据和
 原有行为测试合计 `109/109` 通过。
+
+## 22. Grounding smoke 合入正式包结构（2026-07-19）
+
+将 `feat/grounding-world-smoke` 已有的 targeting、runner 和无 API screening 与主分支
+`src/` 迁移结果合并，正式放入 `src/vla_project/vlm/grounding_smoke/`，测试镜像到
+`tests/vlm/grounding_smoke/`。新增 `vla-run-grounding-smoke` 和
+`vla-screen-grounding-smoke` 两个命令，所有新输出统一进入
+`outputs/vlm_evaluations/`。
+
+本轮没有调用真实 API。新增契约要求校准文件精确匹配 seeds 42–46 的15个固定 ID，
+smoke 专用 API `max_retries=0`，从而保证3个 episode × 10步就是最多30次真实 HTTP
+请求；模型框解析失败记录为 `invalid_box`，与网络/API 的 `api_error` 分开。迁移前旧
+分支基线为143/143通过，迁移及新增契约完成后的全量测试为157/157通过。
+
+动态筛选的0/138结果仍然有效，说明不能直接进入付费 clear-only smoke。下一步按已确认
+设计实现“最近可靠 grounding 目标 + 最多4步保持”，完成 mock 验证后再请求真实实验
+批准。
+
+## 23. 最近可靠 Grounding 目标保持状态机（2026-07-19）
+
+本轮按既有设计以 TDD 实现短时遮挡恢复，没有调用真实 API。`sim_config.yaml` 冻结
+`max_stale_target_steps=4`；`targeting.py` 抽出“已校验世界目标 + 当前末端位置 ->
+安全动作”的纯计算入口，fresh 与 held 共用同一方向、停止距离和无进展规则。缓存只
+保存已通过反投影、冻结补偿、工作区和目标跳变检查的 VLM 世界坐标，不保存旧动作，
+也不读取 PyBullet 红块真值。
+
+runner 现在维护最近可靠目标和连续失效年龄。首帧低可见且没有缓存时仍以
+`visibility_out_of_scope` 中止；第1至第4次低可见步骤不调用 VLM，而是使用当前
+`ee_pos` 重新计算动作；第5次尝试以 `stale_target_limit` 中止且不执行动作。新的
+fresh 定位会更新缓存并把年龄重置为0。trace 和 episode summary 增加
+`decision_source`、`target_age_steps`、`used_target_hold`、`api_called`、fresh/held
+步数、最大目标年龄和是否从遮挡恢复等证据字段。
+
+批次通过条件不再要求 `all_clear=true`，改为三个固定案例全部成功、每个至少一次
+fresh VLM 定位、目标年龄不超过4且总 API 调用不超过30。新增测试按 RED->GREEN
+验证首帧拒绝、缓存复用、4步边界、第5步停止、重新定位重置、真值隔离和批次汇总；
+独立代码审查发现 held 纯计算路径的未知异常曾被误记为 `backprojection_error`。新增
+回归测试先复现错误分类，再改为 `held_target_error`，避免真实证据把缓存状态或配置
+问题错误归因到相机反投影。全量自动测试因此更新为164/164通过；`compileall`、
+`git diff --check` 和动作接口真值隔离审计通过。
+
+这些结果只证明离线状态机和证据契约满足设计，不证明 Qwen 在线定位或 PyBullet 闭环
+成功。下一步只审查三个固定案例、冻结校准和请求上限；真实付费 smoke 必须由用户再次
+明确批准。
