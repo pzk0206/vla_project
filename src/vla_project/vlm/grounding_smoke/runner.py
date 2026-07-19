@@ -516,6 +516,68 @@ def _build_camera_config(config):
     return camera_config
 
 
+def preflight_smoke_case(config, smoke_config, case):
+    """无 API 地验证单个案例的起点与首帧可见率。"""
+    random.seed(case["seed"])
+    connect_physics("DIRECT")
+    try:
+        _, robot_id = setup_world(config)
+        block_id = load_block(config["task"])
+        settle_object(config, config["task"]["initial_settle_steps"])
+        initial_block_pos = list(get_object_position(block_id))
+        start_positions = build_balanced_ee_positions(
+            initial_block_pos,
+            smoke_config["hover_z"] - initial_block_pos[2],
+            smoke_config["start_offset_xy"],
+        )
+        requested_start = start_positions[case["start_direction"]]
+        actual_start = reset_robot_to_target(
+            robot_id,
+            config["robot"],
+            requested_start,
+            tolerance=config["vlm_evaluation"][
+                "balanced_pose_tolerance"
+            ],
+            max_iterations=config["vlm_evaluation"][
+                "balanced_pose_ik_iterations"
+            ],
+        )
+        start_error = math.dist(actual_start, requested_start)
+        camera_config = _build_camera_config(config)
+        camera_eye = sample_camera_eye(camera_config)
+        _, segmentation = capture_rgb_and_segmentation(
+            camera_config,
+            camera_eye,
+        )
+        visibility = compute_visibility(
+            segmentation,
+            block_id,
+            smoke_config["visibility_reference_pixels"],
+        )
+        rejection_reason = None
+        if start_error > config["vlm_evaluation"][
+            "balanced_pose_tolerance"
+        ]:
+            rejection_reason = "start_pose_error"
+        elif (
+            visibility["block_visibility_ratio"]
+            < smoke_config["clear_visibility_threshold"]
+        ):
+            rejection_reason = "visibility_below_threshold"
+        return {
+            **case,
+            "qualified": rejection_reason is None,
+            "rejection_reason": rejection_reason,
+            "requested_start_ee_pos": list(requested_start),
+            "actual_start_ee_pos": list(actual_start),
+            "start_pose_error": start_error,
+            **visibility,
+            "camera_eye": list(camera_eye),
+        }
+    finally:
+        p.disconnect()
+
+
 def _build_episode_dependencies(
     config,
     smoke_config,

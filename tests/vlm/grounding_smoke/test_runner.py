@@ -22,6 +22,7 @@ from vla_project.vlm.grounding_smoke.runner import (
     build_smoke_cases,
     compute_visibility,
     make_run_dir,
+    preflight_smoke_case,
     run_control_loop,
     run_smoke_batch,
 )
@@ -461,6 +462,128 @@ class SmokeLoopTests(unittest.TestCase):
 
 
 class SmokeBatchContractTests(unittest.TestCase):
+    def make_preflight_config(self):
+        return {
+            "robot": {"ee_link_index": 6},
+            "task": {"initial_settle_steps": 1},
+            "camera": {"workspace_center": [0.0, 0.4, 0.0]},
+            "vlm_evaluation": {
+                "balanced_pose_tolerance": 0.005,
+                "balanced_pose_ik_iterations": 20,
+                "camera_override": {
+                    "image_width": 448,
+                    "image_height": 448,
+                },
+            },
+            "grounding_smoke": {
+                "hover_z": 0.20,
+                "start_offset_xy": 0.10,
+                "visibility_reference_pixels": 4,
+                "clear_visibility_threshold": 0.75,
+            },
+        }
+
+    def run_preflight(self, actual_start, segmentation):
+        config = self.make_preflight_config()
+        requested_start = [0.1, 0.4, 0.2]
+        with (
+            patch("vla_project.vlm.grounding_smoke.runner.connect_physics"),
+            patch(
+                "vla_project.vlm.grounding_smoke.runner.setup_world",
+                return_value=(1, 10),
+            ),
+            patch(
+                "vla_project.vlm.grounding_smoke.runner.load_block",
+                return_value=20,
+            ),
+            patch("vla_project.vlm.grounding_smoke.runner.settle_object"),
+            patch(
+                "vla_project.vlm.grounding_smoke.runner.get_object_position",
+                return_value=[0.0, 0.0, 0.05],
+            ),
+            patch(
+                "vla_project.vlm.grounding_smoke.runner.build_balanced_ee_positions",
+                return_value={"left": requested_start},
+            ),
+            patch(
+                "vla_project.vlm.grounding_smoke.runner.reset_robot_to_target",
+                return_value=actual_start,
+            ),
+            patch(
+                "vla_project.vlm.grounding_smoke.runner.sample_camera_eye",
+                return_value=[0.0, 0.4, 3.0],
+            ),
+            patch(
+                "vla_project.vlm.grounding_smoke.runner.capture_rgb_and_segmentation",
+                return_value=(
+                    np.zeros((2, 2, 3), dtype=np.uint8),
+                    np.asarray(segmentation, dtype=np.int64),
+                ),
+            ),
+            patch(
+                "vla_project.vlm.grounding_smoke.runner.p.disconnect"
+            ) as disconnect,
+        ):
+            result = preflight_smoke_case(
+                config,
+                config["grounding_smoke"],
+                CASE,
+            )
+        disconnect.assert_called_once_with()
+        return result
+
+    def test_preflight_records_visibility_even_when_start_pose_fails(self):
+        result = self.run_preflight(
+            [0.106, 0.4, 0.2],
+            [[20, 20], [20, 20]],
+        )
+        self.assertFalse(result["qualified"])
+        self.assertEqual(result["rejection_reason"], "start_pose_error")
+        self.assertAlmostEqual(result["start_pose_error"], 0.006)
+        self.assertEqual(result["block_visibility_ratio"], 1.0)
+
+    def test_preflight_rejects_low_initial_visibility(self):
+        result = self.run_preflight(
+            [0.1, 0.4, 0.2],
+            [[20, 20], [0, 0]],
+        )
+        self.assertFalse(result["qualified"])
+        self.assertEqual(
+            result["rejection_reason"],
+            "visibility_below_threshold",
+        )
+        self.assertEqual(result["block_visibility_ratio"], 0.5)
+
+    def test_preflight_accepts_equal_pose_and_visibility_boundaries(self):
+        result = self.run_preflight(
+            [0.105, 0.4, 0.2],
+            [[20, 20], [20, 0]],
+        )
+        self.assertTrue(result["qualified"])
+        self.assertIsNone(result["rejection_reason"])
+        self.assertAlmostEqual(result["start_pose_error"], 0.005)
+        self.assertEqual(result["block_visibility_ratio"], 0.75)
+
+    def test_preflight_disconnects_when_setup_raises(self):
+        config = self.make_preflight_config()
+        with (
+            patch("vla_project.vlm.grounding_smoke.runner.connect_physics"),
+            patch(
+                "vla_project.vlm.grounding_smoke.runner.setup_world",
+                side_effect=RuntimeError("setup failed"),
+            ),
+            patch(
+                "vla_project.vlm.grounding_smoke.runner.p.disconnect"
+            ) as disconnect,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "setup failed"):
+                preflight_smoke_case(
+                    config,
+                    config["grounding_smoke"],
+                    CASE,
+                )
+        disconnect.assert_called_once_with()
+
     def test_grounding_dependency_disables_retries_without_mutating_probe_config(self):
         config = {
             "robot": {"ee_link_index": 6},
