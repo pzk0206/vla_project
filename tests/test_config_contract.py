@@ -87,9 +87,9 @@ class ConfigContractTests(unittest.TestCase):
         self.assertEqual(
             screening["directions"], ["left", "right", "front"]
         )
-        self.assertEqual(screening["num_actions"], 4)
         self.assertEqual(screening["max_pose_error"], 0.005)
-        self.assertEqual(screening["max_final_distance_xy"], 0.03)
+        self.assertNotIn("num_actions", screening)
+        self.assertNotIn("max_final_distance_xy", screening)
 
     def test_vlm_evaluation_config_is_valid(self):
         """离线采样与在线评估必须使用非空目录和正数 episode 上限。"""

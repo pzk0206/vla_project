@@ -18,109 +18,70 @@ from vla_project.vlm.grounding_smoke.screening import (
 
 
 SETTINGS = {
-    "num_actions": 4,
     "clear_visibility_threshold": 0.75,
     "max_pose_error": 0.005,
-    "max_final_distance_xy": 0.03,
 }
 
 
-def valid_steps():
-    """返回五个满足 clear、可达和最终距离要求的观察点。"""
-    return [
-        {
-            "observation_step": step,
-            "block_visibility_ratio": 0.80,
-            "target_error_3d": 0.004,
-            "true_distance_xy": distance,
-        }
-        for step, distance in enumerate((0.10, 0.08, 0.06, 0.04, 0.02))
-    ]
+def valid_observation():
+    return {
+        "target_error_3d": 0.004,
+        "block_visibility_ratio": 0.80,
+    }
 
 
 class CandidateClassificationTests(unittest.TestCase):
-    def test_five_valid_observations_qualify(self):
-        result = classify_candidate(valid_steps(), SETTINGS)
+    def test_initial_observation_qualifies_at_inclusive_boundaries(self):
+        observation = valid_observation()
+        observation["target_error_3d"] = 0.005
+        observation["block_visibility_ratio"] = 0.75
+
+        result = classify_candidate(observation, SETTINGS)
 
         self.assertTrue(result["qualified"])
         self.assertEqual(result["reason"], "qualified")
 
-    def test_visibility_equal_to_threshold_is_allowed(self):
-        rows = valid_steps()
-        rows[2]["block_visibility_ratio"] = 0.75
+    def test_start_pose_error_strictly_over_limit_is_rejected(self):
+        observation = valid_observation()
+        observation["target_error_3d"] = 0.005001
 
-        self.assertTrue(classify_candidate(rows, SETTINGS)["qualified"])
+        result = classify_candidate(observation, SETTINGS)
 
-    def test_visibility_below_threshold_is_rejected(self):
-        rows = valid_steps()
-        rows[2]["block_visibility_ratio"] = 0.749999
+        self.assertFalse(result["qualified"])
+        self.assertEqual(result["reason"], "start_pose_error")
 
-        self.assertEqual(
-            classify_candidate(rows, SETTINGS)["reason"],
-            "visibility_below_threshold",
-        )
+    def test_visibility_strictly_below_threshold_is_rejected(self):
+        observation = valid_observation()
+        observation["block_visibility_ratio"] = 0.749999
 
-    def test_start_pose_error_has_specific_reason(self):
-        rows = valid_steps()
-        rows[0]["target_error_3d"] = 0.005001
+        result = classify_candidate(observation, SETTINGS)
 
-        self.assertEqual(
-            classify_candidate(rows, SETTINGS)["reason"],
-            "start_pose_error",
-        )
+        self.assertFalse(result["qualified"])
+        self.assertEqual(result["reason"], "visibility_below_threshold")
 
-    def test_motion_pose_error_has_specific_reason(self):
-        rows = valid_steps()
-        rows[1]["target_error_3d"] = 0.005001
+    def test_start_pose_reason_precedes_visibility_reason(self):
+        observation = {
+            "target_error_3d": 0.006,
+            "block_visibility_ratio": 0.50,
+        }
 
-        self.assertEqual(
-            classify_candidate(rows, SETTINGS)["reason"],
-            "motion_target_error",
-        )
+        result = classify_candidate(observation, SETTINGS)
 
-    def test_pose_error_equal_to_limit_is_allowed(self):
-        rows = valid_steps()
-        rows[0]["target_error_3d"] = 0.005
-        rows[3]["target_error_3d"] = 0.005
+        self.assertEqual(result["reason"], "start_pose_error")
 
-        self.assertTrue(classify_candidate(rows, SETTINGS)["qualified"])
-
-    def test_final_distance_over_three_centimeters_is_rejected(self):
-        rows = valid_steps()
-        rows[-1]["true_distance_xy"] = 0.030001
-
-        self.assertEqual(
-            classify_candidate(rows, SETTINGS)["reason"],
-            "final_distance_error",
-        )
-
-    def test_final_distance_equal_to_limit_is_allowed(self):
-        rows = valid_steps()
-        rows[-1]["true_distance_xy"] = 0.03
-
-        self.assertTrue(classify_candidate(rows, SETTINGS)["qualified"])
-
-    def test_exception_is_rejected(self):
-        result = classify_candidate([], SETTINGS, error="boom")
+    def test_exception_is_rejected_with_evidence(self):
+        result = classify_candidate(None, SETTINGS, error="boom")
 
         self.assertFalse(result["qualified"])
         self.assertEqual(result["reason"], "candidate_error")
         self.assertEqual(result["error"], "boom")
 
-    def test_incomplete_trace_is_rejected(self):
-        result = classify_candidate(valid_steps()[:-1], SETTINGS)
+    def test_missing_observation_is_candidate_error(self):
+        result = classify_candidate(None, SETTINGS)
 
         self.assertFalse(result["qualified"])
-        self.assertEqual(result["reason"], "incomplete_trace")
-
-    def test_early_explicit_failure_precedes_incomplete_trace(self):
-        rows = valid_steps()[:1]
-        rows[0]["block_visibility_ratio"] = 0.70
-
-        self.assertEqual(
-            classify_candidate(rows, SETTINGS)["reason"],
-            "visibility_below_threshold",
-        )
+        self.assertEqual(result["reason"], "candidate_error")
+        self.assertEqual(result["error"], "missing_initial_observation")
 
 
 class SelectionTests(unittest.TestCase):
@@ -193,56 +154,100 @@ def screening_config(output_dir):
                 "output_dir": str(output_dir),
                 "seed_range": [55, 100],
                 "directions": ["left", "right", "front"],
-                "num_actions": 4,
                 "max_pose_error": 0.005,
-                "max_final_distance_xy": 0.03,
             },
         },
     }
 
 
 class ScreeningRunnerTests(unittest.TestCase):
-    def test_candidate_uses_four_real_control_steps_and_five_observations(self):
+    def test_candidate_uses_only_the_initial_observation(self):
         image = np.zeros((10, 10, 3), dtype=np.uint8)
         segmentation = np.full((20, 20), 20, dtype=np.int64)
-        requested_targets = [
-            [0.08, 0.4, 0.2],
-            [0.06, 0.4, 0.2],
-            [0.04, 0.4, 0.2],
-            [0.02, 0.4, 0.2],
-        ]
         with tempfile.TemporaryDirectory() as temp_dir:
             config = screening_config(temp_dir)
             candidate_dir = Path(temp_dir) / "seed_055_left"
             with (
-                patch("vla_project.vlm.grounding_smoke.screening.connect_physics"),
-                patch("vla_project.vlm.grounding_smoke.screening.setup_world", return_value=(1, 10)),
-                patch("vla_project.vlm.grounding_smoke.screening.load_block", return_value=20),
-                patch("vla_project.vlm.grounding_smoke.screening.settle_object"),
-                patch("vla_project.vlm.grounding_smoke.screening.get_object_position", return_value=[0.0, 0.4, 0.05]),
-                patch("vla_project.vlm.grounding_smoke.screening.build_balanced_ee_positions", return_value={"left": [0.1, 0.4, 0.2]}),
-                patch("vla_project.vlm.grounding_smoke.screening.reset_robot_to_target", return_value=[0.1, 0.4, 0.2]),
-                patch("vla_project.vlm.grounding_smoke.screening.sample_camera_eye", return_value=[0.0, 0.4, 3.0]),
-                patch("vla_project.vlm.grounding_smoke.screening.capture_rgb_and_segmentation", return_value=(image, segmentation)),
-                patch("vla_project.vlm.grounding_smoke.screening.cv2.imwrite", return_value=True),
-                patch("vla_project.vlm.grounding_smoke.screening.direction_to_target", side_effect=requested_targets) as direction_to_target,
-                patch("vla_project.vlm.grounding_smoke.screening.calculate_target_joints", return_value=[0.0] * 7),
-                patch("vla_project.vlm.grounding_smoke.screening.apply_joint_targets"),
-                patch("vla_project.vlm.grounding_smoke.screening.get_link_position", side_effect=requested_targets),
-                patch("vla_project.vlm.grounding_smoke.screening.p.disconnect") as disconnect,
+                patch(
+                    "vla_project.vlm.grounding_smoke.screening.connect_physics"
+                ),
+                patch(
+                    "vla_project.vlm.grounding_smoke.screening.setup_world",
+                    return_value=(1, 10),
+                ),
+                patch(
+                    "vla_project.vlm.grounding_smoke.screening.load_block",
+                    return_value=20,
+                ),
+                patch(
+                    "vla_project.vlm.grounding_smoke.screening.settle_object"
+                ),
+                patch(
+                    "vla_project.vlm.grounding_smoke.screening.get_object_position",
+                    return_value=[0.0, 0.4, 0.05],
+                ),
+                patch(
+                    "vla_project.vlm.grounding_smoke.screening.build_balanced_ee_positions",
+                    return_value={"left": [0.1, 0.4, 0.2]},
+                ),
+                patch(
+                    "vla_project.vlm.grounding_smoke.screening.reset_robot_to_target",
+                    return_value=[0.1, 0.4, 0.2],
+                ),
+                patch(
+                    "vla_project.vlm.grounding_smoke.screening.sample_camera_eye",
+                    return_value=[0.0, 0.4, 3.0],
+                ),
+                patch(
+                    "vla_project.vlm.grounding_smoke.screening.capture_rgb_and_segmentation",
+                    return_value=(image, segmentation),
+                ) as capture,
+                patch(
+                    "vla_project.vlm.grounding_smoke.screening.cv2.imwrite",
+                    return_value=True,
+                ),
+                patch(
+                    "vla_project.vlm.grounding_smoke.screening.p.disconnect"
+                ) as disconnect,
             ):
                 result = run_candidate(config, 55, "left", candidate_dir)
 
         self.assertTrue(result["qualified"])
-        self.assertEqual(len(result["steps"]), 5)
-        self.assertEqual(direction_to_target.call_count, 4)
-        self.assertTrue(
-            all(call.args[0] == "left" for call in direction_to_target.call_args_list)
-        )
+        self.assertEqual(result["reason"], "qualified")
+        self.assertEqual(result["seed"], 55)
+        self.assertEqual(result["direction"], "left")
+        self.assertEqual(result["target_error_3d"], 0.0)
+        self.assertEqual(result["block_visibility_ratio"], 1.0)
+        self.assertTrue(result["image_path"].endswith("step_00.jpg"))
+        capture.assert_called_once()
         disconnect.assert_called_once()
         self.assertNotIn(
-            "call_openai_compatible_api", vla_project.vlm.grounding_smoke.screening.__dict__
+            "call_openai_compatible_api",
+            vla_project.vlm.grounding_smoke.screening.__dict__,
         )
+
+    def test_candidate_error_is_recorded_and_physics_is_released(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = screening_config(temp_dir)
+            candidate_dir = Path(temp_dir) / "seed_055_left"
+            with (
+                patch(
+                    "vla_project.vlm.grounding_smoke.screening.connect_physics"
+                ),
+                patch(
+                    "vla_project.vlm.grounding_smoke.screening.setup_world",
+                    side_effect=RuntimeError("setup failed"),
+                ),
+                patch(
+                    "vla_project.vlm.grounding_smoke.screening.p.disconnect"
+                ) as disconnect,
+            ):
+                result = run_candidate(config, 55, "left", candidate_dir)
+
+        self.assertFalse(result["qualified"])
+        self.assertEqual(result["reason"], "candidate_error")
+        self.assertIn("setup failed", result["error"])
+        disconnect.assert_called_once()
 
     def test_screening_evaluates_full_cartesian_product_and_writes_summary(self):
         def fake_candidate(config, seed, direction, candidate_dir):
@@ -290,6 +295,18 @@ class ScreeningRunnerTests(unittest.TestCase):
                 for row in summary["selected_cases"]
             ],
             [(55, "left"), (56, "right"), (57, "front")],
+        )
+        self.assertEqual(
+            summary["selection_rule"],
+            {
+                "seed_range": [55, 100],
+                "directions": ["left", "right", "front"],
+                "max_pose_error": 0.005,
+                "clear_visibility_threshold": 0.75,
+                "observation_scope": "initial_only",
+                "distinct_seeds": True,
+                "selection": "smallest_seed_in_direction_order",
+            },
         )
 
 

@@ -19,11 +19,8 @@ from vla_project.vlm.collect_vlm_eval_samples import (
 )
 from vla_project.simulation.control_arm import (
     CONFIG_PATH,
-    apply_joint_targets,
-    calculate_target_joints,
     capture_rgb_and_segmentation,
     connect_physics,
-    get_link_position,
     get_object_position,
     load_block,
     load_config,
@@ -31,42 +28,32 @@ from vla_project.simulation.control_arm import (
     settle_object,
     setup_world,
 )
-from vla_project.simulation.stage3_probe import direction_to_target
 
 
-def classify_candidate(step_rows, settings, error=None):
-    """按 clear、位置误差和最终距离对一条候选轨迹分类。"""
-    rows = list(step_rows)
+def classify_candidate(observation, settings, error=None):
+    """按起点姿态和首帧可见率分类一个候选。"""
     if error is not None:
         return {
             "qualified": False,
             "reason": "candidate_error",
             "error": error,
         }
-
-    for row in rows:
-        if (
-            row["block_visibility_ratio"]
-            < settings["clear_visibility_threshold"]
-        ):
-            return {
-                "qualified": False,
-                "reason": "visibility_below_threshold",
-            }
-        if row["target_error_3d"] > settings["max_pose_error"]:
-            reason = (
-                "start_pose_error"
-                if row["observation_step"] == 0
-                else "motion_target_error"
-            )
-            return {"qualified": False, "reason": reason}
-
-    expected_observations = settings["num_actions"] + 1
-    if len(rows) != expected_observations:
-        return {"qualified": False, "reason": "incomplete_trace"}
-
-    if rows[-1]["true_distance_xy"] > settings["max_final_distance_xy"]:
-        return {"qualified": False, "reason": "final_distance_error"}
+    if observation is None:
+        return {
+            "qualified": False,
+            "reason": "candidate_error",
+            "error": "missing_initial_observation",
+        }
+    if observation["target_error_3d"] > settings["max_pose_error"]:
+        return {"qualified": False, "reason": "start_pose_error"}
+    if (
+        observation["block_visibility_ratio"]
+        < settings["clear_visibility_threshold"]
+    ):
+        return {
+            "qualified": False,
+            "reason": "visibility_below_threshold",
+        }
     return {"qualified": True, "reason": "qualified"}
 
 
@@ -135,28 +122,25 @@ def _screening_settings(smoke_config):
     }
 
 
-def _capture_observation(
-    config,
+def _capture_initial_observation(
     smoke_config,
     candidate_dir,
-    observation_step,
     requested_target,
     actual_ee,
     block_id,
     camera_config,
     camera_eye,
 ):
-    """保存一个筛选观察点，并生成完整资格指标。"""
+    """保存首帧观察，并生成完整资格指标。"""
     image, segmentation = capture_rgb_and_segmentation(
         camera_config, camera_eye
     )
-    image_path = candidate_dir / f"step_{observation_step:02d}.jpg"
+    image_path = candidate_dir / "step_00.jpg"
     if not cv2.imwrite(str(image_path), image):
         raise RuntimeError(f"无法写入筛选图片: {image_path}")
 
     current_block = list(get_object_position(block_id))
     return {
-        "observation_step": observation_step,
         "requested_target": list(requested_target),
         "actual_ee_pos": list(actual_ee),
         "target_error_3d": math.dist(actual_ee, requested_target),
@@ -170,18 +154,18 @@ def _capture_observation(
             block_id,
             smoke_config["visibility_reference_pixels"],
         ),
+        "camera_eye": list(camera_eye),
         "image_path": str(image_path),
     }
 
 
 def run_candidate(config, seed, direction, candidate_dir):
-    """用真实 2cm 控制轨迹筛选一个 seed+方向候选。"""
+    """用起点姿态和首帧可见率筛选一个 seed+方向候选。"""
     smoke = config["grounding_smoke"]
-    screening = smoke["screening"]
     settings = _screening_settings(smoke)
     candidate_dir = Path(candidate_dir)
     candidate_dir.mkdir(parents=True, exist_ok=False)
-    rows = []
+    observation = None
 
     random.seed(seed)
     connect_physics("DIRECT")
@@ -215,45 +199,19 @@ def run_candidate(config, seed, direction, candidate_dir):
         camera_config.update(config["vlm_evaluation"]["camera_override"])
         camera_eye = sample_camera_eye(camera_config)
 
-        for observation_step in range(screening["num_actions"] + 1):
-            row = _capture_observation(
-                config,
-                smoke,
-                candidate_dir,
-                observation_step,
-                requested_target,
-                actual_ee,
-                block_id,
-                camera_config,
-                camera_eye,
-            )
-            rows.append(row)
-            partial = classify_candidate(rows, settings)
-            if partial["reason"] != "incomplete_trace":
-                break
-            if observation_step == screening["num_actions"]:
-                break
-
-            requested_target = direction_to_target(
-                direction,
-                actual_ee,
-                smoke["hover_z"],
-                smoke["move_step_xy"],
-            )
-            target_joints = calculate_target_joints(
-                robot_id, config["robot"], requested_target
-            )
-            apply_joint_targets(robot_id, config["robot"], target_joints)
-            settle_object(config, config["probe"]["sim_steps_per_action"])
-            actual_ee = list(
-                get_link_position(
-                    robot_id, config["robot"]["ee_link_index"]
-                )
-            )
-        classification = classify_candidate(rows, settings)
+        observation = _capture_initial_observation(
+            smoke,
+            candidate_dir,
+            requested_target,
+            actual_ee,
+            block_id,
+            camera_config,
+            camera_eye,
+        )
+        classification = classify_candidate(observation, settings)
     except Exception as exc:
         classification = classify_candidate(
-            rows, settings, error=repr(exc)
+            observation, settings, error=repr(exc)
         )
     finally:
         p.disconnect()
@@ -261,7 +219,7 @@ def run_candidate(config, seed, direction, candidate_dir):
     return {
         "seed": seed,
         "direction": direction,
-        "steps": rows,
+        **(observation or {}),
         **classification,
     }
 
@@ -301,6 +259,17 @@ def run_screening(config, run_name=None):
         "reason_counts": dict(
             Counter(row["reason"] for row in candidates)
         ),
+        "selection_rule": {
+            "seed_range": list(screening["seed_range"]),
+            "directions": list(screening["directions"]),
+            "max_pose_error": screening["max_pose_error"],
+            "clear_visibility_threshold": config["grounding_smoke"][
+                "clear_visibility_threshold"
+            ],
+            "observation_scope": "initial_only",
+            "distinct_seeds": True,
+            "selection": "smallest_seed_in_direction_order",
+        },
         "selected_cases": [
             {"seed": row["seed"], "direction": row["direction"]}
             for row in selected
