@@ -715,16 +715,10 @@ def _build_episode_dependencies(
     )
 
 
-def run_smoke_batch(config, run_name=None):
-    """运行固定三个真实 PyBullet/Qwen case，并保存批次证据。"""
+def run_smoke_preflight(config, run_name=None):
+    """只运行三个固定案例的无 API 起点预检。"""
     smoke_config = config["grounding_smoke"]
     cases = build_smoke_cases(smoke_config)
-    calibration = load_frozen_calibration(
-        smoke_config["calibration_path"],
-        smoke_config["expected_calibration_sample_ids"],
-        smoke_config["expected_correction_x"],
-        smoke_config["expected_correction_y"],
-    )
     batch_dir = make_run_dir(smoke_config["output_dir"], run_name)
     preflight_rows = [
         preflight_smoke_case(config, smoke_config, case)
@@ -750,6 +744,20 @@ def run_smoke_batch(config, run_name=None):
         raise SmokePreflightError(
             f"smoke 初始动态预检失败: {failures}"
         )
+    return batch_dir, preflight_summary
+
+
+def run_smoke_batch(config, run_name=None):
+    """运行固定三个真实 PyBullet/Qwen case，并保存批次证据。"""
+    smoke_config = config["grounding_smoke"]
+    cases = build_smoke_cases(smoke_config)
+    batch_dir, _ = run_smoke_preflight(config, run_name=run_name)
+    calibration = load_frozen_calibration(
+        smoke_config["calibration_path"],
+        smoke_config["expected_calibration_sample_ids"],
+        smoke_config["expected_correction_x"],
+        smoke_config["expected_correction_y"],
+    )
     episode_summary_path = batch_dir / "episode_summary.jsonl"
     summaries = []
 
@@ -828,7 +836,7 @@ def run_smoke_batch(config, run_name=None):
     return batch_dir, batch_summary
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(
         description="运行 grounding 世界坐标闭环 smoke test"
     )
@@ -836,8 +844,24 @@ def main():
         "--run-name",
         help="可选运行目录名；已存在时拒绝覆盖",
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "--preflight-only",
+        action="store_true",
+        help="只运行三个固定案例的无 API 起点预检",
+    )
+    args = parser.parse_args(argv)
     config = load_config(CONFIG_PATH)
+    if args.preflight_only:
+        batch_dir, summary = run_smoke_preflight(
+            config,
+            run_name=args.run_name,
+        )
+        print(f"run_dir={batch_dir}")
+        print(
+            f"qualified={summary['qualified_count']}/"
+            f"{summary['num_cases']} passed={summary['passed']}"
+        )
+        return
     batch_dir, summary = run_smoke_batch(config, run_name=args.run_name)
     print(f"run_dir={batch_dir}")
     print(

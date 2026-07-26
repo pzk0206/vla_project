@@ -22,10 +22,12 @@ from vla_project.vlm.grounding_smoke.runner import (
     aggregate_smoke_summaries,
     build_smoke_cases,
     compute_visibility,
+    main,
     make_run_dir,
     preflight_smoke_case,
     run_control_loop,
     run_smoke_batch,
+    run_smoke_preflight,
 )
 
 
@@ -933,6 +935,90 @@ class SmokeBatchContractTests(unittest.TestCase):
             self.assertFalse(payload["passed"])
             self.assertEqual(payload["cases"], rows)
             self.assertFalse((run_dir / "episode_summary.jsonl").exists())
+            self.assertFalse((run_dir / "smoke_summary.json").exists())
+
+    def test_run_smoke_preflight_writes_three_qualified_cases_only(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config, _ = batch_config(temp_dir)
+            rows = [
+                {
+                    **case,
+                    "qualified": True,
+                    "rejection_reason": None,
+                }
+                for case in build_smoke_cases(config["grounding_smoke"])
+            ]
+            with patch(
+                "vla_project.vlm.grounding_smoke.runner.preflight_smoke_case",
+                side_effect=rows,
+            ) as preflight:
+                run_dir, summary = run_smoke_preflight(
+                    config,
+                    run_name="run_preflight_only",
+                )
+
+            payload = json.loads(
+                (run_dir / "smoke_preflight.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(preflight.call_count, 3)
+            self.assertEqual(summary, payload)
+            self.assertEqual(summary["num_cases"], 3)
+            self.assertEqual(summary["qualified_count"], 3)
+            self.assertTrue(summary["passed"])
+            self.assertEqual(summary["cases"], rows)
+            self.assertFalse(
+                (run_dir / "episode_summary.jsonl").exists()
+            )
+            self.assertFalse((run_dir / "smoke_summary.json").exists())
+
+    def test_cli_preflight_only_never_enters_online_batch(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config, _ = batch_config(temp_dir)
+            rows = [
+                {
+                    **case,
+                    "qualified": True,
+                    "rejection_reason": None,
+                }
+                for case in build_smoke_cases(config["grounding_smoke"])
+            ]
+            with (
+                patch(
+                    "vla_project.vlm.grounding_smoke.runner.load_config",
+                    return_value=config,
+                ),
+                patch(
+                    "vla_project.vlm.grounding_smoke.runner.preflight_smoke_case",
+                    side_effect=rows,
+                ),
+                patch(
+                    "vla_project.vlm.grounding_smoke.runner.run_smoke_batch",
+                    side_effect=AssertionError("online batch entered"),
+                ),
+                patch(
+                    "vla_project.vlm.grounding_smoke.runner.call_openai_compatible_api",
+                    side_effect=AssertionError("API entered"),
+                ),
+            ):
+                main([
+                    "--preflight-only",
+                    "--run-name",
+                    "run_cli_preflight",
+                ])
+
+            run_dir = Path(temp_dir) / "run_cli_preflight"
+            payload = json.loads(
+                (run_dir / "smoke_preflight.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertTrue(payload["passed"])
+            self.assertEqual(payload["qualified_count"], 3)
+            self.assertFalse(
+                (run_dir / "episode_summary.jsonl").exists()
+            )
             self.assertFalse((run_dir / "smoke_summary.json").exists())
 
     def test_batch_uses_three_isolated_cases_and_writes_summary(self):
