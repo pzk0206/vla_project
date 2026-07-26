@@ -101,6 +101,31 @@ def _resolve_image_path(dataset_dir, raw_path):
     return path
 
 
+def evaluate_pilot_gate(report, manifest):
+    """严格要求 pilot 数量、成功数和所有完整性计数同时达标。"""
+    expected = manifest["pilot_num_episodes"]
+    checks = {
+        "num_episodes": report["num_episodes"] == expected,
+        "success_count": report["success_count"] == expected,
+        "schema": report["schema_error_count"] == 0,
+        "action_dim": report["action_dim_error_count"] == 0,
+        "missing_images": report["missing_image_count"] == 0,
+        "unreadable_images": report["unreadable_image_count"] == 0,
+        "image_size": report["image_size_mismatch_count"] == 0,
+        "orphan_images": report["orphan_image_count"] == 0,
+        "duplicate_steps": report["duplicate_step_key_count"] == 0,
+        "seeds": report["seed_error_count"] == 0,
+        "frame_counts": report["frame_count_mismatch_count"] == 0,
+        "terminal_flags": report["terminal_flag_error_count"] == 0,
+    }
+    failed = [name for name, passed in checks.items() if not passed]
+    return {
+        "passed": not failed,
+        "checks": checks,
+        "failed_checks": failed,
+    }
+
+
 def evaluate_dataset(dataset_dir):
     """扫描 manifest、JSONL 与 JPEG，一次报告全部可恢复质量问题。"""
     dataset_dir = Path(dataset_dir)
@@ -334,6 +359,7 @@ def evaluate_dataset(dataset_dir):
         "orphan_image_count": len(orphan_images),
         "errors": errors,
     }
+    report["pilot_gate"] = evaluate_pilot_gate(report, manifest)
     return report
 
 
@@ -358,7 +384,7 @@ def main():
         f"success_rate={report['success_rate']:.2%}，"
         f"errors={len(report['errors'])}"
     )
-    if report["schema_error_count"]:
+    if not report["pilot_gate"]["passed"]:
         sys.exit(1)
 
 

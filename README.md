@@ -116,7 +116,8 @@ pip install -e .
 
 | 命令 | 用途 |
 | --- | --- |
-| `vla-collect` | 采集 Baseline 训练数据 |
+| `vla-collect` | 采集版本化专家训练数据 |
+| `vla-evaluate-dataset` | 扫描专家数据并生成 `dataset_quality_report.json` |
 | `vla-probe` | 运行 Stage 3 单次闭环 |
 | `vla-evaluate-probe` | 批量评估 heuristic 闭环 |
 | `vla-collect-vlm-samples` | 生成固定 VLM 离线评估样本 |
@@ -144,11 +145,22 @@ pip install -e .
 vla-collect
 ```
 
-采集结果会写入 `outputs/dataset/`：
+当前配置的采集结果会写入 `outputs/dataset/expert_scaling_v1/`：
 
+- `dataset_manifest.json`：固定 schema、seed、图片尺寸和数据文件名等契约。
+- `config_snapshot.yaml`：本次采集使用的完整配置快照。
 - `trajectory_expert.jsonl`：训练样本，一行对应一帧图像。
 - `episode_summary.jsonl`：每条轨迹的摘要，便于判断成功、卡住、超步数等失败原因。
 - `ep_*_step_*.jpg`：RGB 观测图。
+
+采集后运行质量检查与严格 pilot 门禁：
+
+```bash
+vla-evaluate-dataset
+```
+
+报告写入同一目录的 `dataset_quality_report.json`。pilot 必须达到10条全部成功且
+schema、seed、动作维度和图片完整性错误均为0；否则命令以非零状态退出。
 
 ## 阶段三闭环探路
 

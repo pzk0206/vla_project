@@ -10,6 +10,7 @@ import numpy as np
 
 from vla_project.simulation.evaluate_dataset import (
     evaluate_dataset,
+    evaluate_pilot_gate,
     write_quality_report,
 )
 
@@ -34,6 +35,7 @@ class EvaluateDatasetTests(unittest.TestCase):
             "schema_version": "expert_v1",
             "action_dim": 9,
             "random_seed": 1000,
+            "pilot_num_episodes": 1,
             "image_width": 224,
             "image_height": 224,
             "jsonl_name": "trajectory_expert.jsonl",
@@ -112,6 +114,7 @@ class EvaluateDatasetTests(unittest.TestCase):
         self.assertEqual(report["num_frames"], 1)
         self.assertEqual(report["success_count"], 1)
         self.assertEqual(report["success_rate"], 1.0)
+        self.assertTrue(report["pilot_gate"]["passed"])
         for field in (
             "schema_error_count",
             "action_dim_error_count",
@@ -221,6 +224,61 @@ class EvaluateDatasetTests(unittest.TestCase):
 
         self.assertEqual(output_path.name, "dataset_quality_report.json")
         self.assertEqual(saved, report)
+
+    def valid_pilot_report(self):
+        report = {
+            "num_episodes": 10,
+            "success_count": 10,
+        }
+        for field in (
+            "schema_error_count",
+            "action_dim_error_count",
+            "missing_image_count",
+            "unreadable_image_count",
+            "image_size_mismatch_count",
+            "orphan_image_count",
+            "duplicate_step_key_count",
+            "seed_error_count",
+            "frame_count_mismatch_count",
+            "terminal_flag_error_count",
+        ):
+            report[field] = 0
+        return report
+
+    def test_pilot_gate_accepts_exactly_clean_ten_episode_run(self):
+        gate = evaluate_pilot_gate(
+            self.valid_pilot_report(),
+            {"pilot_num_episodes": 10},
+        )
+
+        self.assertTrue(gate["passed"])
+        self.assertEqual(gate["failed_checks"], [])
+
+    def test_pilot_gate_rejects_each_failed_contract(self):
+        corruptions = {
+            "num_episodes": 9,
+            "success_count": 9,
+            "schema_error_count": 1,
+            "action_dim_error_count": 1,
+            "missing_image_count": 1,
+            "unreadable_image_count": 1,
+            "image_size_mismatch_count": 1,
+            "orphan_image_count": 1,
+            "duplicate_step_key_count": 1,
+            "seed_error_count": 1,
+            "frame_count_mismatch_count": 1,
+            "terminal_flag_error_count": 1,
+        }
+        for field, value in corruptions.items():
+            with self.subTest(field=field):
+                report = self.valid_pilot_report()
+                report[field] = value
+                gate = evaluate_pilot_gate(
+                    report,
+                    {"pilot_num_episodes": 10},
+                )
+                self.assertFalse(gate["passed"])
+                self.assertTrue(gate["failed_checks"])
 
 
 if __name__ == "__main__":
