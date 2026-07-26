@@ -170,7 +170,7 @@ grounding_smoke:
     - "seed_46_d020_right"
   expected_correction_x: 0.02492227406480192
   expected_correction_y: -0.019467343494422532
-  seeds: [52, 53, 54]                # 与拟合 seeds 42-46、验证 seeds 47-51 隔离。
+  seeds: [56, 55, 59]                # 来自 run_20260726_initial_qualification_v1 的无 API 确定性选择。
   start_directions: ["left", "right", "front"]
   start_offset_xy: 0.10              # 末端从红块相应一侧相距 10cm 起步。
   max_control_steps: 10              # 每个 episode 最多重新观察和定位 10 次。

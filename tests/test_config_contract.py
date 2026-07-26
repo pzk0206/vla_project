@@ -51,7 +51,7 @@ class ConfigContractTests(unittest.TestCase):
             smoke["calibration_path"],
             "outputs/vlm_evaluations/grounding_qwen3_vl_flash_distance20_448_calibration_validation_v1/calibration_validation/calibration.json",
         )
-        self.assertEqual(smoke["seeds"], [52, 53, 54])
+        self.assertEqual(smoke["seeds"], [56, 55, 59])
         self.assertEqual(smoke["start_directions"], ["left", "right", "front"])
         self.assertEqual(smoke["start_offset_xy"], 0.10)
         self.assertEqual(smoke["max_control_steps"], 10)

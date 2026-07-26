@@ -36,7 +36,7 @@ BASE_CONFIG = {
     "max_control_steps": 10,
     "max_stale_target_steps": 4,
     "clear_visibility_threshold": 0.75,
-    "seeds": [52, 53, 54],
+    "seeds": [56, 55, 59],
     "required_successes": 3,
     "max_total_api_calls": 30,
 }
@@ -591,7 +591,7 @@ class SmokeLoopTests(unittest.TestCase):
                 "max_target_age_steps": 3,
                 "recovered_from_occlusion": True,
             }
-            for seed in (52, 53, 54)
+            for seed in (56, 55, 59)
         ]
         summary = aggregate_smoke_summaries(episodes, BASE_CONFIG)
         self.assertTrue(summary["passed"])
@@ -826,14 +826,14 @@ class SmokeBatchContractTests(unittest.TestCase):
         self.assertEqual(
             build_smoke_cases(
                 {
-                    "seeds": [52, 53, 54],
+                    "seeds": [56, 55, 59],
                     "start_directions": ["left", "right", "front"],
                 }
             ),
             [
-                {"episode_idx": 0, "seed": 52, "start_direction": "left"},
-                {"episode_idx": 1, "seed": 53, "start_direction": "right"},
-                {"episode_idx": 2, "seed": 54, "start_direction": "front"},
+                {"episode_idx": 0, "seed": 56, "start_direction": "left"},
+                {"episode_idx": 1, "seed": 55, "start_direction": "right"},
+                {"episode_idx": 2, "seed": 59, "start_direction": "front"},
             ],
         )
 
@@ -882,21 +882,21 @@ class SmokeBatchContractTests(unittest.TestCase):
             rows = [
                 {
                     "episode_idx": 0,
-                    "seed": 52,
+                    "seed": 56,
                     "start_direction": "left",
                     "qualified": False,
                     "rejection_reason": "visibility_below_threshold",
                 },
                 {
                     "episode_idx": 1,
-                    "seed": 53,
+                    "seed": 55,
                     "start_direction": "right",
                     "qualified": True,
                     "rejection_reason": None,
                 },
                 {
                     "episode_idx": 2,
-                    "seed": 54,
+                    "seed": 59,
                     "start_direction": "front",
                     "qualified": False,
                     "rejection_reason": "start_pose_error",
@@ -1084,7 +1084,7 @@ class SmokeBatchContractTests(unittest.TestCase):
             self.assertEqual(loop.call_count, 3)
             self.assertEqual(
                 [call.args[1]["seed"] for call in loop.call_args_list],
-                [52, 53, 54],
+                [56, 55, 59],
             )
             self.assertNotIn(
                 "block_pos", inspect.signature(compute_grounding_action).parameters
