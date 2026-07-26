@@ -314,6 +314,244 @@ class DatasetRunContractTests(unittest.TestCase):
                 os.chdir(previous_cwd)
 
 
+class EpisodeReproducibilityTests(unittest.TestCase):
+    """保护独立复位、确定性 seed 和 expert_v1 写入契约。"""
+
+    @patch("vla_project.simulation.control_arm.apply_joint_targets")
+    @patch("vla_project.simulation.control_arm.p.resetJointState")
+    def test_reset_robot_to_home_clears_position_velocity_and_motor_target(
+        self,
+        reset_joint,
+        apply_targets,
+    ):
+        robot_config = {"controlled_joints": 7}
+        dataset_config = {
+            "reset_robot_each_episode": True,
+            "home_joint_positions": [0.0] * 7,
+        }
+
+        control_arm.reset_robot_to_home(
+            robot_id=3,
+            robot_config=robot_config,
+            dataset_config=dataset_config,
+        )
+
+        self.assertEqual(reset_joint.call_count, 7)
+        for joint, reset_call in enumerate(reset_joint.call_args_list):
+            self.assertEqual(reset_call.args, (3, joint, 0.0))
+            self.assertEqual(reset_call.kwargs["targetVelocity"], 0.0)
+        apply_targets.assert_called_once_with(
+            3,
+            robot_config,
+            [0.0] * 7,
+        )
+
+    @patch("vla_project.simulation.control_arm.apply_joint_targets")
+    @patch("vla_project.simulation.control_arm.p.resetJointState")
+    def test_reset_robot_to_home_can_be_disabled(
+        self,
+        reset_joint,
+        apply_targets,
+    ):
+        control_arm.reset_robot_to_home(
+            robot_id=3,
+            robot_config={"controlled_joints": 7},
+            dataset_config={
+                "reset_robot_each_episode": False,
+                "home_joint_positions": [0.0] * 7,
+            },
+        )
+
+        reset_joint.assert_not_called()
+        apply_targets.assert_not_called()
+
+    def test_write_dataset_step_adds_expert_v1_identity_fields(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            jsonl_path = Path(temp_dir) / "trajectory_expert.jsonl"
+            control_arm.write_dataset_step(
+                jsonl_path=jsonl_path,
+                schema_version="expert_v1",
+                episode_idx=4,
+                step_idx=24,
+                random_seed=1004,
+                image_path="ep_4_step_24.jpg",
+                instruction="悬停在红色积木上方",
+                action=[0.0] * 7 + [1.0, 1],
+                camera_eye=[1.0, 0.4, 1.6],
+                block_pos=[0.1, 0.4, 0.1],
+                target_pos=[0.1, 0.4, 0.25],
+                ee_pos=[0.1, 0.4, 0.25],
+                distance_to_target=0.0,
+                termination_reason="success",
+            )
+
+            row = json.loads(jsonl_path.read_text(encoding="utf-8"))
+            self.assertEqual(row["schema_version"], "expert_v1")
+            self.assertEqual(row["episode_idx"], 4)
+            self.assertEqual(row["step_idx"], 24)
+            self.assertEqual(row["random_seed"], 1004)
+            self.assertEqual(len(row["action"]), 9)
+            self.assertEqual(row["action"][-1], 1)
+            self.assertNotEqual(row["termination_reason"], "running")
+
+    def test_write_episode_summary_adds_seed_and_initial_state(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            summary_path = Path(temp_dir) / "episode_summary.jsonl"
+            control_arm.write_episode_summary(
+                summary_jsonl_path=summary_path,
+                schema_version="expert_v1",
+                episode_idx=4,
+                random_seed=1004,
+                initial_ee_pos=[0.0, 0.0, 1.261],
+                initial_block_pos=[0.1, 0.4, 0.05],
+                num_steps=25,
+                num_frames=2,
+                final_distance=0.01,
+                termination_reason="success",
+                camera_eye=[1.0, 0.4, 1.6],
+                final_block_pos=[0.1, 0.4, 0.05],
+                final_target_pos=[0.1, 0.4, 0.2],
+                final_ee_pos=[0.1, 0.4, 0.19],
+            )
+
+            row = json.loads(summary_path.read_text(encoding="utf-8"))
+            self.assertEqual(row["schema_version"], "expert_v1")
+            self.assertEqual(row["random_seed"], 1004)
+            self.assertEqual(row["initial_ee_pos"], [0.0, 0.0, 1.261])
+            self.assertEqual(row["initial_block_pos"], [0.1, 0.4, 0.05])
+
+    def test_run_episode_seeds_and_resets_before_sampling(self):
+        events = []
+        config = {
+            "enable_time_sleep": False,
+            "simulation_hz": 240,
+            "robot": {
+                "controlled_joints": 7,
+                "ee_link_index": 6,
+            },
+            "dataset": {
+                "schema_version": "expert_v1",
+                "reset_robot_each_episode": True,
+                "home_joint_positions": [0.0] * 7,
+                "max_steps_per_episode": 1,
+                "capture_interval_steps": 24,
+                "default_gripper_state": 1.0,
+                "instruction": "悬停在红色积木上方",
+            },
+            "task": {
+                "initial_settle_steps": 0,
+                "hover_height": 0.15,
+                "success_distance": 0.03,
+                "stuck_window_steps": 120,
+                "stuck_min_improvement": 0.0005,
+                "force_terminal_after_step": 976,
+            },
+            "camera": {},
+        }
+        with tempfile.TemporaryDirectory() as temp_dir, patch(
+            "vla_project.simulation.control_arm.random.seed",
+            side_effect=lambda seed: events.append(("seed", seed)),
+        ), patch(
+            "vla_project.simulation.control_arm.reset_robot_to_home",
+            side_effect=lambda *_args: events.append(("reset", None)),
+        ), patch(
+            "vla_project.simulation.control_arm.load_block",
+            side_effect=lambda *_args: events.append(("block", None)) or 9,
+        ), patch(
+            "vla_project.simulation.control_arm.sample_camera_eye",
+            side_effect=lambda *_args: events.append(("camera", None))
+            or [1.0, 0.4, 1.6],
+        ), patch(
+            "vla_project.simulation.control_arm.settle_object"
+        ), patch(
+            "vla_project.simulation.control_arm.get_link_position",
+            return_value=[0.0, 0.0, 0.25],
+        ), patch(
+            "vla_project.simulation.control_arm.get_object_position",
+            return_value=[0.0, 0.0, 0.1],
+        ), patch(
+            "vla_project.simulation.control_arm.calculate_target_joints",
+            return_value=[0.0] * 7,
+        ), patch(
+            "vla_project.simulation.control_arm.apply_joint_targets"
+        ), patch(
+            "vla_project.simulation.control_arm.capture_rgb",
+            return_value=np.zeros((2, 2, 3), dtype=np.uint8),
+        ), patch(
+            "vla_project.simulation.control_arm.cv2.imwrite",
+            return_value=True,
+        ), patch(
+            "vla_project.simulation.control_arm.p.stepSimulation"
+        ), patch(
+            "vla_project.simulation.control_arm.p.removeBody"
+        ):
+            control_arm.run_episode(
+                episode_idx=4,
+                robot_id=3,
+                config=config,
+                dataset_dir=temp_dir,
+                jsonl_path=Path(temp_dir) / "trajectory_expert.jsonl",
+                summary_jsonl_path=Path(temp_dir) / "episode_summary.jsonl",
+                random_seed=1004,
+            )
+
+        self.assertEqual(events[0], ("seed", 1004))
+        self.assertLess(events.index(("reset", None)), events.index(("block", None)))
+        self.assertLess(events.index(("block", None)), events.index(("camera", None)))
+
+    def test_main_records_episode_error_and_continues(self):
+        config = {
+            "connection_mode": "DIRECT",
+            "dataset": {
+                "schema_version": "expert_v1",
+                "random_seed": 1000,
+                "num_episodes": 2,
+            },
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            summary_path = Path(temp_dir) / "episode_summary.jsonl"
+            with patch(
+                "vla_project.simulation.control_arm.load_config",
+                return_value=config,
+            ), patch(
+                "vla_project.simulation.control_arm.connect_physics"
+            ), patch(
+                "vla_project.simulation.control_arm.prepare_dataset",
+                return_value=(
+                    temp_dir,
+                    str(Path(temp_dir) / "trajectory_expert.jsonl"),
+                    str(summary_path),
+                ),
+            ), patch(
+                "vla_project.simulation.control_arm.setup_world",
+                return_value=(1, 3),
+            ), patch(
+                "vla_project.simulation.control_arm.next_episode_index",
+                return_value=0,
+            ), patch(
+                "vla_project.simulation.control_arm.run_episode",
+                side_effect=[RuntimeError("ik failed"), None],
+            ) as run_episode, patch(
+                "vla_project.simulation.control_arm.p.disconnect"
+            ):
+                control_arm.main()
+
+            rows = [
+                json.loads(line)
+                for line in summary_path.read_text(encoding="utf-8").splitlines()
+            ]
+        self.assertEqual(run_episode.call_count, 2)
+        self.assertEqual(rows[0]["episode_idx"], 0)
+        self.assertEqual(rows[0]["random_seed"], 1000)
+        self.assertEqual(rows[0]["termination_reason"], "episode_error")
+        self.assertIn("ik failed", rows[0]["error"])
+        self.assertEqual(rows[0]["num_frames"], 0)
+        self.assertEqual(
+            run_episode.call_args_list[1].kwargs["random_seed"],
+            1001,
+        )
+
+
 if __name__ == "__main__":
     # 允许把本文件当脚本单独运行，同时兼容 unittest discover。
     unittest.main()

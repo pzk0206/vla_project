@@ -348,6 +348,26 @@ def apply_joint_targets(robot_id, robot_config, target_joint_angles):
         )
 
 
+def reset_robot_to_home(robot_id, robot_config, dataset_config):
+    """把机械臂位置、速度和电机目标同步复位到固定 home pose。"""
+    if not dataset_config["reset_robot_each_episode"]:
+        return
+
+    joint_count = robot_config["controlled_joints"]
+    home = dataset_config["home_joint_positions"]
+    if len(home) != joint_count:
+        raise ValueError("home_joint_positions 长度必须等于 controlled_joints")
+
+    for joint, position in enumerate(home):
+        p.resetJointState(
+            robot_id,
+            joint,
+            position,
+            targetVelocity=0.0,
+        )
+    apply_joint_targets(robot_id, robot_config, home)
+
+
 def get_link_position(robot_id, link_index):
     """读取指定 link 的世界坐标。
 
@@ -422,6 +442,10 @@ def capture_rgb(camera_config, camera_eye):
 
 def write_dataset_step(
     jsonl_path,
+    schema_version,
+    episode_idx,
+    step_idx,
+    random_seed,
     image_path,
     instruction,
     action,
@@ -443,6 +467,10 @@ def write_dataset_step(
     - termination_reason: 当前帧对应的结束原因，便于区分成功、卡住或跑满步数。
     """
     step_data = {
+        "schema_version": schema_version,
+        "episode_idx": episode_idx,
+        "step_idx": step_idx,
+        "random_seed": random_seed,
         "image_path": image_path,
         "instruction": instruction,
         "action": action,
@@ -459,7 +487,11 @@ def write_dataset_step(
 
 def write_episode_summary(
     summary_jsonl_path,
+    schema_version,
     episode_idx,
+    random_seed,
+    initial_ee_pos,
+    initial_block_pos,
     num_steps,
     num_frames,
     final_distance,
@@ -471,7 +503,11 @@ def write_episode_summary(
 ):
     """为每条轨迹写一行摘要，方便快速审计数据集质量。"""
     summary = {
+        "schema_version": schema_version,
         "episode_idx": episode_idx,
+        "random_seed": random_seed,
+        "initial_ee_pos": list(initial_ee_pos),
+        "initial_block_pos": list(initial_block_pos),
         "num_steps": num_steps,
         "num_frames": num_frames,
         "final_distance": final_distance,
@@ -480,6 +516,34 @@ def write_episode_summary(
         "final_block_pos": list(final_block_pos),
         "final_target_pos": list(final_target_pos),
         "final_ee_pos": list(final_ee_pos),
+    }
+    with open(summary_jsonl_path, "a", encoding="utf-8") as summary_file:
+        summary_file.write(json.dumps(summary, ensure_ascii=False) + "\n")
+
+
+def write_episode_error_summary(
+    summary_jsonl_path,
+    schema_version,
+    episode_idx,
+    random_seed,
+    error,
+):
+    """记录单条 episode 异常，并保留未知状态为空值。"""
+    summary = {
+        "schema_version": schema_version,
+        "episode_idx": episode_idx,
+        "random_seed": random_seed,
+        "initial_ee_pos": None,
+        "initial_block_pos": None,
+        "num_steps": 0,
+        "num_frames": 0,
+        "final_distance": None,
+        "termination_reason": "episode_error",
+        "camera_eye": None,
+        "final_block_pos": None,
+        "final_target_pos": None,
+        "final_ee_pos": None,
+        "error": error,
     }
     with open(summary_jsonl_path, "a", encoding="utf-8") as summary_file:
         summary_file.write(json.dumps(summary, ensure_ascii=False) + "\n")
@@ -518,7 +582,15 @@ def determine_termination(
     return "running"
 
 
-def run_episode(episode_idx, robot_id, config, dataset_dir, jsonl_path, summary_jsonl_path):
+def run_episode(
+    episode_idx,
+    robot_id,
+    config,
+    dataset_dir,
+    jsonl_path,
+    summary_jsonl_path,
+    random_seed,
+):
     """执行一条任务轨迹并写入图片/JSONL 数据。
 
     一个 episode 的生命周期：
@@ -533,9 +605,21 @@ def run_episode(episode_idx, robot_id, config, dataset_dir, jsonl_path, summary_
     dataset_cfg = config["dataset"]
     camera_cfg = config["camera"]
 
+    random.seed(random_seed)
+    reset_robot_to_home(robot_id, robot_cfg, dataset_cfg)
+    for _ in range(task_cfg["initial_settle_steps"]):
+        p.stepSimulation()
+    initial_ee_pos = get_link_position(
+        robot_id,
+        robot_cfg["ee_link_index"],
+    )
+
     # 每条轨迹只对应一个红色积木，位置由 task.block_position 控制。
+    block_id = None
     block_id = load_block(task_cfg)
+
     settle_object(config, task_cfg["initial_settle_steps"])
+    initial_block_pos = get_object_position(block_id)
 
     # 同一个 episode 内固定相机，有利于形成稳定的时序视觉输入。
     camera_eye = sample_camera_eye(camera_cfg)
@@ -620,6 +704,10 @@ def run_episode(episode_idx, robot_id, config, dataset_dir, jsonl_path, summary_
                 )
                 write_dataset_step(
                     jsonl_path=jsonl_path,
+                    schema_version=dataset_cfg["schema_version"],
+                    episode_idx=episode_idx,
+                    step_idx=step_idx,
+                    random_seed=random_seed,
                     image_path=image_path,
                     instruction=dataset_cfg["instruction"],
                     action=action,
@@ -638,7 +726,11 @@ def run_episode(episode_idx, robot_id, config, dataset_dir, jsonl_path, summary_
 
         write_episode_summary(
             summary_jsonl_path=summary_jsonl_path,
+            schema_version=dataset_cfg["schema_version"],
             episode_idx=episode_idx,
+            random_seed=random_seed,
+            initial_ee_pos=initial_ee_pos,
+            initial_block_pos=initial_block_pos,
             num_steps=step_idx + 1,
             num_frames=saved_frame_count,
             final_distance=final_distance,
@@ -650,7 +742,8 @@ def run_episode(episode_idx, robot_id, config, dataset_dir, jsonl_path, summary_
         )
     finally:
         # 无论 episode 正常结束还是中途报错，都尽量清理当前积木。
-        p.removeBody(block_id)
+        if block_id is not None:
+            p.removeBody(block_id)
 
 
 def main():
@@ -666,14 +759,25 @@ def main():
     start_episode_idx = next_episode_index(summary_jsonl_path)
     end_episode_idx = start_episode_idx + config["dataset"]["num_episodes"]
     for episode_idx in range(start_episode_idx, end_episode_idx):
-        run_episode(
-            episode_idx,
-            robot_id,
-            config,
-            dataset_dir,
-            jsonl_path,
-            summary_jsonl_path,
-        )
+        random_seed = config["dataset"]["random_seed"] + episode_idx
+        try:
+            run_episode(
+                episode_idx=episode_idx,
+                robot_id=robot_id,
+                config=config,
+                dataset_dir=dataset_dir,
+                jsonl_path=jsonl_path,
+                summary_jsonl_path=summary_jsonl_path,
+                random_seed=random_seed,
+            )
+        except Exception as exc:
+            write_episode_error_summary(
+                summary_jsonl_path=summary_jsonl_path,
+                schema_version=config["dataset"]["schema_version"],
+                episode_idx=episode_idx,
+                random_seed=random_seed,
+                error=repr(exc),
+            )
 
     p.disconnect()
     print("✅ 数据采集完成。")
