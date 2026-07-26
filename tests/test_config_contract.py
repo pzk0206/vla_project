@@ -129,7 +129,10 @@ class ConfigContractTests(unittest.TestCase):
 
     def test_generated_outputs_are_grouped_under_outputs(self):
         """所有生成图片和实验记录必须进入统一 outputs 根目录。"""
-        self.assertEqual(self.config["dataset"]["output_dir"], "outputs/dataset")
+        self.assertEqual(
+            self.config["dataset"]["output_dir"],
+            "outputs/dataset/expert_scaling_v1",
+        )
         self.assertEqual(self.config["probe"]["output_dir"], "outputs/probe")
         self.assertEqual(
             self.config["probe_evaluation"]["output_dir"],
@@ -153,6 +156,22 @@ class ConfigContractTests(unittest.TestCase):
                 "outputs/vlm_evaluations/"
             )
         )
+
+    def test_expert_dataset_scaling_config_is_frozen(self):
+        """pilot 必须使用版本化目录、固定 seed 和独立复位。"""
+        dataset = self.config["dataset"]
+
+        self.assertEqual(
+            dataset["output_dir"],
+            "outputs/dataset/expert_scaling_v1",
+        )
+        self.assertEqual(dataset["schema_version"], "expert_v1")
+        self.assertEqual(dataset["random_seed"], 1000)
+        self.assertTrue(dataset["reset_robot_each_episode"])
+        self.assertEqual(dataset["home_joint_positions"], [0.0] * 7)
+        self.assertEqual(dataset["num_episodes"], 10)
+        self.assertEqual(dataset["pilot_num_episodes"], 10)
+        self.assertEqual(dataset["target_num_episodes"], 300)
 
     def test_probe_evaluation_config_is_valid(self):
         """批量评估必须有正数次数、非空目录和可复现的整数种子。"""

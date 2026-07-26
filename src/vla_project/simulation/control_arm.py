@@ -4,6 +4,8 @@ import os
 import random
 import shutil
 import time
+from datetime import datetime
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -30,6 +32,19 @@ from vla_project.simulation.camera_geometry import compute_camera_matrices
 # - 这样以后调数据质量时，优先改 YAML，不需要频繁改 Python 主逻辑。
 # =====================================================================
 CONFIG_PATH = "sim_config.yaml"
+DATASET_MANIFEST_NAME = "dataset_manifest.json"
+CONFIG_SNAPSHOT_NAME = "config_snapshot.yaml"
+MANIFEST_COMPATIBILITY_FIELDS = (
+    "schema_version",
+    "instruction",
+    "action_dim",
+    "random_seed",
+    "seed_rule",
+    "image_width",
+    "image_height",
+    "jsonl_name",
+    "summary_jsonl_name",
+)
 
 
 def load_config(config_path):
@@ -59,11 +74,62 @@ def connect_physics(connection_mode):
     raise ValueError(f"connection_mode 只能是 GUI 或 DIRECT，当前值: {connection_mode}")
 
 
-def prepare_dataset(dataset_config):
+def validate_versioned_dataset_dir(output_dir):
+    """只接受 outputs/dataset 下的版本化子目录。"""
+    path = Path(output_dir)
+    root = Path("outputs/dataset")
+    if path == root or root not in path.parents:
+        raise ValueError(
+            "dataset.output_dir 必须是 outputs/dataset/ 下的版本化子目录"
+        )
+    return path
+
+
+def build_dataset_manifest(config):
+    """从完整采集配置生成稳定的数据集契约。"""
+    dataset = config["dataset"]
+    camera = config["camera"]
+    task = config["task"]
+    return {
+        "schema_version": dataset["schema_version"],
+        "dataset_name": Path(dataset["output_dir"]).name,
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "instruction": dataset["instruction"],
+        "action_dim": config["robot"]["controlled_joints"] + 2,
+        "random_seed": dataset["random_seed"],
+        "seed_rule": "random_seed + episode_idx",
+        "image_width": camera["image_width"],
+        "image_height": camera["image_height"],
+        "block_position_range": task["block_position"],
+        "camera_eye_offset_base": camera["eye_offset_base"],
+        "camera_eye_offset_random_range": camera[
+            "eye_offset_random_range"
+        ],
+        "pilot_num_episodes": dataset["pilot_num_episodes"],
+        "target_num_episodes": dataset["target_num_episodes"],
+        "jsonl_name": dataset["jsonl_name"],
+        "summary_jsonl_name": dataset["summary_jsonl_name"],
+    }
+
+
+def _validate_append_compatibility(existing_manifest, current_manifest):
+    mismatches = [
+        field
+        for field in MANIFEST_COMPATIBILITY_FIELDS
+        if existing_manifest.get(field) != current_manifest.get(field)
+    ]
+    if mismatches:
+        raise ValueError(
+            "追加采集配置与现有 dataset manifest 不兼容: "
+            + ", ".join(mismatches)
+        )
+
+
+def prepare_dataset(dataset_config, full_config=None):
     """按配置初始化数据集目录与 JSONL 文件路径。
 
     数据集结构采用：
-        outputs/dataset/
+        outputs/dataset/<version>/
           ep_0_step_0.jpg
           ep_0_step_24.jpg
           ...
@@ -71,12 +137,39 @@ def prepare_dataset(dataset_config):
 
     JSONL 是“一行一个 JSON 对象”的格式，适合大规模训练数据逐行读取。
     """
-    dataset_dir = dataset_config["output_dir"]
-    if dataset_config.get("clean_before_run", True) and os.path.exists(dataset_dir):
+    dataset_path = validate_versioned_dataset_dir(dataset_config["output_dir"])
+    dataset_dir = str(dataset_path)
+    clean_before_run = dataset_config.get("clean_before_run", True)
+    if clean_before_run and os.path.exists(dataset_dir):
         print(f"🗑️ 检测到旧数据，正在清空 {dataset_dir} 目录...")
         shutil.rmtree(dataset_dir)
 
     os.makedirs(dataset_dir, exist_ok=True)
+    if full_config is not None:
+        manifest = build_dataset_manifest(full_config)
+        manifest_path = dataset_path / DATASET_MANIFEST_NAME
+        snapshot_path = dataset_path / CONFIG_SNAPSHOT_NAME
+        if not clean_before_run and manifest_path.exists():
+            with manifest_path.open("r", encoding="utf-8") as manifest_file:
+                existing_manifest = json.load(manifest_file)
+            _validate_append_compatibility(existing_manifest, manifest)
+        else:
+            with manifest_path.open("w", encoding="utf-8") as manifest_file:
+                json.dump(
+                    manifest,
+                    manifest_file,
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                manifest_file.write("\n")
+            with snapshot_path.open("w", encoding="utf-8") as snapshot_file:
+                yaml.safe_dump(
+                    full_config,
+                    snapshot_file,
+                    allow_unicode=True,
+                    sort_keys=False,
+                )
+
     jsonl_path = os.path.join(dataset_dir, dataset_config["jsonl_name"])
     summary_jsonl_path = os.path.join(dataset_dir, dataset_config["summary_jsonl_name"])
     print(f"📁 数据集目录已就绪: {dataset_dir}")
@@ -564,7 +657,10 @@ def main():
     """主入口：按顺序完成配置读取、仿真初始化、批量采集和断开连接。"""
     config = load_config(CONFIG_PATH)
     connect_physics(config["connection_mode"])
-    dataset_dir, jsonl_path, summary_jsonl_path = prepare_dataset(config["dataset"])
+    dataset_dir, jsonl_path, summary_jsonl_path = prepare_dataset(
+        config["dataset"],
+        full_config=config,
+    )
     _, robot_id = setup_world(config)
 
     start_episode_idx = next_episode_index(summary_jsonl_path)

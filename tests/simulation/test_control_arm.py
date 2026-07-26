@@ -6,6 +6,7 @@ episode 编号的计算。外部仿真接口使用 mock，文件测试使用临�
 """
 
 import json
+import os
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -214,6 +215,103 @@ class NextEpisodeIndexTests(unittest.TestCase):
             )
             # 历史顺序可以不连续或不排序；最大编号是 7，所以下一个必须是 8。
             self.assertEqual(next_episode_index(summary_path), 8)
+
+
+class DatasetRunContractTests(unittest.TestCase):
+    """保护版本化目录、manifest 和追加兼容性。"""
+
+    def make_config(self, clean_before_run=True):
+        return {
+            "robot": {"controlled_joints": 7},
+            "dataset": {
+                "output_dir": "outputs/dataset/expert_scaling_v1",
+                "jsonl_name": "trajectory_expert.jsonl",
+                "summary_jsonl_name": "episode_summary.jsonl",
+                "schema_version": "expert_v1",
+                "instruction": "悬停在红色积木上方",
+                "random_seed": 1000,
+                "pilot_num_episodes": 10,
+                "target_num_episodes": 300,
+                "clean_before_run": clean_before_run,
+            },
+            "task": {
+                "block_position": {
+                    "x_range": [-0.2, 0.2],
+                    "y_range": [0.38, 0.5],
+                    "z": 0.1,
+                }
+            },
+            "camera": {
+                "image_width": 224,
+                "image_height": 224,
+                "eye_offset_base": [1.05, 0.0, 1.65],
+                "eye_offset_random_range": [-0.1, 0.1],
+            },
+        }
+
+    def test_rejects_dataset_root_as_clean_target(self):
+        with self.assertRaises(ValueError):
+            control_arm.validate_versioned_dataset_dir("outputs/dataset")
+
+    def test_accepts_versioned_child_directory(self):
+        path = control_arm.validate_versioned_dataset_dir(
+            "outputs/dataset/expert_scaling_v1"
+        )
+        self.assertEqual(
+            path.as_posix(),
+            "outputs/dataset/expert_scaling_v1",
+        )
+
+    def test_builds_expert_v1_manifest(self):
+        manifest = control_arm.build_dataset_manifest(self.make_config())
+
+        self.assertEqual(manifest["schema_version"], "expert_v1")
+        self.assertEqual(manifest["action_dim"], 9)
+        self.assertEqual(
+            manifest["seed_rule"],
+            "random_seed + episode_idx",
+        )
+        self.assertEqual(manifest["pilot_num_episodes"], 10)
+        self.assertEqual(manifest["target_num_episodes"], 300)
+        self.assertTrue(manifest["created_at"])
+
+    def test_prepare_dataset_writes_manifest_and_config_snapshot(self):
+        config = self.make_config()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            previous_cwd = os.getcwd()
+            try:
+                os.chdir(temp_dir)
+                dataset_dir, _, _ = control_arm.prepare_dataset(
+                    config["dataset"],
+                    full_config=config,
+                )
+                run_dir = Path(dataset_dir)
+                self.assertTrue(
+                    (run_dir / "dataset_manifest.json").is_file()
+                )
+                self.assertTrue((run_dir / "config_snapshot.yaml").is_file())
+            finally:
+                os.chdir(previous_cwd)
+
+    def test_append_rejects_incompatible_manifest(self):
+        config = self.make_config()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            previous_cwd = os.getcwd()
+            try:
+                os.chdir(temp_dir)
+                control_arm.prepare_dataset(
+                    config["dataset"],
+                    full_config=config,
+                )
+                incompatible = self.make_config(clean_before_run=False)
+                incompatible["dataset"]["schema_version"] = "expert_v2"
+                with self.assertRaises(ValueError):
+                    control_arm.prepare_dataset(
+                        incompatible["dataset"],
+                        full_config=incompatible,
+                    )
+            finally:
+                os.chdir(previous_cwd)
 
 
 if __name__ == "__main__":

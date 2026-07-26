@@ -44,11 +44,17 @@ robot:
 
 # 5. 数据集采集配置：
 dataset:
-  output_dir: "outputs/dataset"      # Baseline 1 图片和 JSONL 统一放在 outputs/dataset/。
+  output_dir: "outputs/dataset/expert_scaling_v1"  # 新版专家数据独立写入版本化子目录。
   jsonl_name: "trajectory_expert.jsonl"  # 训练标签文件，一行对应一张图片。
   summary_jsonl_name: "episode_summary.jsonl"  # 每条轨迹的诊断摘要，一行对应一个 episode。
-  clean_before_run: true             # true 会删除旧 dataset；想追加数据时改 false。
-  num_episodes: 50                   # 当前这版参数已验证有效，恢复到常规采集规模。
+  schema_version: "expert_v1"        # 单帧、摘要和 manifest 共用的 schema 版本。
+  clean_before_run: true             # true 只清理当前版本化子目录；想追加数据时改 false。
+  num_episodes: 10                   # 首轮固定采集10条 pilot。
+  pilot_num_episodes: 10             # pilot 质量门禁要求的 episode 数。
+  target_num_episodes: 300           # pilot 通过后的正式数据规模目标。
+  random_seed: 1000                  # episode seed = random_seed + episode_idx。
+  reset_robot_each_episode: true     # 每条轨迹从相同机械臂状态独立开始。
+  home_joint_positions: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]  # 7个受控关节的 home pose。
   max_steps_per_episode: 1000        # 单条轨迹最多跑多少个仿真 step。
   capture_interval_steps: 24         # 每隔多少 step 保存一帧；越小图片越密、数据越大。
   instruction: "悬停在红色积木上方"  # 写入 JSONL 的语言指令。
