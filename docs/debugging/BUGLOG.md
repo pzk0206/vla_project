@@ -854,7 +854,7 @@ stale、未到达 stale、API/反投影/IK 错误和步数耗尽，并验证真�
 
 ## BUG-008：任务到达掩盖停止时序与 Grounding 残余偏差
 
-- 状态：停止时序已修复；`59-front` 定位偏差仍待解决
+- 状态：停止时序已修复；`59-front` 定位偏差作为已知能力边界保留
 - 发现日期：2026-07-26
 - 影响模块：`src/vla_project/vlm/grounding_smoke/runner.py`
 - 证据批次：
@@ -892,4 +892,6 @@ runner 现在在缓存已经使用4步且下一帧仍不可见时，使用缓存
 
 历史 `run_20260726_fixed_cases_online_v1/smoke_summary.json` 不回写，其中
 `passed=true` 继续表示旧门槛。时序修复可解决 `56-left` 类型的问题，但不会让
-`59-front` 的错误缓存目标变成正确定位；后者仍需单独的 grounding 稳健性修订。
+`59-front` 的错误缓存目标变成正确定位。根据整体学习路线，不再为单个固定 seed 调整
+VLM；严格自主停止指标继续保留，但不阻塞专家数据规模化。只有后续训练或评估明确依赖
+自主 stop 时，才重新开启 grounding 稳健性修订。
