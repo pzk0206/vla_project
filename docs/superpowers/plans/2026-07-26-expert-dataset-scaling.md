@@ -272,7 +272,12 @@ def reset_robot_to_home(robot_id, robot_config, dataset_config):
             position,
             targetVelocity=0.0,
         )
+    apply_joint_targets(robot_id, robot_config, home)
 ```
+
+复位后必须同步更新电机控制目标，避免上一条 episode 的 motor target 在 settle steps
+期间把关节从 home pose 拉走。测试除 `resetJointState` 外，还要断言
+`apply_joint_targets(robot_id, robot_config, home)` 调用一次。
 
 - [ ] **Step 4: 为固定 seed 和 schema 写失败测试**
 
