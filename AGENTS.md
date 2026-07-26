@@ -23,3 +23,8 @@
 - 目录或文件职责改变时更新 `PROJECT_STRUCTURE.md`。
 - 详细实验过程写入 `WORKLOG.md`；Bug 证据、根因和验证写入 `BUGLOG.md`。
 - 同一事实只在一个权威位置保存完整正文，其他位置使用摘要和链接。
+
+## Documentation Language
+
+- 新建或更新 `docs/superpowers/specs/` 和 `docs/superpowers/plans/` 时，说明文字默认使用中文。
+- 技术标识符和可执行内容保持原文。

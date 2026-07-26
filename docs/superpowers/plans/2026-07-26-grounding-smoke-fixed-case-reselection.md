@@ -1,54 +1,54 @@
-# Grounding Smoke Fixed Case Reselection Implementation Plan
+# Grounding Smoke 固定案例重选实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **面向代理执行者：** 必须使用 `superpowers:subagent-driven-development`（推荐）或 `superpowers:executing-plans`，逐项执行本计划。步骤使用复选框（`- [ ]`）跟踪。
 
-**Goal:** Deterministically select one initially qualified `left`, `right`, and `front` smoke case from seeds 55–100, freeze those cases in configuration, and prove all three pass a no-API preflight-only run.
+**目标：** 从 seeds 55–100 中确定性选择各一个初始资格合格的 `left`、`right` 和 `front` smoke 案例，将这些案例冻结到配置中，并证明三个案例全部通过无 API 的只预检运行。
 
-**Architecture:** Refocus the existing screening workflow on one initial observation per candidate, using only start pose error and first-frame visibility as qualification inputs. Extract the runner's existing three-case preflight into a reusable batch boundary and expose it through `--preflight-only`, then use the real no-API outputs to freeze the selected seeds and update project evidence.
+**架构：** 将现有筛选工作流调整为每个候选只进行一次初始观察，并仅使用起点姿态误差和首帧可见率作为资格输入。把 runner 现有的三案例预检提取为可复用的批次边界，通过 `--preflight-only` 暴露；然后使用真实无 API 输出冻结选中的 seeds，并更新项目证据。
 
-**Tech Stack:** Python 3, `unittest`, `unittest.mock`, PyBullet, OpenCV, NumPy, YAML configuration, JSON/JSONL evidence.
+**技术栈：** Python 3、`unittest`、`unittest.mock`、PyBullet、OpenCV、NumPy、YAML 配置、JSON/JSONL 证据。
 
-## Global Constraints
+## 全局约束
 
-- Candidate seeds remain exactly the inclusive range 55–100.
-- Direction order remains exactly `["left", "right", "front"]`.
-- Qualification is inclusive: `start_pose_error <= 0.005m` and `block_visibility_ratio >= 0.75`.
-- The three selected seeds must be distinct and must be the smallest eligible seeds under direction-order selection.
-- Later-frame visibility and motion target error are not candidate qualification inputs.
-- Screening and `--preflight-only` must never call `call_openai_compatible_api()`.
-- Do not modify grounding, backprojection, frozen XY correction, action selection, IK behavior, target hold, scoring, or API limits.
-- Do not run a real online smoke test; a paid/API-backed run still requires separate explicit user approval.
-- Preserve historical screening outputs; every new run uses a unique output directory.
-- Preserve the user's untracked `docs/superpowers/plans/2026-07-19-agent-file-placement-rules.md`.
+- 候选 seeds 严格保持为包含端点的 55–100。
+- 方向顺序严格保持为 `["left", "right", "front"]`。
+- 资格边界包含等号：`start_pose_error <= 0.005m` 且 `block_visibility_ratio >= 0.75`。
+- 三个选中 seed 必须互不重复，并且必须是在方向顺序选择规则下可用的最小 seed。
+- 后续帧可见率和运动目标误差不作为候选资格输入。
+- 筛选和 `--preflight-only` 绝不能调用 `call_openai_compatible_api()`。
+- 不修改 grounding、反投影、冻结 XY 补偿、动作选择、IK 行为、目标保持、评分或 API 上限。
+- 不运行真实在线 smoke；付费/API 驱动的运行仍需用户另行明确批准。
+- 保留历史筛选输出；每次新运行使用唯一输出目录。
+- 保留用户未跟踪的 `docs/superpowers/plans/2026-07-19-agent-file-placement-rules.md`。
 
 ---
 
-### Task 1: Replace Full-Trajectory Qualification with Initial-Observation Qualification
+### 任务 1：用初始观察资格替换全轨迹资格
 
-**Files:**
-- Modify: `tests/vlm/grounding_smoke/test_screening.py`
-- Modify: `src/vla_project/vlm/grounding_smoke/screening.py`
-- Modify: `tests/test_config_contract.py`
-- Modify: `sim_config.yaml`
+**文件：**
+- 修改：`tests/vlm/grounding_smoke/test_screening.py`
+- 修改：`src/vla_project/vlm/grounding_smoke/screening.py`
+- 修改：`tests/test_config_contract.py`
+- 修改：`sim_config.yaml`
 
-**Interfaces:**
-- Consumes: `config["grounding_smoke"]`, `config["grounding_smoke"]["screening"]`
-- Produces: `classify_candidate(observation: dict | None, settings: dict, error: str | None = None) -> dict`
-- Produces: `run_candidate(config: dict, seed: int, direction: str, candidate_dir: Path | str) -> dict`
-- Preserves: `select_qualified_cases(candidate_rows: Iterable[dict], directions: Iterable[str]) -> list[dict]`
-- Preserves: `run_screening(config: dict, run_name: str | None = None) -> tuple[Path, dict]`
+**接口：**
+- 输入：`config["grounding_smoke"]`、`config["grounding_smoke"]["screening"]`
+- 产出：`classify_candidate(observation: dict | None, settings: dict, error: str | None = None) -> dict`
+- 产出：`run_candidate(config: dict, seed: int, direction: str, candidate_dir: Path | str) -> dict`
+- 保持：`select_qualified_cases(candidate_rows: Iterable[dict], directions: Iterable[str]) -> list[dict]`
+- 保持：`run_screening(config: dict, run_name: str | None = None) -> tuple[Path, dict]`
 
-- [ ] **Step 1: Replace trajectory classification tests with initial-boundary tests**
+- [ ] **步骤 1：用初始边界测试替换轨迹分类测试**
 
-Before writing the tests, name the breaks they catch:
+编写测试前，明确它们要捕获的破坏：
 
-- Changing `>` to `>=` for pose error must fail the equality-boundary test.
-- Changing `<` to `<=` for visibility must fail the equality-boundary test.
-- Checking visibility before pose error must fail the rejection-precedence test.
-- Returning a qualified result without an observation must fail the missing-observation test.
+- 将姿态误差判断从 `>` 改成 `>=` 时，等值边界测试必须失败。
+- 将可见率判断从 `<` 改成 `<=` 时，等值边界测试必须失败。
+- 在姿态误差之前检查可见率时，拒绝原因优先级测试必须失败。
+- 在没有观察记录时返回合格结果，缺失观察测试必须失败。
 
-Replace `SETTINGS`, `valid_steps()`, and `CandidateClassificationTests` in
-`tests/vlm/grounding_smoke/test_screening.py` with:
+将 `tests/vlm/grounding_smoke/test_screening.py` 中的 `SETTINGS`、`valid_steps()` 和
+`CandidateClassificationTests` 替换为：
 
 ```python
 SETTINGS = {
@@ -118,21 +118,21 @@ class CandidateClassificationTests(unittest.TestCase):
         self.assertEqual(result["error"], "missing_initial_observation")
 ```
 
-- [ ] **Step 2: Run the classification tests and verify RED**
+- [ ] **步骤 2：运行分类测试并验证 RED**
 
-Run:
+运行：
 
 ```bash
 python -m unittest \
   tests.vlm.grounding_smoke.test_screening.CandidateClassificationTests -v
 ```
 
-Expected: FAIL because the existing classifier expects an iterable of five observations and checks the old full-trajectory contract.
+预期：FAIL，因为现有分类器需要由五次观察组成的可迭代对象，并检查旧的全轨迹契约。
 
-- [ ] **Step 3: Implement the minimal initial-observation classifier**
+- [ ] **步骤 3：实现最小的初始观察分类器**
 
-Replace `classify_candidate()` in
-`src/vla_project/vlm/grounding_smoke/screening.py` with:
+将 `src/vla_project/vlm/grounding_smoke/screening.py` 中的
+`classify_candidate()` 替换为：
 
 ```python
 def classify_candidate(observation, settings, error=None):
@@ -162,24 +162,25 @@ def classify_candidate(observation, settings, error=None):
     return {"qualified": True, "reason": "qualified"}
 ```
 
-- [ ] **Step 4: Run the classification tests and verify GREEN**
+- [ ] **步骤 4：运行分类测试并验证 GREEN**
 
-Run:
+运行：
 
 ```bash
 python -m unittest \
   tests.vlm.grounding_smoke.test_screening.CandidateClassificationTests -v
 ```
 
-Expected: 6 tests PASS.
+预期：6 个测试 PASS。
 
-- [ ] **Step 5: Replace the motion-based candidate test with a one-frame behavior test**
+- [ ] **步骤 5：用单帧行为测试替换基于运动的候选测试**
 
-Before writing the test, name the break it catches: reintroducing any call to
-`direction_to_target()`, joint target calculation, joint actuation, or post-move link reads must fail because those names will not be patched and the candidate must complete with one observation.
+编写测试前，明确它要捕获的破坏：重新引入任何对 `direction_to_target()`、关节目标计算、
+关节驱动或运动后 link 读取的调用都必须失败，因为这些名称不会被 patch，候选必须只用
+一次观察完成。
 
-Replace
-`test_candidate_uses_four_real_control_steps_and_five_observations()` with:
+将 `test_candidate_uses_four_real_control_steps_and_five_observations()`
+替换为：
 
 ```python
 def test_candidate_uses_only_the_initial_observation(self):
@@ -248,7 +249,7 @@ def test_candidate_uses_only_the_initial_observation(self):
     )
 ```
 
-Add this cleanup/error test:
+增加以下清理/错误测试：
 
 ```python
 def test_candidate_error_is_recorded_and_physics_is_released(self):
@@ -275,10 +276,8 @@ def test_candidate_error_is_recorded_and_physics_is_released(self):
     disconnect.assert_called_once()
 ```
 
-In the existing
-`test_screening_evaluates_full_cartesian_product_and_writes_summary()`,
-add this behavior assertion so the saved summary freezes the rule used to
-produce `selected_cases`:
+在现有 `test_screening_evaluates_full_cartesian_product_and_writes_summary()`
+中增加以下行为断言，使保存的摘要冻结用于生成 `selected_cases` 的规则：
 
 ```python
 self.assertEqual(
@@ -295,9 +294,9 @@ self.assertEqual(
 )
 ```
 
-- [ ] **Step 6: Run the candidate tests and verify RED**
+- [ ] **步骤 6：运行候选测试并验证 RED**
 
-Run:
+运行：
 
 ```bash
 python -m unittest \
@@ -305,13 +304,14 @@ python -m unittest \
   tests.vlm.grounding_smoke.test_screening.ScreeningRunnerTests.test_candidate_error_is_recorded_and_physics_is_released -v
 ```
 
-Expected: the one-frame test FAILS because the existing implementation attempts four movement steps; the error test may already pass and protects cleanup while refactoring.
+预期：单帧测试 FAIL，因为现有实现尝试执行四个运动步骤；错误测试可能已经通过，并在
+重构期间保护清理行为。
 
-- [ ] **Step 7: Refactor observation capture and candidate execution**
+- [ ] **步骤 7：重构观察捕获和候选执行**
 
-In `src/vla_project/vlm/grounding_smoke/screening.py`:
+在 `src/vla_project/vlm/grounding_smoke/screening.py` 中：
 
-1. Remove imports used only by the old motion trajectory:
+1. 删除仅供旧运动轨迹使用的导入：
 
 ```python
 apply_joint_targets
@@ -320,12 +320,11 @@ get_link_position
 direction_to_target
 ```
 
-2. Rename `_capture_observation()` to `_capture_initial_observation()`, remove
-`config` and `observation_step` parameters, always save `step_00.jpg`, and keep
-the existing requested target, actual EE, true block, distance, visibility,
-camera eye, and image-path evidence.
+2. 将 `_capture_observation()` 重命名为 `_capture_initial_observation()`，删除
+`config` 和 `observation_step` 参数，始终保存 `step_00.jpg`，并保留现有的请求目标、
+实际末端位置、真实积木、距离、可见率、相机位置和图片路径证据。
 
-The return must be:
+返回值必须为：
 
 ```python
 return {
@@ -347,7 +346,7 @@ return {
 }
 ```
 
-3. Replace the movement loop in `run_candidate()` with one call:
+3. 将 `run_candidate()` 中的运动循环替换为一次调用：
 
 ```python
 observation = _capture_initial_observation(
@@ -362,7 +361,7 @@ observation = _capture_initial_observation(
 classification = classify_candidate(observation, settings)
 ```
 
-Initialize `observation = None` before `try`, and return a flat record:
+在 `try` 之前初始化 `observation = None`，并返回扁平记录：
 
 ```python
 return {
@@ -373,7 +372,7 @@ return {
 }
 ```
 
-In the `except` branch call:
+在 `except` 分支中调用：
 
 ```python
 classification = classify_candidate(
@@ -383,8 +382,7 @@ classification = classify_candidate(
 )
 ```
 
-4. Add the frozen selection rule to the summary constructed by
-`run_screening()`:
+4. 在 `run_screening()` 构造的摘要中加入冻结的选择规则：
 
 ```python
 "selection_rule": {
@@ -400,19 +398,19 @@ classification = classify_candidate(
 },
 ```
 
-- [ ] **Step 8: Run all screening tests and verify GREEN**
+- [ ] **步骤 8：运行全部筛选测试并验证 GREEN**
 
-Run:
+运行：
 
 ```bash
 python -m unittest tests.vlm.grounding_smoke.test_screening -v
 ```
 
-Expected: all screening tests PASS.
+预期：全部筛选测试 PASS。
 
-- [ ] **Step 9: Remove obsolete trajectory screening configuration under TDD**
+- [ ] **步骤 9：按 TDD 删除过时的轨迹筛选配置**
 
-Update `tests/test_config_contract.py` so the screening assertions are:
+更新 `tests/test_config_contract.py`，使筛选断言为：
 
 ```python
 self.assertEqual(screening["seed_range"], [55, 100])
@@ -424,21 +422,19 @@ self.assertNotIn("num_actions", screening)
 self.assertNotIn("max_final_distance_xy", screening)
 ```
 
-Run:
+运行：
 
 ```bash
 python -m unittest tests.test_config_contract.ConfigContractTests.test_grounding_smoke_config_is_safe_and_frozen -v
 ```
 
-Expected: FAIL because `sim_config.yaml` still contains `num_actions` and
-`max_final_distance_xy`.
+预期：FAIL，因为 `sim_config.yaml` 仍包含 `num_actions` 和
+`max_final_distance_xy`。
 
-Then remove those two keys from `grounding_smoke.screening` in
-`sim_config.yaml`, remove the same obsolete keys from the
-`screening_config()` test fixture, and revise the comments to describe
-first-frame qualification.
+然后从 `sim_config.yaml` 的 `grounding_smoke.screening` 中删除这两个键，从
+`screening_config()` 测试夹具中删除相同的过时键，并修改注释以描述首帧资格。
 
-Run:
+运行：
 
 ```bash
 python -m unittest \
@@ -446,9 +442,9 @@ python -m unittest \
   tests.vlm.grounding_smoke.test_screening -v
 ```
 
-Expected: all selected tests PASS.
+预期：所有选定测试 PASS。
 
-- [ ] **Step 10: Commit Task 1**
+- [ ] **步骤 10：提交任务 1**
 
 ```bash
 git add \
@@ -461,27 +457,26 @@ git commit -m "feat: screen smoke cases from initial observations"
 
 ---
 
-### Task 2: Extract Batch Preflight and Add `--preflight-only`
+### 任务 2：提取批次预检并增加 `--preflight-only`
 
-**Files:**
-- Modify: `tests/vlm/grounding_smoke/test_runner.py`
-- Modify: `src/vla_project/vlm/grounding_smoke/runner.py`
+**文件：**
+- 修改：`tests/vlm/grounding_smoke/test_runner.py`
+- 修改：`src/vla_project/vlm/grounding_smoke/runner.py`
 
-**Interfaces:**
-- Consumes: `preflight_smoke_case(config: dict, smoke_config: dict, case: dict) -> dict`
-- Produces: `run_smoke_preflight(config: dict, run_name: str | None = None) -> tuple[Path, dict]`
-- Changes: `main(argv: list[str] | None = None) -> None`
-- Preserves: `run_smoke_batch(config: dict, run_name: str | None = None) -> tuple[Path, dict]`
+**接口：**
+- 输入：`preflight_smoke_case(config: dict, smoke_config: dict, case: dict) -> dict`
+- 产出：`run_smoke_preflight(config: dict, run_name: str | None = None) -> tuple[Path, dict]`
+- 修改：`main(argv: list[str] | None = None) -> None`
+- 保持：`run_smoke_batch(config: dict, run_name: str | None = None) -> tuple[Path, dict]`
 
-- [ ] **Step 1: Add a failing test for the reusable successful preflight**
+- [ ] **步骤 1：为可复用的成功预检增加失败测试**
 
-Add `run_smoke_preflight` to the imports from `runner`.
+从 `runner` 导入时加入 `run_smoke_preflight`。
 
-Before writing the test, name the break it catches: returning after the first
-case, failing to persist all three records, or creating online episode evidence
-must fail.
+编写测试前，明确它要捕获的破坏：第一个案例后就返回、未持久化全部三条记录，或创建
+在线 episode 证据时，测试都必须失败。
 
-Add to `SmokeBatchContractTests`:
+加入 `SmokeBatchContractTests`：
 
 ```python
 def test_run_smoke_preflight_writes_three_qualified_cases_only(self):
@@ -521,20 +516,20 @@ def test_run_smoke_preflight_writes_three_qualified_cases_only(self):
         self.assertFalse((run_dir / "smoke_summary.json").exists())
 ```
 
-- [ ] **Step 2: Run the preflight test and verify RED**
+- [ ] **步骤 2：运行预检测试并验证 RED**
 
-Run:
+运行：
 
 ```bash
 python -m unittest \
   tests.vlm.grounding_smoke.test_runner.SmokeBatchContractTests.test_run_smoke_preflight_writes_three_qualified_cases_only -v
 ```
 
-Expected: ERROR because `run_smoke_preflight` does not exist.
+预期：ERROR，因为 `run_smoke_preflight` 尚不存在。
 
-- [ ] **Step 3: Extract the reusable batch preflight**
+- [ ] **步骤 3：提取可复用的批次预检**
 
-Add before `run_smoke_batch()` in `runner.py`:
+在 `runner.py` 的 `run_smoke_batch()` 之前增加：
 
 ```python
 def run_smoke_preflight(config, run_name=None):
@@ -569,7 +564,7 @@ def run_smoke_preflight(config, run_name=None):
     return batch_dir, summary
 ```
 
-Change the beginning of `run_smoke_batch()` to:
+将 `run_smoke_batch()` 的开头改为：
 
 ```python
 def run_smoke_batch(config, run_name=None):
@@ -585,11 +580,11 @@ def run_smoke_batch(config, run_name=None):
     )
 ```
 
-Delete the duplicated inline preflight block from `run_smoke_batch()`.
+从 `run_smoke_batch()` 删除重复的内联预检代码块。
 
-- [ ] **Step 4: Run batch contract tests and verify GREEN**
+- [ ] **步骤 4：运行批次契约测试并验证 GREEN**
 
-Run:
+运行：
 
 ```bash
 python -m unittest \
@@ -598,16 +593,15 @@ python -m unittest \
   tests.vlm.grounding_smoke.test_runner.SmokeBatchContractTests.test_batch_uses_three_isolated_cases_and_writes_summary -v
 ```
 
-Expected: all 3 tests PASS. Adjust existing patches to target
-`run_smoke_preflight` only if the direct `preflight_smoke_case` patches no
-longer exercise the real extracted orchestration.
+预期：3 个测试全部 PASS。仅当直接 patch `preflight_smoke_case` 已无法覆盖真实提取后的
+编排时，才调整现有 patch，使其以 `run_smoke_preflight` 为目标。
 
-- [ ] **Step 5: Add a failing CLI test for `--preflight-only`**
+- [ ] **步骤 5：为 `--preflight-only` 增加失败的 CLI 测试**
 
-Before writing the test, name the break it catches: ignoring
-`--preflight-only` and entering `run_smoke_batch()` must fail immediately.
+编写测试前，明确它要捕获的破坏：忽略 `--preflight-only` 并进入
+`run_smoke_batch()` 时必须立即失败。
 
-Import `main` from `runner`, then add:
+从 `runner` 导入 `main`，然后增加：
 
 ```python
 def test_cli_preflight_only_never_enters_online_batch(self):
@@ -659,27 +653,27 @@ def test_cli_preflight_only_never_enters_online_batch(self):
         self.assertFalse((run_dir / "smoke_summary.json").exists())
 ```
 
-- [ ] **Step 6: Run the CLI test and verify RED**
+- [ ] **步骤 6：运行 CLI 测试并验证 RED**
 
-Run:
+运行：
 
 ```bash
 python -m unittest \
   tests.vlm.grounding_smoke.test_runner.SmokeBatchContractTests.test_cli_preflight_only_never_enters_online_batch -v
 ```
 
-Expected: ERROR because `main()` does not accept `argv` and the parser does not
-define `--preflight-only`.
+预期：ERROR，因为 `main()` 不接受 `argv`，并且解析器没有定义
+`--preflight-only`。
 
-- [ ] **Step 7: Implement `--preflight-only`**
+- [ ] **步骤 7：实现 `--preflight-only`**
 
-Change:
+修改：
 
 ```python
 def main(argv=None):
 ```
 
-Add the argument:
+增加参数：
 
 ```python
 parser.add_argument(
@@ -690,7 +684,7 @@ parser.add_argument(
 args = parser.parse_args(argv)
 ```
 
-Before the normal `run_smoke_batch()` branch, add:
+在普通 `run_smoke_batch()` 分支之前增加：
 
 ```python
 if args.preflight_only:
@@ -706,12 +700,11 @@ if args.preflight_only:
     return
 ```
 
-Do not load calibration, construct episode dependencies, or inspect API
-configuration in this branch.
+此分支不得加载 calibration、构造 episode 依赖或检查 API 配置。
 
-- [ ] **Step 8: Run runner and smoke tests and verify GREEN**
+- [ ] **步骤 8：运行 runner 和 smoke 测试并验证 GREEN**
 
-Run:
+运行：
 
 ```bash
 python -m unittest \
@@ -719,9 +712,9 @@ python -m unittest \
   tests.vlm.grounding_smoke.test_runner -v
 ```
 
-Expected: all runner tests PASS.
+预期：全部 runner 测试 PASS。
 
-- [ ] **Step 9: Commit Task 2**
+- [ ] **步骤 9：提交任务 2**
 
 ```bash
 git add \
@@ -732,85 +725,80 @@ git commit -m "feat: add grounding smoke preflight-only mode"
 
 ---
 
-### Task 3: Run the Real No-API Selection and Freeze the Selected Cases
+### 任务 3：运行真实无 API 筛选并冻结选中的案例
 
-**Files:**
-- Generated: `outputs/vlm_evaluations/grounding_world_smoke_screening/run_20260726_initial_qualification_v1/`
-- Modify: `sim_config.yaml`
-- Modify: `tests/test_config_contract.py`
-- Generated: `outputs/vlm_evaluations/grounding_world_smoke/run_20260726_fixed_cases_preflight_v1/`
+**文件：**
+- 生成：`outputs/vlm_evaluations/grounding_world_smoke_screening/run_20260726_initial_qualification_v1/`
+- 修改：`sim_config.yaml`
+- 修改：`tests/test_config_contract.py`
+- 生成：`outputs/vlm_evaluations/grounding_world_smoke/run_20260726_fixed_cases_preflight_v1/`
 
-**Interfaces:**
-- Consumes: `vla-screen-grounding-smoke --run-name <name>`
-- Consumes: `screening_summary.json["selected_cases"]`
-- Produces: `grounding_smoke.seeds` ordered as `[left_seed, right_seed, front_seed]`
-- Consumes: `vla-run-grounding-smoke --preflight-only --run-name <name>`
-- Produces: `smoke_preflight.json` with `qualified_count == 3` and `passed == true`
+**接口：**
+- 输入：`vla-screen-grounding-smoke --run-name <name>`
+- 输入：`screening_summary.json["selected_cases"]`
+- 产出：按 `[left_seed, right_seed, front_seed]` 排序的 `grounding_smoke.seeds`
+- 输入：`vla-run-grounding-smoke --preflight-only --run-name <name>`
+- 产出：满足 `qualified_count == 3` 且 `passed == true` 的 `smoke_preflight.json`
 
-- [ ] **Step 1: Run the real 138-candidate no-API screening**
+- [ ] **步骤 1：运行真实的 138 候选无 API 筛选**
 
-Ensure no real smoke command is running. Then run:
+确认没有真实 smoke 命令正在运行，然后执行：
 
 ```bash
 vla-screen-grounding-smoke \
   --run-name run_20260726_initial_qualification_v1
 ```
 
-Expected:
+预期：
 
-- exit code 0;
-- 138 candidate records;
-- three selected cases in `left`, `right`, `front` order;
-- no API request or API environment dependency;
-- only `step_00.jpg` exists within each successfully captured candidate directory.
+- 退出码为 0；
+- 生成 138 条候选记录；
+- 三个选中案例按 `left`、`right`、`front` 排序；
+- 没有 API 请求，也不依赖 API 环境；
+- 每个成功捕获的候选目录中只存在 `step_00.jpg`。
 
-If the run name already exists, choose the next deterministic suffix
-`run_20260726_initial_qualification_v2`; never delete or overwrite the existing
-directory.
+如果运行名称已经存在，选择下一个确定性后缀
+`run_20260726_initial_qualification_v2`；绝不删除或覆盖现有目录。
 
-- [ ] **Step 2: Validate the selection evidence before changing configuration**
+- [ ] **步骤 2：修改配置前验证选择证据**
 
-Set `SELECTION_SUMMARY` to the actual newly created summary path and run:
+将 `SELECTION_SUMMARY` 设为实际新建的摘要路径，然后运行：
 
 ```bash
 python -c 'import json, pathlib, sys; p=pathlib.Path(sys.argv[1]); s=json.loads(p.read_text()); c=s["selected_cases"]; assert s["passed"] is True; assert s["num_candidates"] == 138; assert len(c) == 3; assert [x["direction"] for x in c] == ["left", "right", "front"]; assert len({x["seed"] for x in c}) == 3; assert all(55 <= x["seed"] <= 100 for x in c); print([x["seed"] for x in c])' \
   "$SELECTION_SUMMARY"
 ```
 
-Expected: prints exactly the ordered `[left_seed, right_seed, front_seed]`
-selected by the saved evidence.
+预期：准确打印保存证据选出的有序 `[left_seed, right_seed, front_seed]`。
 
-- [ ] **Step 3: Add a failing configuration contract for the evidence-selected cases**
+- [ ] **步骤 3：为证据选中的案例增加失败配置契约**
 
-Replace the old fixed seed assertion in
-`tests/test_config_contract.py` with the exact three integer seeds printed in
-Step 2:
+将 `tests/test_config_contract.py` 中旧的固定 seed 断言替换为步骤 2 打印的三个确切
+整数 seed：
 
 ```python
 self.assertEqual(smoke["seeds"], [left_seed, right_seed, front_seed])
 ```
 
-Here `left_seed`, `right_seed`, and `front_seed` mean the literal integers from
-the actual saved `selected_cases`; write those integer literals into the test,
-not variable names and not hand-selected alternatives.
+这里的 `left_seed`、`right_seed` 和 `front_seed` 表示实际保存的 `selected_cases`
+中的整数；在测试中写入这些整数字面量，不要写变量名，也不要手工选择替代值。
 
-Run:
+运行：
 
 ```bash
 python -m unittest \
   tests.test_config_contract.ConfigContractTests.test_grounding_smoke_config_is_safe_and_frozen -v
 ```
 
-Expected: FAIL because `sim_config.yaml` still contains `[52, 53, 54]`.
+预期：FAIL，因为 `sim_config.yaml` 仍包含 `[52, 53, 54]`。
 
-- [ ] **Step 4: Freeze the evidence-selected cases in configuration**
+- [ ] **步骤 4：在配置中冻结证据选中的案例**
 
-Use `apply_patch` to replace only `grounding_smoke.seeds` in `sim_config.yaml`
-with the exact ordered integer list from Step 2. Update the adjacent comment to
-name the no-API screening run directory used as evidence. Do not change
-`start_directions`.
+使用 `apply_patch`，仅将 `sim_config.yaml` 中的 `grounding_smoke.seeds`
+替换为步骤 2 得到的确切有序整数列表。更新相邻注释，写明作为证据的无 API 筛选运行
+目录。不要修改 `start_directions`。
 
-Run:
+运行：
 
 ```bash
 python -m unittest \
@@ -818,15 +806,14 @@ python -m unittest \
   tests.vlm.grounding_smoke.test_runner.SmokeBatchContractTests.test_builds_exact_three_cases_without_back -v
 ```
 
-If `test_builds_exact_three_cases_without_back` still hard-codes `[52, 53, 54]`,
-change its fixture and expected cases to the same three literal selected seeds.
+如果 `test_builds_exact_three_cases_without_back` 仍硬编码 `[52, 53, 54]`，将其夹具
+和预期案例改成相同的三个选中 seed 字面量。
 
-Expected: selected tests PASS and `build_smoke_cases()` preserves the
-`left/right/front` mapping.
+预期：选定测试 PASS，并且 `build_smoke_cases()` 保持 `left/right/front` 映射。
 
-- [ ] **Step 5: Run the fixed three-case preflight-only command**
+- [ ] **步骤 5：运行固定三案例只预检命令**
 
-Run:
+运行：
 
 ```bash
 vla-run-grounding-smoke \
@@ -834,34 +821,31 @@ vla-run-grounding-smoke \
   --run-name run_20260726_fixed_cases_preflight_v1
 ```
 
-Expected:
+预期：
 
-- exit code 0;
-- CLI reports `qualified=3/3 passed=True`;
-- the run directory contains `smoke_preflight.json`;
-- no episode directory, `episode_summary.jsonl`, or `smoke_summary.json`;
-- no VLM API call.
+- 退出码为 0；
+- CLI 报告 `qualified=3/3 passed=True`；
+- 运行目录包含 `smoke_preflight.json`；
+- 不存在 episode 目录、`episode_summary.jsonl` 或 `smoke_summary.json`；
+- 没有 VLM API 调用。
 
-If the run name already exists, use the next deterministic suffix
-`run_20260726_fixed_cases_preflight_v2`; never delete or overwrite evidence.
+如果运行名称已经存在，使用下一个确定性后缀
+`run_20260726_fixed_cases_preflight_v2`；绝不删除或覆盖证据。
 
-- [ ] **Step 6: Validate the preflight evidence**
+- [ ] **步骤 6：验证预检证据**
 
-Set `PREFLIGHT_SUMMARY` to the actual newly created `smoke_preflight.json` and
-run:
+将 `PREFLIGHT_SUMMARY` 设为实际新建的 `smoke_preflight.json`，然后运行：
 
 ```bash
 python -c 'import json, pathlib, sys; p=pathlib.Path(sys.argv[1]); s=json.loads(p.read_text()); assert s["num_cases"] == 3; assert s["qualified_count"] == 3; assert s["passed"] is True; assert len(s["cases"]) == 3; assert all(x["qualified"] and x["rejection_reason"] is None for x in s["cases"]); print([(x["seed"], x["start_direction"], x["start_pose_error"], x["block_visibility_ratio"]) for x in s["cases"]])' \
   "$PREFLIGHT_SUMMARY"
 ```
 
-Expected: prints the three selected cases and their passing pose/visibility
-metrics.
+预期：打印三个选中案例及其通过的姿态/可见率指标。
 
-- [ ] **Step 7: Commit Task 3**
+- [ ] **步骤 7：提交任务 3**
 
-Generated outputs remain ignored. Commit only the frozen configuration and its
-contracts:
+生成输出继续保持忽略状态。只提交冻结的配置及其契约：
 
 ```bash
 git add sim_config.yaml tests/test_config_contract.py \
@@ -871,69 +855,65 @@ git commit -m "config: freeze qualified grounding smoke cases"
 
 ---
 
-### Task 4: Record Evidence and Verify the Repository
+### 任务 4：记录证据并验证仓库
 
-**Files:**
-- Modify: `docs/agent/PROJECT_OVERVIEW.md`
-- Modify: `docs/agent/CURRENT_STATUS.md`
-- Modify: `docs/worklog/WORKLOG.md`
-- Inspect: `README.md`
-- Inspect: `docs/debugging/BUGLOG.md`
+**文件：**
+- 修改：`docs/agent/PROJECT_OVERVIEW.md`
+- 修改：`docs/agent/CURRENT_STATUS.md`
+- 修改：`docs/worklog/WORKLOG.md`
+- 检查：`README.md`
+- 检查：`docs/debugging/BUGLOG.md`
 
-**Interfaces:**
-- Consumes: actual `screening_summary.json`
-- Consumes: actual `smoke_preflight.json`
-- Produces: current authoritative stage status and reproducible evidence links
+**接口：**
+- 输入：实际 `screening_summary.json`
+- 输入：实际 `smoke_preflight.json`
+- 产出：当前权威阶段状态和可复现证据链接
 
-- [ ] **Step 1: Update stable and dynamic project knowledge**
+- [ ] **步骤 1：更新稳定与动态项目知识**
 
-Use the literal metrics and paths from Task 3.
+使用任务 3 中的指标和路径字面量。
 
-In `PROJECT_OVERVIEW.md`:
+在 `PROJECT_OVERVIEW.md` 中：
 
-- replace the conclusion that zero dynamic candidates qualified as the current
-  selection premise;
-- retain that result as evidence that full-trajectory clear was an invalid
-  prerequisite;
-- add the selected fixed cases and the `3/3` initial preflight result;
-- state that no second online smoke has been run.
+- 替换“动态候选合格数为零”这一当前选择前提；
+- 保留该结果，作为“全轨迹 clear 是无效前提”的证据；
+- 加入选中的固定案例和 `3/3` 初始预检结果；
+- 说明尚未运行第二次在线 smoke。
 
-In `CURRENT_STATUS.md`:
+在 `CURRENT_STATUS.md` 中：
 
-- update the last checked date to `2026-07-26`;
-- mark fixed-case reselection and `3/3` no-API preflight complete;
-- remove the obsolete unresolved items for `52-left` and `54-front`;
-- set the next step to reviewing the no-API evidence and obtaining explicit
-  user approval before any real smoke;
-- retain autonomous stop and in-loop batch exception handling as unresolved.
+- 将最后核对日期更新为 `2026-07-26`；
+- 将固定案例重选和 `3/3` 无 API 预检标记为完成；
+- 删除关于 `52-left` 和 `54-front` 的过时未解决项；
+- 将下一步设为审阅无 API 证据，并在任何真实 smoke 前获得用户明确批准；
+- 保留自主 stop 和循环内批次异常处理为未解决问题。
 
-In `WORKLOG.md`, add one dated entry containing:
+在 `WORKLOG.md` 中增加一条带日期的记录，包含：
 
-- the frozen selection rule;
-- candidate counts and reason counts;
-- selected seed-direction pairs;
-- screening output path;
-- fixed preflight metrics for all three cases;
-- preflight output path;
-- explicit API call count of 0;
-- the decision not to run an online smoke.
+- 冻结的选择规则；
+- 候选数量和原因计数；
+- 选中的 seed-direction 对；
+- 筛选输出路径；
+- 三个固定案例的预检指标；
+- 预检输出路径；
+- 明确的 API 调用次数 0；
+- 不运行在线 smoke 的决定。
 
-- [ ] **Step 2: Inspect README and BUGLOG for stale authoritative claims**
+- [ ] **步骤 2：检查 README 和 BUGLOG 中过时的权威表述**
 
-Run:
+运行：
 
 ```bash
 rg -n "52-left|53-right|54-front|55–100|55-100|0个合格|固定案例|下一步" \
   README.md docs/debugging/BUGLOG.md
 ```
 
-Only update a file if it presents the obsolete fixed cases as the current next
-step. Preserve historical bug evidence and clearly label it historical instead
-of rewriting old results.
+仅当文件把过时的固定案例表述为当前下一步时才更新。保留历史 Bug 证据，并明确标注其
+历史性质，不要改写旧结果。
 
-- [ ] **Step 3: Run focused verification**
+- [ ] **步骤 3：运行定向验证**
 
-Run:
+运行：
 
 ```bash
 python -m unittest \
@@ -944,11 +924,11 @@ python -m unittest \
   tests.test_package_metadata -v
 ```
 
-Expected: all focused tests PASS with zero failures and zero errors.
+预期：全部定向测试 PASS，失败数和错误数均为零。
 
-- [ ] **Step 4: Run full verification**
+- [ ] **步骤 4：运行全量验证**
 
-Run:
+运行：
 
 ```bash
 python -m unittest discover -s tests -v
@@ -957,17 +937,16 @@ git diff --check
 git status --short
 ```
 
-Expected:
+预期：
 
-- full suite exits 0 with zero failures and zero errors;
-- `compileall` exits 0;
-- `git diff --check` exits 0;
-- only intended task files plus the preserved pre-existing untracked plan are
-  present.
+- 全量测试以 0 退出，失败数和错误数均为零；
+- `compileall` 以 0 退出；
+- `git diff --check` 以 0 退出；
+- 只存在预期任务文件以及保留的既有未跟踪计划。
 
-- [ ] **Step 5: Audit requirements against evidence**
+- [ ] **步骤 5：根据证据审计需求**
 
-Read the final `screening_summary.json` and `smoke_preflight.json` and check:
+读取最终 `screening_summary.json` 和 `smoke_preflight.json` 并检查：
 
 ```text
 [ ] 138 candidates were evaluated
@@ -980,13 +959,13 @@ Read the final `screening_summary.json` and `smoke_preflight.json` and check:
 [ ] documentation records API calls=0
 ```
 
-For the smallest-seed check, load `candidate_trace.jsonl`, independently filter
-`qualified=true`, apply the direction-order distinct-seed rule, and compare the
-result with `screening_summary.json["selected_cases"]`.
+检查最小 seed 时，加载 `candidate_trace.jsonl`，独立筛选 `qualified=true`，应用按
+方向顺序选择互异 seed 的规则，并将结果与
+`screening_summary.json["selected_cases"]` 比较。
 
-- [ ] **Step 6: Commit Task 4**
+- [ ] **步骤 6：提交任务 4**
 
-Stage only documentation actually changed:
+只暂存实际修改的文档：
 
 ```bash
 git add \
@@ -998,18 +977,16 @@ git diff --cached --stat
 git commit -m "docs: record qualified grounding smoke cases"
 ```
 
-If README or BUGLOG did not require changes, omit them from `git add`. Before
-committing, confirm the pre-existing untracked
-`docs/superpowers/plans/2026-07-19-agent-file-placement-rules.md` is not staged.
+如果 README 或 BUGLOG 不需要修改，则从 `git add` 中省略。提交前，确认既有未跟踪文件
+`docs/superpowers/plans/2026-07-19-agent-file-placement-rules.md` 未被暂存。
 
-- [ ] **Step 7: Report the execution boundary**
+- [ ] **步骤 7：报告执行边界**
 
-Report:
+报告：
 
-- selected fixed cases;
-- screening and preflight evidence paths;
-- exact focused and full test counts;
-- API calls: 0;
-- real online smoke: not run;
-- remaining requirement: explicit user approval before the paid/API-backed
-  smoke command.
+- 选中的固定案例；
+- 筛选和预检证据路径；
+- 确切的定向和全量测试数量；
+- API 调用次数：0；
+- 真实在线 smoke：未运行；
+- 剩余要求：执行付费/API 驱动的 smoke 命令前，必须获得用户明确批准。
