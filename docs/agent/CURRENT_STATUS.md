@@ -4,12 +4,11 @@
 
 ## 当前阶段
 
-首轮真实 `grounding_smoke` 未通过且未完整跑完，但其后续修订已完成：成功评分已拆分，
-整批无 API 门禁已建立，固定案例也已按冻结的首帧资格规则重选。seeds 55–100 ×
-left/right/front 的138个候选中有47个满足起点姿态误差不超过5mm且首帧可见率不低于
-0.75；确定性选择得到 `56-left`、`55-right`、`59-front`。三个新固定案例的独立
-`--preflight-only` 验证为3/3合格，API调用为0。当前暂停在第二轮真实 smoke 之前，
-仍需用户明确批准付费/API运行。
+第二轮真实 `grounding_smoke` 已在固定案例 `56-left`、`55-right`、`59-front` 上
+完成。主要 `success=3/3`、真实到达 `task_success=3/3`，最终真实 XY 距离分别为
+0.303/0.789/0.371cm；整批调用 VLM API 4次并满足 `passed=true`。自主停止只有1/3，
+另外两例到达后以 `stale_target_limit` 结束。当前小规模在线闭环的主要通过条件已
+满足，阶段入口转向专家数据规模化；自主 stop 作为已知限制单独跟踪。
 
 ## 已完成且仍有效
 
@@ -47,6 +46,14 @@ left/right/front 的138个候选中有47个满足起点姿态误差不超过5mm�
 - 新固定案例预检指标：`56-left` 姿态误差0.001144m、可见率0.753968；
   `55-right` 姿态误差0.004672m、可见率0.928571；`59-front` 姿态误差0.002442m、
   可见率0.806878。
+- 第二轮真实 smoke 证据保存在
+  `outputs/vlm_evaluations/grounding_world_smoke/run_20260726_fixed_cases_online_v1/`；
+  批次主要成功和任务到达均为3/3，`passed=true`，总 API 调用4次。
+- `56-left`、`55-right`、`59-front` 的真实 XY 距离分别从约
+  9.93/10.43/9.96cm 降到0.303/0.789/0.371cm；三例均执行5次动作。
+- `55-right` 在一次遮挡恢复后自主 stop；`56-left` 和 `59-front` 物理到达但未自主
+  stop，因此整批 `autonomous_stop_success=1/3`，终止原因计数为
+  `success: 1`、`stale_target_limit: 2`。
 
 ## 未解决问题
 
@@ -55,25 +62,26 @@ left/right/front 的138个候选中有47个满足起点姿态误差不超过5mm�
    新字段，其 `success_rate` 不可与新批次直接合并比较。
 2. 初始动态资格现在已有完整预检 JSON；但正式闭环开始后的普通案例异常仍可能中断批次
    并缺少完整 summary，该部分不在本轮预检修复范围。
-3. 控制器到达目标后仍可能没有自主预测 `stop`；新固定案例尚未经过真实在线闭环。
+3. 控制器到达目标后仍可能没有自主预测 `stop`；第二轮真实 smoke 中仅1/3自主停止，
+   另外两例依赖 `stale_target_limit` 结束。
 4. 永久遮挡、目标移动和 severe 遮挡恢复仍不在当前范围。
 5. README、学习计划和 BUGLOG 的阶段表述可能存在时间差；实验结论以
    原始摘要和对应证据链为准。
 
 ## 下一步优先级
 
-1. 审阅固定案例筛选与3/3只预检证据。
-2. 只有用户明确批准后，才运行第二轮真实 smoke；不得因预检通过自动调用 VLM API。
-3. 真实 smoke 后按主要终止原因决定是改进自主 stop，还是处理闭环批次异常。
+1. 结束当前小规模 smoke 阶段，先明确专家数据规模化的样本数量、场景覆盖、数据 schema
+   和验收指标。
+2. 批量生成前先做一小批专家数据验收，确认图像、状态、动作、终止原因和可复现性。
+3. 将自主 stop 改进作为独立可选任务；除非下一阶段明确依赖它，否则不阻塞专家数据
+   规模化。
 
-## 当前暂停点（2026-07-26）
+## 当前恢复点（2026-07-26）
 
-固定案例重选、配置冻结和3/3只预检已经完成。证据目录分别为
-`outputs/vlm_evaluations/grounding_world_smoke_screening/run_20260726_initial_qualification_v1/`
-和
-`outputs/vlm_evaluations/grounding_world_smoke/run_20260726_fixed_cases_preflight_v1/`。
-本轮没有调用真实 VLM。下次继续时先取得用户对第二轮真实 smoke 的明确批准，不再筛选
-或临时替换案例。
+固定案例重选、配置冻结、3/3只预检和第二轮真实 smoke 均已完成。在线证据目录为
+`outputs/vlm_evaluations/grounding_world_smoke/run_20260726_fixed_cases_online_v1/`。
+下次继续时从专家数据规模化的范围设计开始，不需要重复筛选案例或再次运行同一批 smoke；
+若选择先改自主 stop，应另立受限任务并保持现有3/3任务到达基线不回退。
 
 ## 当前任务入口
 

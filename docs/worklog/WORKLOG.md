@@ -989,3 +989,42 @@ outputs/vlm_evaluations/grounding_world_smoke/run_20260726_fixed_cases_preflight
 第二轮在线 smoke。独立重算最小互异 seed 规则与摘要完全一致；grounding smoke、
 配置和包入口定向测试为74/74通过，全量自动测试为171/171通过，`compileall` 和
 `git diff --check` 通过。下一步只能在用户明确批准付费/API运行后继续。
+
+## 29. 第二轮真实 Grounding 闭环 Smoke（2026-07-26）
+
+用户明确批准后，在3/3无 API 预检通过的固定案例上运行：
+
+```text
+conda run -n vla_env env PYTHONPATH=src vla-run-grounding-smoke \
+  --run-name run_20260726_fixed_cases_online_v1
+```
+
+进程退出码为0，批次 `passed=true`。三个案例的主要成功与真实任务到达均为3/3，总计
+调用 VLM API 4次；具体结果为：
+
+```text
+56-left：  主要成功，未自主stop，stale_target_limit，1次API，
+           真实XY距离9.934cm -> 0.303cm
+55-right： 主要成功，自主stop，success，2次API，
+           真实XY距离10.433cm -> 0.789cm，发生1次遮挡恢复
+59-front： 主要成功，未自主stop，stale_target_limit，1次API，
+           真实XY距离9.958cm -> 0.371cm
+整批：     success=3/3，task_success=3/3，
+           autonomous_stop_success=1/3，API调用4次
+```
+
+三例各执行5次动作；整批包含4个 fresh VLM 步骤和12个 held 目标步骤。`56-left` 与
+`59-front` 虽然没有预测 stop，但最终真实距离已低于3cm，并且终止原因为评分契约允许
+的 `stale_target_limit`，所以主要 `success=true`。这与自主停止成功是两个独立指标。
+
+完整证据保存在：
+
+```text
+outputs/vlm_evaluations/grounding_world_smoke/run_20260726_fixed_cases_online_v1/
+```
+
+其中 `smoke_summary.json` 是批次权威摘要，`episode_summary.jsonl` 和三个 episode
+目录保存逐案例结果、trace 与图片。该结果证明固定相机、冻结校准、三个固定方向和最多
+4步目标保持条件下，小规模模块化在线闭环已满足当前主要通过条件；它不证明自主停止、
+severe 遮挡、移动目标或大规模泛化已经解决。按此前约定的决策规则，下一阶段进入专家
+数据规模化，自主 stop 以独立改进项保留。
