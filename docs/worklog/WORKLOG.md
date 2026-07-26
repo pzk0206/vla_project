@@ -942,3 +942,50 @@ worktree 与已合并分支已清理。用户原有未跟踪文件
 该方案尚未获得用户对“继续保持三个方向覆盖”的确认，因此今天在设计澄清阶段暂停。
 下次恢复时先确认这一点，再比较候选选择方案并形成设计文档；不要直接改配置或运行
 真实 API。
+
+## 28. Grounding Smoke 固定案例重选与3/3只预检（2026-07-26）
+
+本轮按已批准设计将候选资格从“不可能满足的五帧全轨迹 clear”改为“起点姿态误差
+`<=0.005m` 且首帧可见率 `>=0.75`”。候选范围继续冻结为 seeds 55–100 ×
+`left/right/front`，选择规则为按方向顺序选择 seed 最小且互不重复的合格案例。后续
+遮挡仍由最多4步 held 状态机处理，不进入筛选资格。
+
+真实 PyBullet 无 API 筛选共评估138个候选，结果为：
+
+```text
+qualified：47
+visibility_below_threshold：47
+start_pose_error：44
+selected：56-left、55-right、59-front
+```
+
+筛选证据保存在：
+
+```text
+outputs/vlm_evaluations/grounding_world_smoke_screening/run_20260726_initial_qualification_v1/
+```
+
+该目录包含138条 `candidate_trace.jsonl` 记录、每个候选唯一的 `step_00.jpg` 和
+`screening_summary.json`。独立重算最小互异 seed 规则与摘要选择一致。
+
+随后将 `sim_config.yaml` 的固定 seeds 按 `left/right/front` 顺序冻结为
+`[56, 55, 59]`，并通过新增的 `--preflight-only` 运行三案例整批预检：
+
+```text
+56-left：  起点误差0.001143823m，可见率285/378=0.753968，合格
+55-right： 起点误差0.004671998m，可见率351/378=0.928571，合格
+59-front： 起点误差0.002441856m，可见率305/378=0.806878，合格
+整批：     qualified_count=3/3，passed=true，API调用0次
+```
+
+预检证据保存在：
+
+```text
+outputs/vlm_evaluations/grounding_world_smoke/run_20260726_fixed_cases_preflight_v1/smoke_preflight.json
+```
+
+预检目录只包含 `smoke_preflight.json`，没有 episode 目录、
+`episode_summary.jsonl` 或 `smoke_summary.json`。本轮没有调用真实 VLM，也没有运行
+第二轮在线 smoke。独立重算最小互异 seed 规则与摘要完全一致；grounding smoke、
+配置和包入口定向测试为74/74通过，全量自动测试为171/171通过，`compileall` 和
+`git diff --check` 通过。下一步只能在用户明确批准付费/API运行后继续。

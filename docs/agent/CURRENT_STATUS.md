@@ -1,16 +1,15 @@
 # 当前项目状态
 
-**最后核对日期：** 2026-07-19
+**最后核对日期：** 2026-07-26
 
 ## 当前阶段
 
-项目已完成首轮真实 `grounding_smoke`，但批次未通过且未完整跑完。三个固定案例中，
-`52-left` 首帧可见率不足而在 API 前停止；`53-right` 用1次真实 grounding 和4步目标
-保持把真实 XY 距离降到约0.41cm，随后因持续遮挡以 `stale_target_limit` 停止；
-`54-front` 的固定起点无法满足5mm姿态容差，批次以异常退出。现在已增加整批无 API
-动态预检：三个固定案例的起点与首帧可见率全部合格后才允许进入在线闭环。当前案例已
-被门禁在任何 API 请求前整体拒绝。事后成功评分已完成拆分；当前阶段是在不调用付费
-API 的情况下修订固定案例，使三个案例都满足运行前提。
+首轮真实 `grounding_smoke` 未通过且未完整跑完，但其后续修订已完成：成功评分已拆分，
+整批无 API 门禁已建立，固定案例也已按冻结的首帧资格规则重选。seeds 55–100 ×
+left/right/front 的138个候选中有47个满足起点姿态误差不超过5mm且首帧可见率不低于
+0.75；确定性选择得到 `56-left`、`55-right`、`59-front`。三个新固定案例的独立
+`--preflight-only` 验证为3/3合格，API调用为0。当前暂停在第二轮真实 smoke 之前，
+仍需用户明确批准付费/API运行。
 
 ## 已完成且仍有效
 
@@ -21,52 +20,60 @@ API 的情况下修订固定案例，使三个案例都满足运行前提。
 - 冻结 XY 补偿在独立 clear 验证集上为 15/15 不超过 3cm。
 - 正式源码已迁移到 `src/vla_project/`，并通过 `pyproject.toml` 暴露 12 个命令入口。
 - `grounding_smoke` targeting、runner、screening 已迁入正式子包；测试不调用真实 API。
-- seeds 55–100 × left/right/front 的138个动态候选筛选结果为0个合格：131个
-  `visibility_below_threshold`、7个 `start_pose_error`。
+- 旧的全轨迹 clear 筛选在 seeds 55–100 × left/right/front 的138个候选中为0个
+  合格：131个 `visibility_below_threshold`、7个 `start_pose_error`；该结果继续
+  证明全程 clear 不是可用前提。
+- 新的首帧资格筛选在相同138个候选中得到47个合格：47个
+  `visibility_below_threshold`、44个 `start_pose_error`、47个 `qualified`。
+- 按 `left -> right -> front` 顺序选择最小且互异 seed，固定案例已冻结为
+  `56-left`、`55-right`、`59-front`。
 - held 路径只复用已校验的 VLM 世界目标，每步依据当前末端位置重新计算动作；第5次
   连续失效尝试以 `stale_target_limit` 安全中止，且 held 步骤不调用 VLM。
 - trace/summary 已记录 fresh/held、目标年龄、API 调用和遮挡恢复字段；当前完整自动
-  测试为173/173通过。
+  测试为171/171通过。
 - episode 与 batch summary 现在分别报告主 `success`、真实到达 `task_success` 和自主
   停止 `autonomous_stop_success`。主成功允许真实到达后的 `success` 或
-  `stale_target_limit`，但拒绝系统错误和步数耗尽；相关定向契约测试为76/76通过，
-  完整自动测试为173/173通过，本轮没有调用真实 API。
+  `stale_target_limit`，但拒绝系统错误和步数耗尽；本轮相关定向测试为74/74通过，
+  完整自动测试为171/171通过，本轮没有调用真实 API。
 - 首轮真实 smoke 证据保存在
   `outputs/vlm_evaluations/grounding_world_smoke/run_20260719_target_hold_v1/`；本轮仅发生
   1次真实 API 调用，批次退出码为1，没有生成完整 `batch_summary.json`。
 - `53-right` 提供了第一条真实在线目标保持证据：1次 fresh VLM 后连续4步 held 均未
   再调用 API，真实 XY 距离从约10.05cm降至0.41cm。历史摘要按旧口径记为失败；按
   当前新口径解释，同类结果是任务到达、未自主 stop、主要 `success=true`。
-- 整批动态预检已通过真实 PyBullet 无 API 验证：固定案例结果为1/3合格，`52-left`
-  因初始可见率0.714被拒绝，`54-front` 因起点误差0.053522m被拒绝；只生成
-  `smoke_preflight.json`，没有 episode trace 或在线摘要，API 调用为0。
+- 原固定案例的整批预检结果为1/3合格，完整记录了 `52-left` 和 `54-front` 的拒绝
+  证据；新固定案例的只预检结果为3/3合格，只生成 `smoke_preflight.json`，没有
+  episode trace 或在线摘要，API 调用为0。
+- 新固定案例预检指标：`56-left` 姿态误差0.001144m、可见率0.753968；
+  `55-right` 姿态误差0.004672m、可见率0.928571；`59-front` 姿态误差0.002442m、
+  可见率0.806878。
 
 ## 未解决问题
 
-1. 三个固定案例本身不满足当前运行前提：`52-left` 初始可见率为0.714，低于0.75；
-   `54-front` 起始姿态误差为0.053522m，高于0.005m容差。
-2. `53-right` 的历史摘要仍按旧口径记录 `success=false`；新口径下同类结果会记为
+1. `53-right` 的历史摘要仍按旧口径记录 `success=false`；新口径下同类结果会记为
    `task_success=true`、`autonomous_stop_success=false`、`success=true`。旧批次未包含
    新字段，其 `success_rate` 不可与新批次直接合并比较。
-3. 初始动态资格现在已有完整预检 JSON；但正式闭环开始后的普通案例异常仍可能中断批次
+2. 初始动态资格现在已有完整预检 JSON；但正式闭环开始后的普通案例异常仍可能中断批次
    并缺少完整 summary，该部分不在本轮预检修复范围。
+3. 控制器到达目标后仍可能没有自主预测 `stop`；新固定案例尚未经过真实在线闭环。
 4. 永久遮挡、目标移动和 severe 遮挡恢复仍不在当前范围。
-5. README、学习计划、BUGLOG 和 WORKLOG 的阶段表述可能存在时间差；实验结论以
+5. README、学习计划和 BUGLOG 的阶段表述可能存在时间差；实验结论以
    原始摘要和对应证据链为准。
 
 ## 下一步优先级
 
-1. 在整批预检门禁下修订固定案例，使三个案例都满足初始姿态和首帧可见率；不得跳过或
-   自动替换失败案例。
-2. 固定案例修订后先运行无 API 验证；再次运行真实 smoke 仍需用户明确批准。
+1. 审阅固定案例筛选与3/3只预检证据。
+2. 只有用户明确批准后，才运行第二轮真实 smoke；不得因预检通过自动调用 VLM API。
+3. 真实 smoke 后按主要终止原因决定是改进自主 stop，还是处理闭环批次异常。
 
-## 会话暂停点（2026-07-19）
+## 当前暂停点（2026-07-26）
 
-今日工作已停止，没有启动新案例筛选，也没有调用真实 VLM。下次从“固定案例修订设计”
-继续：优先确认是否仍保持 `left/right/front` 各一个；推荐保持方向覆盖，并把筛选资格
-从“不可能满足的全程 clear”改为“起点姿态合格且首帧可见率合格”，后续遮挡继续交给
-最多4步 held 状态机。选择规则必须预先冻结、确定性执行并保留无 API 证据，不能根据
-真实 smoke 结果临时替换案例。
+固定案例重选、配置冻结和3/3只预检已经完成。证据目录分别为
+`outputs/vlm_evaluations/grounding_world_smoke_screening/run_20260726_initial_qualification_v1/`
+和
+`outputs/vlm_evaluations/grounding_world_smoke/run_20260726_fixed_cases_preflight_v1/`。
+本轮没有调用真实 VLM。下次继续时先取得用户对第二轮真实 smoke 的明确批准，不再筛选
+或临时替换案例。
 
 ## 当前任务入口
 

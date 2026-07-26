@@ -18,8 +18,8 @@
 - 已覆盖：PyBullet 仿真、KUKA IK 控制、专家轨迹采集、闭环 probe、批量评估、
   Qwen 离线方向基线、grounding、相机反投影、独立校准验证、真值隔离 smoke runner
   、无 API 动态案例筛选、整批初始动态预检和最多4步的最近可靠目标保持状态机。
-- 正在推进：首轮真实在线 smoke 已执行但未通过；整批无 API 门禁已阻止不合格固定案例
-  再次产生付费请求；事后成功评分已拆分，当前继续修订固定案例可运行性。
+- 正在推进：首轮真实在线 smoke 已执行但未通过；固定案例已按首帧资格规则重选，并以
+  无 API 预检验证为3/3合格；下一步是在用户明确批准后运行第二轮真实 smoke。
 - 暂不覆盖：大型 VLA 训练、真实机械臂部署、复杂多物体任务、severe 遮挡恢复和
   正式大规模在线 VLM 评估。
 
@@ -75,28 +75,33 @@ PyBullet 红块真值只能用于离线评分、场景资格检查和受控 smok
    seeds 47–51 的 15 个 clear 样本补偿误差 mean/median/max 为
    0.77/0.79/1.46cm，15/15 不超过 3cm。唯一 severe 样本仍为 3.27cm，因此结论
    只适用于固定相机 clear 场景。
-5. 在线 grounding targeting、runner 和无 API screening 已迁入正式子包；动态筛选
-   seeds 55–100 × left/right/front 共138个候选，合格数为0，其中131个因可见率不足、
-   7个因起始姿态误差失败。这证明“全程 clear”不是可用的在线前提，因此选择了
-   短期目标保持，而不是扩大 seed 搜索或直接运行付费 smoke。
+5. 在线 grounding targeting、runner 和无 API screening 已迁入正式子包；旧的全轨迹
+   clear 筛选在 seeds 55–100 × left/right/front 共138个候选中得到0个合格，其中
+   131个因可见率不足、7个因起始姿态误差失败。这证明“全程 clear”不是可用的在线
+   前提，因此选择了短期目标保持，而不是扩大 seed 搜索或直接运行付费 smoke。
 6. 最近可靠目标保持已实现：低可见率时复用已校验的补偿后 VLM 世界坐标，并根据
    当前末端位置重新计算动作；第1至第4次 held 允许，第5次以
    `stale_target_limit` 中止。trace 和 summary 区分 fresh/held，完整离线测试为
-   173/173 通过。
+   171/171 通过。
 7. 首轮真实 smoke 没有形成3案例成功率：`52-left` 首帧可见率不足，`54-front` 起始
    姿态误差为5.35cm，只有 `53-right` 进入在线闭环。该案例用1次真实 grounding 和
    4步 held 将真实 XY 距离从约10.05cm降至0.41cm，证明目标保持能产生有效在线运动；
    但控制器没有预测 stop，最终以 `stale_target_limit` 结束，不能据此声称端到端通过。
 8. 在线 smoke 现在先对三个固定案例全部执行无 API 起点/首帧预检，再决定是否进入
-   闭环。真实 PyBullet 验证得到1/3合格，并在 API 环境变量被移除时完整记录两个拒绝
-   原因；门禁只生成 `smoke_preflight.json`，不创建 episode 证据。运行中后续遮挡仍
-   使用4步 held，不受初始门禁替代。
+   闭环。原案例真实 PyBullet 验证得到1/3合格，并完整记录两个拒绝原因；门禁只生成
+   `smoke_preflight.json`，不创建 episode 证据。运行中后续遮挡仍使用4步 held，
+   不受初始门禁替代。
 9. Smoke 事后评分从本版本起拆成三层：`task_success` 只表示最终真实 XY 距离不超过
    3cm；`autonomous_stop_success` 只表示控制器自主预测 stop；主要 `success` 要求已经
    物理到达，且终止原因只能是 `success` 或 `stale_target_limit`。API、反投影、IK 等
    系统错误和 `max_control_steps` 即使最终位置碰巧达标也不能通过。真值仍只在循环结束
    后评分，不进入动作或 stop 决策。由于口径改变，旧批次与新批次的 `success_rate`
    不可直接合并比较。
+10. 固定案例重选把资格改为起点姿态误差不超过5mm且首帧可见率不低于0.75。相同的
+    seeds 55–100 × left/right/front 共有47/138个候选合格；按方向顺序选择最小且互异
+    seed，冻结为 `56-left`、`55-right`、`59-front`。独立只预检得到3/3合格，三例
+    姿态误差分别为1.14/4.67/2.44mm，可见率为0.754/0.929/0.807；全程没有调用 VLM
+    API，也没有运行第二轮真实 smoke。
 
 详细证据与当时的设计边界：
 
