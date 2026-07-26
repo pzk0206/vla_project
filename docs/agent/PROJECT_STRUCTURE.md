@@ -165,7 +165,7 @@ vla_project/
 | 文件 | 作用 | 什么时候修改 |
 | --- | --- | --- |
 | `.gitignore` | 指定不提交的缓存、生成输出和本机配置 | 新增可再生成或仅本机使用的文件类型时 |
-| `pyproject.toml` | 定义 `vla-project` 包、`src/` 布局和 12 个 `vla-*` 命令 | 增加包元数据或命令入口时 |
+| `pyproject.toml` | 定义 `vla-project` 包、`src/` 布局和 13 个 `vla-*` 命令 | 增加包元数据或命令入口时 |
 | `README.md` | 给使用者说明项目目标、安装方法、运行命令和当前阶段 | 使用方式或阶段结论变化时 |
 | `requirements.txt` | 记录 PyBullet、OpenCV、NumPy 等第三方依赖 | 正式代码新增或移除外部依赖时 |
 | `sim_config.yaml` | 保存仿真、相机、采集、probe、VLM 和输出目录参数 | 调整实验变量时，优先改这里而非写死在代码中 |
@@ -177,9 +177,10 @@ vla_project/
 | 文件 | 职责 |
 | --- | --- |
 | `camera_geometry.py` | PyBullet/OpenGL 相机投影、像素坐标和工作平面反投影几何 |
-| `control_arm.py` | 创建 PyBullet 场景、控制 KUKA、采集 Baseline 图片与轨迹 |
+| `control_arm.py` | 创建 PyBullet 场景、独立复位 KUKA，并采集版本化专家图片与轨迹 |
 | `stage3_probe.py` | 运行单个“观察 -> 决策 -> 控制 -> 再观察”闭环 episode |
 | `evaluate_probe.py` | 用固定种子批量调用 Stage 3 probe 并汇总成功率和失败证据 |
+| `evaluate_dataset.py` | 只读扫描专家数据完整性、生成质量报告并执行严格 pilot 门禁 |
 
 ### `vlm/`：视觉语言模型评估
 
@@ -219,7 +220,8 @@ src/vla_project/tools/x.py       -> tests/tools/test_x.py
 ```
 
 - `tests/test_config_contract.py`：保护 `sim_config.yaml` 的跨模块配置约束和统一输出路径。
-- `tests/test_package_metadata.py`：保护 `src/` 包结构和 12 个控制台命令入口。
+- `tests/test_package_metadata.py`：保护 `src/` 包结构和 13 个控制台命令入口。
+- `tests/simulation/test_evaluate_dataset.py`：保护专家数据质量扫描和 pilot 门禁。
 - `tests/vlm/grounding_smoke/`：镜像测试 targeting、runner 和 screening。
 - 新增或修复行为时，应同时新增对应领域测试；不要把测试文件放进 `src/`。
 
@@ -245,7 +247,8 @@ src/vla_project/tools/x.py       -> tests/tools/test_x.py
 路由：
 
 ```text
-Baseline RGB frame                -> outputs/dataset/
+Legacy Baseline RGB frame         -> outputs/dataset/
+Versioned expert dataset          -> outputs/dataset/<version>/
 Single Stage 3 control-step image -> outputs/probe/
 Batch probe failure image         -> outputs/probe_evaluations/<run>/
 Fixed Qwen input image            -> outputs/vlm_samples/<experiment>/
@@ -254,7 +257,7 @@ Qwen annotated/evaluation image   -> outputs/vlm_evaluations/<experiment>/
 
 | 目录 | 内容 |
 | --- | --- |
-| `outputs/dataset/` | Baseline 训练 RGB、`trajectory_expert.jsonl` 和 episode 摘要 |
+| `outputs/dataset/` | 旧 Baseline 数据，以及按版本子目录保存的新专家数据、manifest、配置快照和质量报告 |
 | `outputs/probe/` | Stage 3 单次闭环步骤图和 trace |
 | `outputs/probe_evaluations/` | 批量 probe 的独立运行目录、失败图片和汇总 |
 | `outputs/vlm_samples/` | 固定 VLM 输入图片、样本清单和不进入 prompt 的诊断真值 |
@@ -274,9 +277,9 @@ Qwen annotated/evaluation image   -> outputs/vlm_evaluations/<experiment>/
 | `__pycache__/` | Python 生成的 `.pyc` 字节码缓存 | 可以清理，运行 Python 后会自动生成 |
 | `.git/` | Git 提交、分支和 worktree 元数据 | 不能手工编辑或删除 |
 
-当前 `.worktrees/grounding-world-smoke/` 是 grounding 和遮挡实验的独立开发分支。
-它的文件不会因为放在 `.worktrees/` 中自动进入 `main`；必须先提交分支，再通过 Git
-合并。合并完成后删除 worktree，不是把整个目录复制进主仓库。
+当前没有活动 worktree。以后在 `.worktrees/` 创建的隔离分支不会自动进入 `main`；
+必须先提交分支、通过 Git 合并并在主工作区复验，完成后再删除 worktree。生成实验证据
+如需保留，应先安全复制到正式 `outputs/` 位置并比较，不能把整个 worktree 当归档。
 
 ## 常见任务快速定位
 
@@ -284,6 +287,7 @@ Qwen annotated/evaluation image   -> outputs/vlm_evaluations/<experiment>/
 | --- | --- |
 | 调整相机、episode 数量或输出路径 | `sim_config.yaml` |
 | 修改机械臂采集或 IK 控制 | `src/vla_project/simulation/control_arm.py` |
+| 检查专家数据质量或 pilot 门禁 | `src/vla_project/simulation/evaluate_dataset.py` |
 | 修改单次闭环决策和执行 | `src/vla_project/simulation/stage3_probe.py` |
 | 修改批量 probe 统计 | `src/vla_project/simulation/evaluate_probe.py` |
 | 修改相机反投影数学 | `src/vla_project/simulation/camera_geometry.py` |

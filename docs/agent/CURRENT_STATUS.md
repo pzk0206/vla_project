@@ -8,7 +8,8 @@
 episode 独立 home pose 复位、`random_seed + episode_idx`、manifest/config snapshot
 和只读质量门禁。真实 PyBullet pilot 使用 seeds 1000–1009，得到10/10 success、
 327帧、0项完整性错误，`pilot_gate.passed=true`，未调用 VLM API。当前阶段允许以
-追加模式扩到至少300条；严格 smoke 的自主停止1/3仍作为独立能力边界，不阻塞扩展。
+追加模式扩到至少300条；实现已 fast-forward 合并到 `main`（`5481e85`），功能
+worktree 与分支已清理。严格 smoke 的自主停止1/3仍作为独立能力边界，不阻塞扩展。
 
 ## 已完成且仍有效
 

@@ -1114,3 +1114,8 @@ VLM API 调用：0
 当前允许扩展，但尚未生成正式300条。下一步必须把 `clean_before_run` 改为 `false`，
 追加290条后重新运行质量扫描；要求有效 episode 至少300、成功率不低于99%、完整性
 错误为0，并复核目标位置分箱覆盖。达到这些条件前不进入 action tokenization。
+
+功能分支随后以 fast-forward 方式合并回 `main`，主线提交为 `5481e85`。在合并后的
+主工作区重新安装 editable package，并再次验证191/191测试、`compileall`、
+`git diff --check` 和真实 pilot 质量门禁；结果仍为10/10、327帧、0错误。功能分支和
+worktree 已清理，用户原有未跟踪文档保持不动，远端尚未推送。

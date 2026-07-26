@@ -895,3 +895,55 @@ runner 现在在缓存已经使用4步且下一帧仍不可见时，使用缓存
 `59-front` 的错误缓存目标变成正确定位。根据整体学习路线，不再为单个固定 seed 调整
 VLM；严格自主停止指标继续保留，但不阻塞专家数据规模化。只有后续训练或评估明确依赖
 自主 stop 时，才重新开启 grounding 稳健性修订。
+
+## BUG-009：专家数据跨 Episode 状态依赖与旧数据覆盖风险
+
+- 状态：已修复并通过真实10条 pilot
+- 发现日期：2026-07-26
+- 影响模块：`src/vla_project/simulation/control_arm.py`
+- 证据目录：`outputs/dataset/expert_scaling_v1/`
+
+### 现象与根因
+
+旧 Baseline 采集器只在进程启动时创建一次机械臂，episode 结束后仅删除红块，没有把
+7个受控关节恢复到统一起点。后一条轨迹因此从前一条轨迹的终点继续，轨迹长度不再只由
+当前目标和配置决定。旧50条摘要中有4条只需1个 step 即 success，最后一条也为1步；
+这不是独立 episode 应有的稳定起点证据。
+
+旧配置同时把 `dataset.output_dir` 直接指向 `outputs/dataset/`，且
+`clean_before_run=true` 会递归清理该目录。继续规模化时既可能覆盖原有50条数据，也
+缺少 schema 版本、配置快照和追加兼容性边界。
+
+### 修复
+
+新 `expert_v1` 流程执行以下约束：
+
+- 新数据只允许写入 `outputs/dataset/` 下的版本化子目录；清理前拒绝根目录和外部路径。
+- 每条 episode 使用 `random_seed + episode_idx`，将7个关节的位置和速度复位到
+  `home_joint_positions`，并同步更新电机控制目标。
+- 数据目录写入 `dataset_manifest.json` 和 `config_snapshot.yaml`；追加模式精确比较
+  schema、指令、动作维度、seed、图片尺寸和 JSONL 文件名。
+- 帧和摘要写入 `expert_v1` 身份字段；单条异常写为 `episode_error` 并继续后续采集。
+- `vla-evaluate-dataset` 只读检查 schema、动作、图片、重复 step、seed、帧数和终止
+  标志，未通过严格 pilot gate 时禁止扩到300条。
+
+### 验证证据
+
+真实 PyBullet pilot 使用 seeds 1000–1009，10条均从相同 home pose 独立开始：
+
+```text
+episode：10
+success：10/10
+frames：327
+steps per episode：700–808
+final_distance min/mean/median/max：
+0.029069/0.029546/0.029523/0.029983m
+完整性错误：0
+pilot_gate.passed：true
+VLM API 调用：0
+```
+
+旧数据在实验前后均保持50条摘要、286条帧记录和286张根目录 JPEG。自动验证为
+191/191通过，`compileall` 与 `git diff --check` 通过；合并到 `main` 后再次运行结果
+不变。当前修复只证明10条 pilot 的独立性和完整性，300条规模下的成功率与位置覆盖仍
+需在追加290条后重新验收。
