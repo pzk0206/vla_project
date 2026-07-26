@@ -147,14 +147,78 @@ def run_control_loop(
                 target_memory["stale_target_steps"]
                 >= smoke_config["max_stale_target_steps"]
             ):
-                termination = "stale_target_limit"
+                recheck_safety_state = {
+                    **safety_state,
+                    "previous_predicted_distance": None,
+                    "no_progress_count": 0,
+                }
+                try:
+                    computed_action = dependencies.compute_held_action(
+                        target_world=cached_target,
+                        ee_pos=observation["ee_pos"],
+                        safety_state=recheck_safety_state,
+                        settings=smoke_config,
+                    )
+                except SmokeSafetyAbort as exc:
+                    termination = exc.reason
+                    record(
+                        visibility,
+                        termination,
+                        {
+                            "decision_source": "stale_target_recheck",
+                            "target_age_steps": target_memory[
+                                "stale_target_steps"
+                            ],
+                            "used_target_hold": True,
+                            "error": str(exc),
+                            "image_path": raw_path,
+                            "annotated_path": annotated_path,
+                        },
+                    )
+                    break
+                except Exception as exc:
+                    termination = "held_target_error"
+                    record(
+                        visibility,
+                        termination,
+                        {
+                            "decision_source": "stale_target_recheck",
+                            "target_age_steps": target_memory[
+                                "stale_target_steps"
+                            ],
+                            "used_target_hold": True,
+                            "error": repr(exc),
+                            "image_path": raw_path,
+                            "annotated_path": annotated_path,
+                        },
+                    )
+                    break
+
+                score_result = dependencies.score()
+                termination = (
+                    (
+                        "success"
+                        if score_result["true_distance_xy"] <= 0.03
+                        else "false_stop"
+                    )
+                    if computed_action["direction"] == "stop"
+                    else "stale_target_limit"
+                )
                 record(
                     visibility,
                     termination,
                     {
+                        "decision_source": "stale_target_recheck",
+                        "target_age_steps": target_memory[
+                            "stale_target_steps"
+                        ],
+                        "used_target_hold": True,
+                        **computed_action,
+                        "execution": None,
                         "image_path": raw_path,
                         "annotated_path": annotated_path,
                     },
+                    score_result=score_result,
                 )
                 break
 
@@ -441,9 +505,20 @@ def aggregate_smoke_summaries(summaries, smoke_config):
         row["autonomous_stop_success"] for row in rows
     )
     calls = sum(row["api_calls"] for row in rows)
+    expected_cases = list(
+        zip(
+            smoke_config["seeds"],
+            smoke_config["start_directions"],
+        )
+    )
+    actual_cases = [
+        (row.get("seed"), row.get("start_direction")) for row in rows
+    ]
     passed = (
-        [row["seed"] for row in rows] == smoke_config["seeds"]
+        actual_cases == expected_cases
         and successes == smoke_config["required_successes"] == 3
+        and autonomous_stop_successes
+        == smoke_config["required_successes"]
         and all(row["num_fresh_vlm_steps"] >= 1 for row in rows)
         and all(
             row["max_target_age_steps"]

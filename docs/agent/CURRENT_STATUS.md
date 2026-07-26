@@ -4,11 +4,12 @@
 
 ## 当前阶段
 
-第二轮真实 `grounding_smoke` 已在固定案例 `56-left`、`55-right`、`59-front` 上
-完成。主要 `success=3/3`、真实到达 `task_success=3/3`，最终真实 XY 距离分别为
-0.303/0.789/0.371cm；整批调用 VLM API 4次并满足 `passed=true`。自主停止只有1/3，
-另外两例到达后以 `stale_target_limit` 结束。当前小规模在线闭环的主要通过条件已
-满足，阶段入口转向专家数据规模化；自主 stop 作为已知限制单独跟踪。
+第二轮真实 `grounding_smoke` 的历史结果为任务到达3/3、自主停止1/3；旧摘要中的
+`passed=true` 使用的是旧批次门槛。复查后已在不调用 API 的情况下修复
+`56-left` 暴露的停止时序：缓存达到4步后先做一次只读 stop 复核，不执行第5个动作；
+同时新批次 `passed` 收紧为任务到达和自主停止均须3/3。`59-front` 的 grounding
+在冻结补偿后仍有约2.9cm Y 偏差，尚未满足严格门槛，因此当前阶段仍是自主停止可靠性
+修订，而不是专家数据规模化。
 
 ## 已完成且仍有效
 
@@ -27,13 +28,14 @@
 - 按 `left -> right -> front` 顺序选择最小且互异 seed，固定案例已冻结为
   `56-left`、`55-right`、`59-front`。
 - held 路径只复用已校验的 VLM 世界目标，每步依据当前末端位置重新计算动作；第5次
-  连续失效尝试以 `stale_target_limit` 安全中止，且 held 步骤不调用 VLM。
-- trace/summary 已记录 fresh/held、目标年龄、API 调用和遮挡恢复字段；当前完整自动
-  测试为171/171通过。
+  连续不可见时使用 `stale_target_recheck` 做只读停止复核。复核不会调用 VLM，也不会
+  执行额外动作；仍需移动时才以 `stale_target_limit` 安全中止。
+- trace/summary 已记录 fresh/held、目标年龄、API 调用和遮挡恢复字段；新增时序、只读
+  复核和严格批次门槛回归测试后，当前完整自动测试为173/173通过。
 - episode 与 batch summary 现在分别报告主 `success`、真实到达 `task_success` 和自主
   停止 `autonomous_stop_success`。主成功允许真实到达后的 `success` 或
-  `stale_target_limit`，但拒绝系统错误和步数耗尽；本轮相关定向测试为74/74通过，
-  完整自动测试为171/171通过，本轮没有调用真实 API。
+  `stale_target_limit`，但拒绝系统错误和步数耗尽；成功评分拆分实现时的相关定向测试
+  为74/74，本轮没有调用真实 API。
 - 首轮真实 smoke 证据保存在
   `outputs/vlm_evaluations/grounding_world_smoke/run_20260719_target_hold_v1/`；本轮仅发生
   1次真实 API 调用，批次退出码为1，没有生成完整 `batch_summary.json`。
@@ -54,6 +56,13 @@
 - `55-right` 在一次遮挡恢复后自主 stop；`56-left` 和 `59-front` 物理到达但未自主
   stop，因此整批 `autonomous_stop_success=1/3`，终止原因计数为
   `success: 1`、`stale_target_limit: 2`。
+- `56-left` 的旧 trace 证明最后一次动作后，末端与缓存目标两轴误差均已低于2cm；
+  新的过期复核可识别这一状态。`59-front` 的 VLM 框中心相对真实红块约偏左5.4像素、
+  偏上8.7像素，反投影和冻结补偿后仍留下约2.9cm Y 偏差，时序修复不会把它误判为
+  stop。
+- 新批次 `passed` 现在要求 `autonomous_stop_success_count == required_successes == 3`；
+  历史 `run_20260726_fixed_cases_online_v1/smoke_summary.json` 不回写，其
+  `passed=true` 仍按旧语义解释。本轮修复没有调用真实 VLM。
 
 ## 未解决问题
 
@@ -62,26 +71,27 @@
    新字段，其 `success_rate` 不可与新批次直接合并比较。
 2. 初始动态资格现在已有完整预检 JSON；但正式闭环开始后的普通案例异常仍可能中断批次
    并缺少完整 summary，该部分不在本轮预检修复范围。
-3. 控制器到达目标后仍可能没有自主预测 `stop`；第二轮真实 smoke 中仅1/3自主停止，
-   另外两例依赖 `stale_target_limit` 结束。
+3. `59-front` 的单帧 grounding 残余偏差约为2.9cm，超过当前每轴2cm stop 阈值；
+   在不读取真值、不放宽阈值的前提下，尚需改进定位或获得可靠的目标更新。
 4. 永久遮挡、目标移动和 severe 遮挡恢复仍不在当前范围。
 5. README、学习计划和 BUGLOG 的阶段表述可能存在时间差；实验结论以
    原始摘要和对应证据链为准。
 
 ## 下一步优先级
 
-1. 结束当前小规模 smoke 阶段，先明确专家数据规模化的样本数量、场景覆盖、数据 schema
-   和验收指标。
-2. 批量生成前先做一小批专家数据验收，确认图像、状态、动作、终止原因和可复现性。
-3. 将自主 stop 改进作为独立可选任务；除非下一阶段明确依赖它，否则不阻塞专家数据
-   规模化。
+1. 针对 `59-front` 的已保存首帧，评估 grounding 框偏移的稳健修订，不使用红块真值
+   进入在线动作，也不直接放宽2cm stop 阈值。
+2. 用离线回归证明 `56-left` 能在过期复核处 stop，同时 `59-front` 的错误缓存目标
+   不会被误判为 stop。
+3. 只有离线与 mock 契约通过后，才请求一次新的三案例真实 smoke；新门槛必须同时达到
+   `task_success=3/3` 和 `autonomous_stop_success=3/3`。
 
 ## 当前恢复点（2026-07-26）
 
-固定案例重选、配置冻结、3/3只预检和第二轮真实 smoke 均已完成。在线证据目录为
-`outputs/vlm_evaluations/grounding_world_smoke/run_20260726_fixed_cases_online_v1/`。
-下次继续时从专家数据规模化的范围设计开始，不需要重复筛选案例或再次运行同一批 smoke；
-若选择先改自主 stop，应另立受限任务并保持现有3/3任务到达基线不回退。
+停止时序修复和严格批次门槛已通过173项离线测试，没有调用真实 VLM。在线历史证据目录
+仍为 `outputs/vlm_evaluations/grounding_world_smoke/run_20260726_fixed_cases_online_v1/`。
+下次继续时从 `59-front` 的 grounding 框偏移修订开始；不得用真值构造动作、放宽 stop
+阈值或把旧输出的 `passed=true` 当作新门槛已经通过。
 
 ## 当前任务入口
 

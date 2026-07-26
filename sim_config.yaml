@@ -186,7 +186,7 @@ grounding_smoke:
   max_target_jump_xy: 0.03           # 相邻预测跳变超过 3cm 立即中止。
   min_progress_xy: 0.005             # 每步预测距离至少改善 5mm。
   no_progress_limit: 2               # 连续两次不足 5mm 判为无进展。
-  required_successes: 3              # 固定三个 case 必须全部成功。
+  required_successes: 3              # 固定三个 case 必须任务到达且自主 stop。
   max_total_api_calls: 30            # 3 episodes × 10 steps 的硬上限。
   api_max_retries: 0                 # 禁止底层重试把真实 HTTP 请求数推到 30 以上。
   screening:                         # 正式调用 VLM 前的无 API 起点资格筛选。

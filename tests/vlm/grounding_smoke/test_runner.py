@@ -37,6 +37,7 @@ BASE_CONFIG = {
     "max_stale_target_steps": 4,
     "clear_visibility_threshold": 0.75,
     "seeds": [56, 55, 59],
+    "start_directions": ["left", "right", "front"],
     "required_successes": 3,
     "max_total_api_calls": 30,
 }
@@ -105,13 +106,13 @@ def batch_config(temp_dir):
     return config, fake_calibration
 
 
-def observation(visibility_ratio=1.0):
+def observation(visibility_ratio=1.0, ee_pos=None):
     """构造不含红块真值的控制侧观测。"""
     return {
         "image_bgr": np.zeros((448, 448, 3), dtype=np.uint8),
         "view_matrix": [1.0] * 16,
         "projection_matrix": [1.0] * 16,
-        "ee_pos": [0.0, 0.4, 0.2],
+        "ee_pos": ee_pos or [0.0, 0.4, 0.2],
         "visibility": {
             "block_visible_pixels": round(378 * visibility_ratio),
             "block_reference_pixels": 378,
@@ -271,6 +272,7 @@ class SmokeLoopTests(unittest.TestCase):
                     action("right", 0.06),
                     action("right", 0.04),
                     action("right", 0.02),
+                    action("right", 0.01),
                 ]
             ),
             score=Mock(side_effect=[scoring(0.12)] * 7),
@@ -289,8 +291,100 @@ class SmokeLoopTests(unittest.TestCase):
             [row["target_age_steps"] for row in rows[:-1]],
             [0, 1, 2, 3, 4],
         )
-        self.assertIsNone(rows[-1]["decision_source"])
+        self.assertEqual(rows[-1]["decision_source"], "stale_target_recheck")
+        self.assertEqual(rows[-1]["target_age_steps"], 4)
+        self.assertTrue(rows[-1]["used_target_hold"])
         self.assertEqual(summary["num_held_target_steps"], 4)
+        self.assertEqual(summary["num_actions"], 5)
+
+    def test_expired_target_rechecks_stop_without_fifth_action(self):
+        execute = Mock(return_value={"target_pos": [0.02, 0.4, 0.2]})
+        ground = Mock(
+            return_value=(
+                {"red_block": [450, 450, 550, 550]},
+                "fresh",
+                0.1,
+            )
+        )
+        compute_held = Mock(
+            side_effect=[
+                action("right", 0.08),
+                action("right", 0.06),
+                action("right", 0.04),
+                action("right", 0.025),
+                action("stop", 0.015),
+            ]
+        )
+        dependencies = self.make_dependencies(
+            observe=Mock(
+                side_effect=[observation(1.0)] + [observation(0.50)] * 5
+            ),
+            ground=ground,
+            compute_action=Mock(return_value=action("right", 0.10)),
+            compute_held_action=compute_held,
+            execute=execute,
+            score=Mock(
+                side_effect=[
+                    scoring(0.12),
+                    scoring(0.10),
+                    scoring(0.08),
+                    scoring(0.06),
+                    scoring(0.04),
+                    scoring(0.004),
+                    scoring(0.004),
+                ]
+            ),
+        )
+
+        summary, rows = self.run_in_temp(
+            dependencies,
+            dict(BASE_CONFIG, max_control_steps=6),
+        )
+
+        self.assertEqual(summary["termination_reason"], "success")
+        self.assertTrue(summary["autonomous_stop_success"])
+        self.assertEqual(summary["num_actions"], 5)
+        self.assertEqual(summary["num_held_target_steps"], 4)
+        self.assertEqual(rows[-1]["decision_source"], "stale_target_recheck")
+        self.assertEqual(rows[-1]["target_age_steps"], 4)
+        self.assertTrue(rows[-1]["used_target_hold"])
+        self.assertEqual(rows[-1]["direction"], "stop")
+        self.assertIsNone(rows[-1]["execution"])
+        self.assertEqual(ground.call_count, 1)
+        self.assertEqual(compute_held.call_count, 5)
+        self.assertEqual(execute.call_count, 5)
+
+    def test_expired_target_recheck_ignores_no_progress_for_read_only_check(
+        self,
+    ):
+        config = {
+            **BASE_CONFIG,
+            "max_control_steps": 6,
+            "stop_distance_xy": 0.02,
+            "min_progress_xy": 0.005,
+            "no_progress_limit": 2,
+        }
+        ee_positions = [0.0, 0.02, 0.04, 0.069, 0.0695, 0.0699]
+        dependencies = self.make_dependencies(
+            observe=Mock(
+                side_effect=[
+                    observation(
+                        1.0 if index == 0 else 0.50,
+                        [x, 0.4, 0.2],
+                    )
+                    for index, x in enumerate(ee_positions)
+                ]
+            ),
+            compute_action=Mock(return_value=action("right", 0.10)),
+            compute_held_action=compute_action_from_world_target,
+            score=Mock(side_effect=[scoring(0.12)] * 7),
+        )
+
+        summary, rows = self.run_in_temp(dependencies, config)
+
+        self.assertEqual(summary["termination_reason"], "stale_target_limit")
+        self.assertEqual(rows[-1]["decision_source"], "stale_target_recheck")
+        self.assertEqual(rows[-1]["direction"], "right")
         self.assertEqual(summary["num_actions"], 5)
 
     def test_new_fresh_target_resets_target_age(self):
@@ -379,6 +473,7 @@ class SmokeLoopTests(unittest.TestCase):
                     action("right", 0.06),
                     action("right", 0.04),
                     action("right", 0.02),
+                    action("right", 0.01),
                 ]
             ),
             score=Mock(
@@ -581,6 +676,7 @@ class SmokeLoopTests(unittest.TestCase):
         episodes = [
             {
                 "seed": seed,
+                "start_direction": direction,
                 "success": True,
                 "task_success": True,
                 "autonomous_stop_success": True,
@@ -591,7 +687,10 @@ class SmokeLoopTests(unittest.TestCase):
                 "max_target_age_steps": 3,
                 "recovered_from_occlusion": True,
             }
-            for seed in (56, 55, 59)
+            for seed, direction in zip(
+                (56, 55, 59),
+                ("left", "right", "front"),
+            )
         ]
         summary = aggregate_smoke_summaries(episodes, BASE_CONFIG)
         self.assertTrue(summary["passed"])
@@ -602,6 +701,14 @@ class SmokeLoopTests(unittest.TestCase):
         variants = [
             episodes[:2],
             [dict(episodes[0], success=False)] + episodes[1:],
+            [
+                dict(episodes[0], autonomous_stop_success=False)
+            ]
+            + episodes[1:],
+            [
+                dict(episodes[0], start_direction="right")
+            ]
+            + episodes[1:],
             [dict(episodes[0], num_fresh_vlm_steps=0)] + episodes[1:],
             [dict(episodes[0], max_target_age_steps=5)] + episodes[1:],
             [dict(row, api_calls=11) for row in episodes],
