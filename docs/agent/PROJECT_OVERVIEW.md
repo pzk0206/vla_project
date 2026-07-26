@@ -18,9 +18,10 @@
 - 已覆盖：PyBullet 仿真、KUKA IK 控制、专家轨迹采集、闭环 probe、批量评估、
   Qwen 离线方向基线、grounding、相机反投影、独立校准验证、真值隔离 smoke runner
   、无 API 动态案例筛选、整批初始动态预检和最多4步的最近可靠目标保持状态机。
-- 正在推进：第二轮真实在线 smoke 的任务到达为3/3，但自主停止仅1/3；停止时序已完成
-  离线修复，批次门槛也已收紧为自主停止3/3。`59-front` 的单帧 grounding 残余偏差
-  作为已知能力边界保留，不再针对单个固定案例调参；当前转入专家数据规模化。
+- 正在推进：`expert_v1` 专家数据流程已建立独立 home pose 复位、确定性 episode seed、
+  版本化 schema、manifest/config snapshot 和严格质量门禁；真实10条 pilot 为10/10
+  成功、327帧、0项完整性错误。下一步以追加模式扩到至少300条，再进入 action
+  tokenization。`59-front` 的 grounding 残余偏差继续作为已知能力边界保留。
 - 暂不覆盖：大型 VLA 训练、真实机械臂部署、复杂多物体任务、severe 遮挡恢复和
   正式大规模在线 VLM 评估。
 
@@ -28,8 +29,9 @@
 
 ### 专家数据基线
 
-`sim_config.yaml` -> PyBullet 场景与随机红块 -> IK 目标和关节控制 -> RGB、动作和
-本体状态 -> `outputs/dataset/` 中的轨迹与 episode 摘要。
+`sim_config.yaml` -> 固定 seed 与 home pose 独立复位 -> PyBullet 场景与随机红块 ->
+IK 目标和关节控制 -> `expert_v1` RGB、动作和本体状态 -> 版本化数据目录中的
+manifest、配置快照、轨迹、episode 摘要与质量报告。
 
 ### Stage 3 闭环基线
 
@@ -58,7 +60,7 @@ PyBullet 红块真值只能用于离线评分、场景资格检查和受控 smok
 | `outputs/` | 本地生成的图片、trace、预测和实验摘要；默认不提交 Git |
 | `docs/` | 当前知识、学习路线、Bug 证据以及历史设计和实施计划 |
 
-正式源码采用 `src/` 布局，`pyproject.toml` 注册 12 个 `vla-*` 命令。新增文件和
+正式源码采用 `src/` 布局，`pyproject.toml` 注册 13 个 `vla-*` 命令。新增文件和
 测试前查看 [文件路由手册](PROJECT_STRUCTURE.md)，不要在仓库根目录添加正式 Python
 脚本。
 
@@ -116,6 +118,11 @@ PyBullet 红块真值只能用于离线评分、场景资格检查和受控 smok
     `passed` 除主要成功3/3外，还必须要求 `autonomous_stop_success=3/3`。历史输出
     不回写，因此旧 `passed=true` 只代表当时的旧门槛。严格 smoke 未通过不阻塞专家
     数据规模化，避免为单个 seed 过拟合 VLM。
+13. `expert_v1` 规模化流程已通过真实10条 PyBullet pilot：episode seeds
+    1000–1009，每条先复位7个关节的位置、速度和电机目标；10/10 success，共327帧，
+    最终距离 min/mean/median/max 为2.907/2.955/2.952/2.998cm，每条帧数
+    min/mean/median/max 为31/32.7/32.5/35。schema、动作维度、图片、重复 step、seed、
+    帧数和终止标志共12项门禁全部通过，VLM API 调用为0。旧版50条/286帧数据保持不变。
 
 详细证据与当时的设计边界：
 
@@ -141,7 +148,8 @@ PyBullet 红块真值只能用于离线评分、场景资格检查和受控 smok
 与世界坐标融合 -> 遮挡时的短期目标保持 -> 小规模在线闭环边界修订 -> 专家数据规模化
 -> action tokenization -> 轻量微调验证。是否进入下一阶段由当前阶段证据决定，不因
 计划日期自动推进。当前小规模闭环已经提供足够的接口和失败边界证据，下一阶段进入专家
-数据规模化；自主停止3/3继续作为严格评估指标，不作为阶段硬门槛。
+数据规模化。10条 pilot 已通过，下一步追加到至少300条；自主停止3/3继续作为严格评估
+指标，不作为专家数据扩展的硬门槛。
 
 ## 关键入口
 

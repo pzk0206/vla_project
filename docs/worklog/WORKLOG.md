@@ -1050,3 +1050,67 @@ severe 遮挡、移动目标或大规模泛化已经解决。按此前约定的�
 数据规模化的硬门槛。`59-front` 保留为单帧 grounding 残余偏差的已知案例，不通过
 针对 seed 调参、读取真值或放宽阈值来制造通过。下一步转入专家数据规模化和小批量质量
 验收；只有后续训练或评估明确依赖自主 stop 时，才重新处理 grounding 稳健性。
+
+## 31. Expert v1 数据流程与真实10条 Pilot（2026-07-26）
+
+本轮建立了可安全扩展的专家数据采集边界。新数据只写入
+`outputs/dataset/expert_scaling_v1/`；清理前必须验证目标是
+`outputs/dataset/` 下的版本化子目录。每个数据目录写入
+`dataset_manifest.json` 和 `config_snapshot.yaml`，追加时精确检查 schema、指令、
+动作维度、seed、图片尺寸和 JSONL 文件名，避免混入不兼容样本。
+
+每条 episode 使用 `episode_seed = 1000 + episode_idx`，开始前把7个关节的位置和速度
+复位到 home pose，并同步绑定电机目标，消除跨 episode 状态依赖。帧和摘要统一使用
+`expert_v1`；帧记录 `episode_idx`、`step_idx` 和 seed，摘要记录初始状态。单条异常会
+写为 `termination_reason=episode_error` 并继续后续采集。
+
+新增只读 `vla-evaluate-dataset`，检查 schema、9维动作、图片存在/可读/尺寸、孤儿图、
+重复 step、episode seed、摘要帧数和终止标志。pilot gate 固定要求10条全部成功且所有
+完整性计数为0。实现采用 TDD，运行真实实验前的完整验证结果为：
+
+```text
+unittest discover：191/191
+compileall：通过
+git diff --check：通过
+```
+
+旧数据保护基线在 pilot 前后均为：
+
+```text
+trajectory_expert.jsonl：286行
+episode_summary.jsonl：50行
+根目录 JPEG：286张
+```
+
+随后运行不调用 VLM API 的真实 PyBullet pilot：
+
+```text
+conda run -n vla_env env PYTHONPATH=src vla-collect
+conda run -n vla_env env PYTHONPATH=src \
+  python -m vla_project.simulation.evaluate_dataset
+```
+
+真实结果为：
+
+```text
+episode：10
+valid_episode：10
+frames：327
+success：10/10
+final_distance min/mean/median/max：
+0.029069/0.029546/0.029523/0.029983m
+frames_per_episode min/mean/median/max：
+31/32.7/32.5/35
+12项 pilot gate：全部通过
+errors：0
+VLM API 调用：0
+```
+
+质量报告位于
+`outputs/dataset/expert_scaling_v1/dataset_quality_report.json`。隔离工作树生成的
+3.9MB pilot 已在确认主工作区目标不存在后复制到主工作区，并通过 `diff -qr` 验证完全
+一致；旧50条数据没有被覆盖。
+
+当前允许扩展，但尚未生成正式300条。下一步必须把 `clean_before_run` 改为 `false`，
+追加290条后重新运行质量扫描；要求有效 episode 至少300、成功率不低于99%、完整性
+错误为0，并复核目标位置分箱覆盖。达到这些条件前不进入 action tokenization。

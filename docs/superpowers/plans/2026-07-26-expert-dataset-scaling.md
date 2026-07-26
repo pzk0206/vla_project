@@ -794,7 +794,7 @@ Expected:
 Run:
 
 ```bash
-conda run -n vla_env env PYTHONPATH=src vla-collect-data
+conda run -n vla_env env PYTHONPATH=src vla-collect
 ```
 
 Expected: 只创建 `outputs/dataset/expert_scaling_v1/`，完成10条 episode，不调用 VLM。
