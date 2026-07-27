@@ -2,11 +2,25 @@
 
 from collections import Counter, defaultdict
 from pathlib import Path
+import random
 import statistics
 
 import cv2
 import numpy as np
+import pybullet as p
 
+from vla_project.simulation.control_arm import (
+    apply_joint_targets,
+    calculate_target_joints,
+    capture_rgb_and_segmentation,
+    connect_physics,
+    get_hover_target,
+    load_block,
+    reset_robot_to_home,
+    sample_camera_eye,
+    settle_object,
+    setup_world,
+)
 from vla_project.vlm.evaluate_grounding_backprojection import (
     classify_visibility,
 )
@@ -255,3 +269,127 @@ def summarize_visibility(rows):
             for row in lowest
         ],
     }
+
+
+def validate_episode_contract(manifest, summary, frame_rows):
+    """拒绝无法一一重放的 episode、seed、step 和相机记录。"""
+    episode_idx = summary["episode_idx"]
+    expected_seed = manifest["random_seed"] + episode_idx
+    if summary["random_seed"] != expected_seed:
+        raise ReplayValidationError(
+            "seed_mismatch",
+            episode_idx=episode_idx,
+            expected_seed=expected_seed,
+            actual_seed=summary["random_seed"],
+        )
+    if not frame_rows:
+        raise ReplayValidationError(
+            "missing_episode_frames",
+            episode_idx=episode_idx,
+        )
+    steps = [row["step_idx"] for row in frame_rows]
+    if len(steps) != len(set(steps)):
+        raise ReplayValidationError(
+            "duplicate_step",
+            episode_idx=episode_idx,
+        )
+    camera_eyes = {tuple(row["camera_eye"]) for row in frame_rows}
+    if len(camera_eyes) != 1:
+        raise ReplayValidationError(
+            "camera_mismatch",
+            episode_idx=episode_idx,
+        )
+    for row in frame_rows:
+        if row["episode_idx"] != episode_idx:
+            raise ReplayValidationError(
+                "episode_mismatch",
+                episode_idx=episode_idx,
+                frame_episode_idx=row["episode_idx"],
+            )
+        if row["random_seed"] != expected_seed:
+            raise ReplayValidationError(
+                "frame_seed_mismatch",
+                episode_idx=episode_idx,
+                step_idx=row["step_idx"],
+            )
+
+
+def replay_episode(config, manifest, summary, frame_rows):
+    """按原始 seed 和控制顺序重放一条 episode。"""
+    frame_rows = sorted(frame_rows, key=lambda row: row["step_idx"])
+    validate_episode_contract(manifest, summary, frame_rows)
+    episode_idx = summary["episode_idx"]
+    random.seed(summary["random_seed"])
+    connect_physics("DIRECT")
+    observations = []
+    try:
+        _, robot_id = setup_world(config)
+        reset_robot_to_home(robot_id, config["robot"], config["dataset"])
+        for _ in range(config["task"]["initial_settle_steps"]):
+            p.stepSimulation()
+        block_id = load_block(config["task"])
+        settle_object(config, config["task"]["initial_settle_steps"])
+        camera_eye = sample_camera_eye(config["camera"])
+        expected_eye = frame_rows[0]["camera_eye"]
+        if camera_eye != expected_eye:
+            raise ReplayValidationError(
+                "replayed_camera_mismatch",
+                episode_idx=episode_idx,
+                expected_camera_eye=expected_eye,
+                actual_camera_eye=camera_eye,
+            )
+
+        rows_by_step = {row["step_idx"]: row for row in frame_rows}
+        for step_idx in range(frame_rows[-1]["step_idx"] + 1):
+            target = get_hover_target(
+                block_id,
+                config["task"]["hover_height"],
+            )
+            joints = calculate_target_joints(
+                robot_id,
+                config["robot"],
+                target,
+            )
+            apply_joint_targets(robot_id, config["robot"], joints)
+            p.stepSimulation()
+            if step_idx not in rows_by_step:
+                continue
+            source = rows_by_step[step_idx]
+            replay_bgr, segmentation = capture_rgb_and_segmentation(
+                config["camera"],
+                camera_eye,
+            )
+            replay_check = validate_replay_image(
+                source["image_path"],
+                replay_bgr,
+            )
+            observations.append(
+                {
+                    "schema_version": "visibility_audit_v1",
+                    "episode_idx": episode_idx,
+                    "random_seed": summary["random_seed"],
+                    "step_idx": step_idx,
+                    "image_path": source["image_path"],
+                    "visible_block_pixels": count_block_pixels(
+                        segmentation,
+                        block_id,
+                    ),
+                    **replay_check,
+                }
+            )
+
+        p.removeBody(robot_id)
+        _, reference_segmentation = capture_rgb_and_segmentation(
+            config["camera"],
+            camera_eye,
+        )
+        reference_pixels = count_block_pixels(
+            reference_segmentation,
+            block_id,
+        )
+        return build_visibility_rows(observations, reference_pixels)
+    except ReplayValidationError as exc:
+        exc.evidence.setdefault("episode_idx", episode_idx)
+        raise
+    finally:
+        p.disconnect()
