@@ -93,6 +93,28 @@ def observation(step_idx, pixels):
 
 
 class VisibilityRowTests(unittest.TestCase):
+    def test_uses_each_frames_reference_after_block_pose_drift(self):
+        observations = [
+            {
+                **observation(0, 251),
+                "reference_block_pixels": 251,
+            },
+            {
+                **observation(24, 252),
+                "reference_block_pixels": 252,
+            },
+        ]
+
+        try:
+            rows = build_visibility_rows(observations)
+        except (TypeError, ValueError) as exc:
+            self.fail(f"应接受逐帧无遮挡参考像素: {exc}")
+
+        self.assertEqual(
+            [row["block_visibility_ratio"] for row in rows],
+            [1.0, 1.0],
+        )
+
     def test_builds_rows_with_existing_visibility_boundaries(self):
         rows = build_visibility_rows(
             [

@@ -88,28 +88,32 @@ def validate_replay_image(original_path, replay_bgr):
     }
 
 
-def build_visibility_rows(frame_observations, reference_pixels):
-    """用同一 episode 的无遮挡参考像素生成逐帧比率和分组。"""
-    if (
-        isinstance(reference_pixels, bool)
-        or not isinstance(reference_pixels, int)
-        or reference_pixels <= 0
-    ):
-        raise ValueError("reference_pixels 必须是正整数")
+def build_visibility_rows(frame_observations, reference_pixels=None):
+    """用每帧同一物理状态的无遮挡参考像素生成比率和分组。"""
     rows = []
     for observation in frame_observations:
+        frame_reference = observation.get(
+            "reference_block_pixels",
+            reference_pixels,
+        )
+        if (
+            isinstance(frame_reference, bool)
+            or not isinstance(frame_reference, int)
+            or frame_reference <= 0
+        ):
+            raise ValueError("reference_block_pixels 必须是正整数")
         visible = observation["visible_block_pixels"]
         if (
             isinstance(visible, bool)
             or not isinstance(visible, int)
-            or not 0 <= visible <= reference_pixels
+            or not 0 <= visible <= frame_reference
         ):
             raise ValueError("visible_block_pixels 必须位于参考范围内")
-        ratio = visible / reference_pixels
+        ratio = visible / frame_reference
         rows.append(
             {
                 **observation,
-                "reference_block_pixels": reference_pixels,
+                "reference_block_pixels": frame_reference,
                 "block_visibility_ratio": ratio,
                 "visibility_group": classify_visibility(ratio),
             }
@@ -369,6 +373,41 @@ def replay_episode(config, manifest, summary, frame_rows):
                 source["image_path"],
                 replay_bgr,
             )
+            visible_pixels = count_block_pixels(
+                segmentation,
+                block_id,
+            )
+            state_id = p.saveState()
+            try:
+                _, robot_orientation = p.getBasePositionAndOrientation(
+                    robot_id
+                )
+                p.resetBasePositionAndOrientation(
+                    robot_id,
+                    [0.0, 0.0, -10.0],
+                    robot_orientation,
+                )
+                _, reference_segmentation = (
+                    capture_rgb_and_segmentation(
+                        config["camera"],
+                        camera_eye,
+                    )
+                )
+                reference_pixels = count_block_pixels(
+                    reference_segmentation,
+                    block_id,
+                )
+            finally:
+                p.restoreState(stateId=state_id)
+                p.removeState(state_id)
+            if reference_pixels <= 0 or visible_pixels > reference_pixels:
+                raise ReplayValidationError(
+                    "invalid_visibility_pixels",
+                    episode_idx=episode_idx,
+                    step_idx=step_idx,
+                    visible_block_pixels=visible_pixels,
+                    reference_block_pixels=reference_pixels,
+                )
             observations.append(
                 {
                     "schema_version": "visibility_audit_v1",
@@ -376,24 +415,13 @@ def replay_episode(config, manifest, summary, frame_rows):
                     "random_seed": summary["random_seed"],
                     "step_idx": step_idx,
                     "image_path": source["image_path"],
-                    "visible_block_pixels": count_block_pixels(
-                        segmentation,
-                        block_id,
-                    ),
+                    "visible_block_pixels": visible_pixels,
+                    "reference_block_pixels": reference_pixels,
                     **replay_check,
                 }
             )
 
-        p.removeBody(robot_id)
-        _, reference_segmentation = capture_rgb_and_segmentation(
-            config["camera"],
-            camera_eye,
-        )
-        reference_pixels = count_block_pixels(
-            reference_segmentation,
-            block_id,
-        )
-        return build_visibility_rows(observations, reference_pixels)
+        return build_visibility_rows(observations)
     except ReplayValidationError as exc:
         exc.evidence.setdefault("episode_idx", episode_idx)
         raise

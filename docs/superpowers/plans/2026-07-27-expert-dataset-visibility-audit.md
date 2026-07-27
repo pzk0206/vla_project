@@ -8,6 +8,14 @@
 
 **Tech Stack:** Python 3、PyBullet、OpenCV、NumPy、PyYAML、`unittest`、JSON/JSONL
 
+## 实施校正（2026-07-27）
+
+全量首次执行发现，红块在 episode 内仍可能发生亚毫米级位姿变化，因此计划正文中“在
+episode 末尾统一生成一个无遮挡参考像素数”的做法不能满足逐帧分母契约。正式实现改为
+在每个保存帧保存 PyBullet 状态、临时移走机器人、渲染该帧无遮挡参考后恢复状态，并由
+`build_visibility_rows()` 优先使用每条 observation 的 `reference_block_pixels`。
+校正原因、探针证据和最终行为以对应设计规格为准；下方原始任务步骤保留为实施历史。
+
 ## Global Constraints
 
 - 输入固定为 `outputs/dataset/expert_scaling_v1/` 内的 manifest、配置快照、两份 JSONL 和 JPEG。
