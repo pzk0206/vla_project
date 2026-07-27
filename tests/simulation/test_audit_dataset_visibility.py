@@ -1,19 +1,24 @@
 """测试 expert_v1 数据集的确定性重放可见性审计。"""
 
+import json
 import random
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import cv2
 import numpy as np
 import pybullet as p
+import yaml
 
 from vla_project.simulation.audit_dataset_visibility import (
     ReplayValidationError,
     build_visibility_rows,
     count_block_pixels,
+    read_jsonl,
     replay_episode,
+    run_visibility_audit,
     summarize_visibility,
     validate_replay_image,
     validate_episode_contract,
@@ -285,6 +290,111 @@ class ReplayIntegrationTests(unittest.TestCase):
         self.assertTrue(rows[0]["replay_exact_match"])
         self.assertGreater(rows[0]["reference_block_pixels"], 0)
         self.assertGreater(rows[0]["visible_block_pixels"], 0)
+
+
+def write_minimal_dataset_inputs(dataset_dir):
+    manifest = {
+        "schema_version": "expert_v1",
+        "random_seed": 1000,
+        "jsonl_name": "trajectory_expert.jsonl",
+        "summary_jsonl_name": "episode_summary.jsonl",
+    }
+    frame = {
+        "episode_idx": 0,
+        "random_seed": 1000,
+        "step_idx": 0,
+        "camera_eye": [1.0, 0.4, 1.6],
+        "image_path": str(dataset_dir / "ep_0_step_0.jpg"),
+    }
+    summary = {
+        "episode_idx": 0,
+        "random_seed": 1000,
+    }
+    (dataset_dir / "dataset_manifest.json").write_text(
+        json.dumps(manifest),
+        encoding="utf-8",
+    )
+    (dataset_dir / "config_snapshot.yaml").write_text(
+        yaml.safe_dump({"connection_mode": "DIRECT"}),
+        encoding="utf-8",
+    )
+    (dataset_dir / "trajectory_expert.jsonl").write_text(
+        json.dumps(frame) + "\n",
+        encoding="utf-8",
+    )
+    (dataset_dir / "episode_summary.jsonl").write_text(
+        json.dumps(summary) + "\n",
+        encoding="utf-8",
+    )
+    cv2.imwrite(
+        frame["image_path"],
+        np.zeros((32, 32, 3), dtype=np.uint8),
+    )
+
+
+class AuditRunnerTests(unittest.TestCase):
+    def test_failure_writes_only_failure_evidence(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dataset_dir = Path(temp_dir) / "dataset"
+            output_dir = dataset_dir / "visibility_audit_v1"
+            dataset_dir.mkdir()
+            write_minimal_dataset_inputs(dataset_dir)
+
+            with patch(
+                "vla_project.simulation.audit_dataset_visibility.replay_episode",
+                side_effect=ReplayValidationError(
+                    "replay_image_mismatch",
+                    episode_idx=0,
+                    step_idx=0,
+                ),
+            ):
+                with self.assertRaises(ReplayValidationError):
+                    run_visibility_audit(dataset_dir, output_dir)
+
+            self.assertTrue(
+                (output_dir / "visibility_audit_failure.json").is_file()
+            )
+            self.assertFalse(
+                (output_dir / "frame_visibility.jsonl").exists()
+            )
+            self.assertFalse(
+                (output_dir / "visibility_audit_summary.json").exists()
+            )
+
+    def test_success_publishes_complete_rows_and_summary(self):
+        replayed = [
+            {
+                **observation(0, 100),
+                "episode_idx": 0,
+                "random_seed": 1000,
+                "reference_block_pixels": 100,
+                "block_visibility_ratio": 1.0,
+                "visibility_group": "clear",
+            }
+        ]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dataset_dir = Path(temp_dir) / "dataset"
+            output_dir = dataset_dir / "visibility_audit_v1"
+            dataset_dir.mkdir()
+            write_minimal_dataset_inputs(dataset_dir)
+            with patch(
+                "vla_project.simulation.audit_dataset_visibility.replay_episode",
+                return_value=replayed,
+            ):
+                summary = run_visibility_audit(dataset_dir, output_dir)
+
+            saved_rows = read_jsonl(
+                output_dir / "frame_visibility.jsonl"
+            )
+            saved_summary = json.loads(
+                (
+                    output_dir / "visibility_audit_summary.json"
+                ).read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(saved_rows, replayed)
+        self.assertTrue(summary["replay_validation"]["passed"])
+        self.assertEqual(saved_summary, summary)
 
 
 if __name__ == "__main__":

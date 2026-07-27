@@ -7,6 +7,9 @@ import unittest
 
 EXPECTED_SCRIPTS = {
     "vla-collect": "vla_project.simulation.control_arm:main",
+    "vla-audit-dataset-visibility": (
+        "vla_project.simulation.audit_dataset_visibility:main"
+    ),
     "vla-evaluate-dataset": "vla_project.simulation.evaluate_dataset:main",
     "vla-probe": "vla_project.simulation.stage3_probe:main",
     "vla-evaluate-probe": "vla_project.simulation.evaluate_probe:main",

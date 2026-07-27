@@ -59,7 +59,7 @@ PyBullet 红块真值只能用于离线评分、场景资格检查和受控 smok
 | `outputs/` | 本地生成的图片、trace、预测和实验摘要；默认不提交 Git |
 | `docs/` | 当前知识、学习路线、Bug 证据以及历史设计和实施计划 |
 
-正式源码采用 `src/` 布局，`pyproject.toml` 注册 13 个 `vla-*` 命令。新增文件和
+正式源码采用 `src/` 布局，`pyproject.toml` 注册 14 个 `vla-*` 命令。新增文件和
 测试前查看 [文件路由手册](PROJECT_STRUCTURE.md)，不要在仓库根目录添加正式 Python
 脚本。
 

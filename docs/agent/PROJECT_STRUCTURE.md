@@ -165,7 +165,7 @@ vla_project/
 | 文件 | 作用 | 什么时候修改 |
 | --- | --- | --- |
 | `.gitignore` | 指定不提交的缓存、生成输出和本机配置 | 新增可再生成或仅本机使用的文件类型时 |
-| `pyproject.toml` | 定义 `vla-project` 包、`src/` 布局和 13 个 `vla-*` 命令 | 增加包元数据或命令入口时 |
+| `pyproject.toml` | 定义 `vla-project` 包、`src/` 布局和 14 个 `vla-*` 命令 | 增加包元数据或命令入口时 |
 | `README.md` | 给使用者说明项目目标、安装方法、运行命令和当前阶段 | 使用方式或阶段结论变化时 |
 | `requirements.txt` | 记录 PyBullet、OpenCV、NumPy 等第三方依赖 | 正式代码新增或移除外部依赖时 |
 | `sim_config.yaml` | 保存仿真、相机、采集、probe、VLM 和输出目录参数 | 调整实验变量时，优先改这里而非写死在代码中 |
@@ -181,6 +181,7 @@ vla_project/
 | `stage3_probe.py` | 运行单个“观察 -> 决策 -> 控制 -> 再观察”闭环 episode |
 | `evaluate_probe.py` | 用固定种子批量调用 Stage 3 probe 并汇总成功率和失败证据 |
 | `evaluate_dataset.py` | 只读扫描专家数据完整性、生成质量报告并执行严格 pilot 门禁 |
+| `audit_dataset_visibility.py` | 确定性重放专家帧，验证 JPEG 一致性并生成红块可见率审计 |
 
 ### `vlm/`：视觉语言模型评估
 
@@ -220,8 +221,9 @@ src/vla_project/tools/x.py       -> tests/tools/test_x.py
 ```
 
 - `tests/test_config_contract.py`：保护 `sim_config.yaml` 的跨模块配置约束和统一输出路径。
-- `tests/test_package_metadata.py`：保护 `src/` 包结构和 13 个控制台命令入口。
+- `tests/test_package_metadata.py`：保护 `src/` 包结构和 14 个控制台命令入口。
 - `tests/simulation/test_evaluate_dataset.py`：保护专家数据质量扫描和 pilot 门禁。
+- `tests/simulation/test_audit_dataset_visibility.py`：保护确定性重放、可见率和原子输出。
 - `tests/vlm/grounding_smoke/`：镜像测试 targeting、runner 和 screening。
 - 新增或修复行为时，应同时新增对应领域测试；不要把测试文件放进 `src/`。
 
@@ -288,6 +290,7 @@ Qwen annotated/evaluation image   -> outputs/vlm_evaluations/<experiment>/
 | 调整相机、episode 数量或输出路径 | `sim_config.yaml` |
 | 修改机械臂采集或 IK 控制 | `src/vla_project/simulation/control_arm.py` |
 | 检查专家数据质量或 pilot 门禁 | `src/vla_project/simulation/evaluate_dataset.py` |
+| 审计专家图片遮挡和红块可见率 | `src/vla_project/simulation/audit_dataset_visibility.py` |
 | 修改单次闭环决策和执行 | `src/vla_project/simulation/stage3_probe.py` |
 | 修改批量 probe 统计 | `src/vla_project/simulation/evaluate_probe.py` |
 | 修改相机反投影数学 | `src/vla_project/simulation/camera_geometry.py` |

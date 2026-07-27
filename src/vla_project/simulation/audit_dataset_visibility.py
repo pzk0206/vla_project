@@ -1,13 +1,18 @@
 """确定性重放 expert 数据，并审计红块逐帧可见率。"""
 
+import argparse
 from collections import Counter, defaultdict
+from datetime import datetime
+import json
 from pathlib import Path
 import random
 import statistics
+import tempfile
 
 import cv2
 import numpy as np
 import pybullet as p
+import yaml
 
 from vla_project.simulation.control_arm import (
     apply_joint_targets,
@@ -27,6 +32,7 @@ from vla_project.vlm.evaluate_grounding_backprojection import (
 
 
 OBJECT_ID_MASK = (1 << 24) - 1
+DEFAULT_DATASET_DIR = "outputs/dataset/expert_scaling_v1"
 
 
 class ReplayValidationError(RuntimeError):
@@ -393,3 +399,146 @@ def replay_episode(config, manifest, summary, frame_rows):
         raise
     finally:
         p.disconnect()
+
+
+def read_jsonl(path):
+    """读取非空 JSONL 行。"""
+    with Path(path).open("r", encoding="utf-8") as handle:
+        return [json.loads(line) for line in handle if line.strip()]
+
+
+def write_json(path, payload):
+    """稳定写入可读 JSON。"""
+    Path(path).write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def load_audit_inputs(dataset_dir):
+    """从版本化数据集自身加载重放契约与记录。"""
+    dataset_dir = Path(dataset_dir)
+    with (dataset_dir / "dataset_manifest.json").open(
+        "r",
+        encoding="utf-8",
+    ) as handle:
+        manifest = json.load(handle)
+    with (dataset_dir / "config_snapshot.yaml").open(
+        "r",
+        encoding="utf-8",
+    ) as handle:
+        config = yaml.safe_load(handle)
+    frames = read_jsonl(dataset_dir / manifest["jsonl_name"])
+    summaries = read_jsonl(
+        dataset_dir / manifest["summary_jsonl_name"]
+    )
+    return manifest, config, frames, summaries
+
+
+def run_visibility_audit(dataset_dir, output_dir=None):
+    """逐 episode 重放并原子发布可信可见性标签。"""
+    dataset_dir = Path(dataset_dir)
+    output_dir = (
+        Path(output_dir)
+        if output_dir is not None
+        else dataset_dir / "visibility_audit_v1"
+    )
+    if output_dir.exists():
+        raise FileExistsError(f"审计输出目录已存在: {output_dir}")
+    try:
+        manifest, config, frames, summaries = load_audit_inputs(dataset_dir)
+        indexed_frames = defaultdict(list)
+        for row in frames:
+            indexed_frames[row["episode_idx"]].append(row)
+        if len({row["episode_idx"] for row in summaries}) != len(summaries):
+            raise ReplayValidationError("duplicate_episode_summary")
+
+        all_rows = []
+        for summary in sorted(
+            summaries,
+            key=lambda row: row["episode_idx"],
+        ):
+            all_rows.extend(
+                replay_episode(
+                    config,
+                    manifest,
+                    summary,
+                    indexed_frames[summary["episode_idx"]],
+                )
+            )
+        if len(all_rows) != len(frames):
+            raise ReplayValidationError(
+                "unconsumed_frame_rows",
+                expected_frames=len(frames),
+                replayed_frames=len(all_rows),
+            )
+    except Exception as exc:
+        output_dir.mkdir(parents=True, exist_ok=False)
+        evidence = {
+            "schema_version": "visibility_audit_v1",
+            "passed": False,
+            "reason": (
+                exc.reason
+                if isinstance(exc, ReplayValidationError)
+                else type(exc).__name__
+            ),
+            "error": repr(exc),
+            "evidence": (
+                exc.evidence
+                if isinstance(exc, ReplayValidationError)
+                else {}
+            ),
+        }
+        write_json(output_dir / "visibility_audit_failure.json", evidence)
+        raise
+
+    summary = {
+        "schema_version": "visibility_audit_v1",
+        "dataset_dir": str(dataset_dir),
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "replay_validation": {"passed": True},
+        **summarize_visibility(all_rows),
+    }
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=output_dir.parent) as temp_dir:
+        staging = Path(temp_dir) / output_dir.name
+        staging.mkdir()
+        with (staging / "frame_visibility.jsonl").open(
+            "w",
+            encoding="utf-8",
+        ) as handle:
+            for row in all_rows:
+                handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+        write_json(
+            staging / "visibility_audit_summary.json",
+            summary,
+        )
+        staging.replace(output_dir)
+    return summary
+
+
+def main():
+    """CLI：确定性重放版本化 expert 数据集并发布可见性报告。"""
+    parser = argparse.ArgumentParser(
+        description="确定性重放 expert 数据并审计红块可见率"
+    )
+    parser.add_argument(
+        "--dataset-dir",
+        default=DEFAULT_DATASET_DIR,
+    )
+    parser.add_argument("--output-dir")
+    args = parser.parse_args()
+    summary = run_visibility_audit(
+        args.dataset_dir,
+        args.output_dir,
+    )
+    print(
+        "可见性审计完成："
+        f"episode={summary['num_episodes']}，"
+        f"frames={summary['num_frames']}，"
+        f"groups={summary['visibility_group_counts']}"
+    )
+
+
+if __name__ == "__main__":
+    main()

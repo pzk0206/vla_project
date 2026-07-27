@@ -117,6 +117,7 @@ pip install -e .
 | 命令 | 用途 |
 | --- | --- |
 | `vla-collect` | 采集版本化专家训练数据 |
+| `vla-audit-dataset-visibility` | 确定性重放专家数据并审计红块逐帧可见率 |
 | `vla-evaluate-dataset` | 扫描专家数据并生成 `dataset_quality_report.json` |
 | `vla-probe` | 运行 Stage 3 单次闭环 |
 | `vla-evaluate-probe` | 批量评估 heuristic 闭环 |
@@ -166,7 +167,18 @@ scale gate，要求有效 episode 至少300、总体成功率不低于99%、完�
 判断字段；门禁失败时命令以非零状态退出。
 
 当前 `expert_v1` 已达到300条并通过 scale gate；不要直接重复运行配置中的290条追加
-批次，否则会继续增加数据。下一阶段从 action tokenization 开始。
+批次，否则会继续增加数据。
+
+在 action tokenization 前运行只读视觉可见性审计：
+
+```bash
+vla-audit-dataset-visibility
+```
+
+该命令使用数据集内的 `config_snapshot.yaml` 确定性重放每个保存帧，并且只有重放 JPEG
+与原图逐像素一致时才接受 PyBullet segmentation 标签。成功结果写入
+`outputs/dataset/expert_scaling_v1/visibility_audit_v1/`；任一重放不一致时只写
+`visibility_audit_failure.json`，不会修改原始图片或 JSONL。
 
 ## 阶段三闭环探路
 
