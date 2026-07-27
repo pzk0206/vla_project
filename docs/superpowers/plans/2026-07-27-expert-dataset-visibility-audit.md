@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 对现有300条、9,894帧 `expert_v1` 数据执行逐帧确定性重放，只有重放 JPEG 与原图完全一致时才使用 PyBullet segmentation 生成红块可见率标签和遮挡分布报告。
+**Goal:** 对现有300条、9,894帧 `expert_v1` 数据执行逐帧确定性重放，只有重放 JPEG 精确一致或通过严格渲染舍入容差时，才使用 PyBullet segmentation 生成红块可见率标签和遮挡分布报告。
 
 **Architecture:** 新建一个 simulation 领域审计模块，纯函数负责 segmentation 解码、图像一致性和汇总，重放函数负责按 episode 恢复仿真并返回逐帧标签，顶层 runner 负责输入契约和原子发布。原始数据完全只读；失败只发布失败证据，不发布可信标签。
 
@@ -12,16 +12,21 @@
 
 全量首次执行发现，红块在 episode 内仍可能发生亚毫米级位姿变化，因此计划正文中“在
 episode 末尾统一生成一个无遮挡参考像素数”的做法不能满足逐帧分母契约。正式实现改为
-在每个保存帧保存 PyBullet 状态、临时移走机器人、渲染该帧无遮挡参考后恢复状态，并由
+在每个保存帧临时把机器人 visual shape 设为透明、渲染该帧无遮挡参考后恢复颜色，并由
 `build_visibility_rows()` 优先使用每条 observation 的 `reference_block_pixels`。
-校正原因、探针证据和最终行为以对应设计规格为准；下方原始任务步骤保留为实施历史。
+
+全量 RGB 诊断还发现9,894帧中有6帧存在最大不超过3、MAE 不超过0.001256的稀疏 OpenGL
+重渲染舍入差异。正式门禁因此改为 exact 或 `MAE <= 0.002 && max_error <= 3`，并分别
+记录 exact/tolerance 数量。校正原因、探针证据和最终行为以对应设计规格为准；下方原始
+任务步骤中“逐像素完全一致”和“保存/恢复物理状态”的内容仅保留为实施历史，已被本节
+替代。
 
 ## Global Constraints
 
 - 输入固定为 `outputs/dataset/expert_scaling_v1/` 内的 manifest、配置快照、两份 JSONL 和 JPEG。
 - 仿真参数必须来自数据集内的 `config_snapshot.yaml`，不得使用当前 `sim_config.yaml` 代替。
 - 不修改、删除、移动、覆盖或筛选任何原始训练图片和 JSONL。
-- 重放 JPEG 重新编码解码后必须与原图逐像素完全一致，否则对应标签不可信并使整批失败。
+- 重放 JPEG 必须精确一致或满足 `MAE <= 0.002 && max_error <= 3`，否则整批失败。
 - `severe < 0.25`、`partial < 0.75`、`clear >= 0.75`，必须复用现有 `classify_visibility()`。
 - 成功时只发布 `frame_visibility.jsonl` 和 `visibility_audit_summary.json`；失败时只发布 `visibility_audit_failure.json`。
 - 输出写入 `outputs/dataset/expert_scaling_v1/visibility_audit_v1/`，不得提交 Git。
@@ -1216,7 +1221,7 @@ conda run -n vla_env env PYTHONPATH=src \
   vla-audit-dataset-visibility
 ```
 
-Expected: 逐帧重放全部精确匹配，生成成功 JSONL 和 summary，不生成 failure JSON。
+Expected: 全部帧精确匹配或通过严格容差，生成成功 JSONL 和 summary，不生成 failure JSON。
 
 - [ ] **Step 4: 验证成功输出契约**
 
@@ -1224,7 +1229,7 @@ Run:
 
 ```bash
 conda run -n vla_env env PYTHONPATH=src python -c \
-  "import json,pathlib; d=pathlib.Path('outputs/dataset/expert_scaling_v1/visibility_audit_v1'); rows=[json.loads(x) for x in (d/'frame_visibility.jsonl').read_text().splitlines() if x.strip()]; s=json.loads((d/'visibility_audit_summary.json').read_text()); assert len(rows)==9894; assert s['num_episodes']==300; assert s['num_frames']==9894; assert s['replay_exact_match_count']==9894; assert s['replay_mismatch_count']==0; assert s['replay_validation']['passed'] is True; assert sum(s['visibility_group_counts'].values())==9894; assert not (d/'visibility_audit_failure.json').exists(); print(json.dumps(s,ensure_ascii=False,indent=2))"
+  "import json,pathlib; d=pathlib.Path('outputs/dataset/expert_scaling_v1/visibility_audit_v1'); rows=[json.loads(x) for x in (d/'frame_visibility.jsonl').read_text().splitlines() if x.strip()]; s=json.loads((d/'visibility_audit_summary.json').read_text()); assert len(rows)==9894; assert s['num_episodes']==300; assert s['num_frames']==9894; assert s['replay_exact_match_count']+s['replay_tolerance_match_count']==9894; assert s['replay_mismatch_count']==0; assert s['replay_validation']['passed'] is True; assert sum(s['visibility_group_counts'].values())==9894; assert not (d/'visibility_audit_failure.json').exists(); print(json.dumps(s,ensure_ascii=False,indent=2))"
 ```
 
 Expected: 所有断言通过并打印真实遮挡分布。

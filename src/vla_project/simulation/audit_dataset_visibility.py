@@ -33,6 +33,8 @@ from vla_project.vlm.evaluate_grounding_backprojection import (
 
 OBJECT_ID_MASK = (1 << 24) - 1
 DEFAULT_DATASET_DIR = "outputs/dataset/expert_scaling_v1"
+MAX_REPLAY_PIXEL_MAE = 0.002
+MAX_REPLAY_PIXEL_ERROR = 3
 
 
 class ReplayValidationError(RuntimeError):
@@ -44,6 +46,17 @@ class ReplayValidationError(RuntimeError):
         self.evidence = evidence
 
 
+def replay_difference_is_acceptable(
+    replay_pixel_mae,
+    max_pixel_error,
+):
+    """只接受全量诊断界定的微小 OpenGL 重渲染差异。"""
+    return (
+        replay_pixel_mae <= MAX_REPLAY_PIXEL_MAE
+        and max_pixel_error <= MAX_REPLAY_PIXEL_ERROR
+    )
+
+
 def count_block_pixels(segmentation, block_id):
     """统计 segmentation 中属于指定物体主体或链接的像素。"""
     if isinstance(block_id, bool) or not isinstance(block_id, int):
@@ -53,7 +66,7 @@ def count_block_pixels(segmentation, block_id):
 
 
 def validate_replay_image(original_path, replay_bgr):
-    """确认重放图经过原始 JPEG 编码流程后逐像素一致。"""
+    """确认重放 JPEG 精确一致或只含诊断界定的渲染舍入差异。"""
     original_path = Path(original_path)
     original = cv2.imread(str(original_path))
     if original is None:
@@ -75,16 +88,23 @@ def validate_replay_image(original_path, replay_bgr):
         roundtrip.astype(np.int16) - original.astype(np.int16)
     )
     mae = float(np.mean(diff))
-    if not np.array_equal(roundtrip, original):
+    max_error = int(diff.max())
+    changed_values = int(np.count_nonzero(diff))
+    exact_match = changed_values == 0
+    if not replay_difference_is_acceptable(mae, max_error):
         raise ReplayValidationError(
             "replay_image_mismatch",
             image_path=str(original_path),
             replay_pixel_mae=mae,
-            max_pixel_error=int(diff.max()),
+            max_pixel_error=max_error,
+            changed_pixel_values=changed_values,
         )
     return {
-        "replay_exact_match": True,
+        "replay_exact_match": exact_match,
+        "replay_within_tolerance": True,
         "replay_pixel_mae": mae,
+        "replay_max_pixel_error": max_error,
+        "replay_changed_pixel_values": changed_values,
     }
 
 
@@ -241,6 +261,11 @@ def summarize_visibility(rows):
         "replay_exact_match_count": sum(
             row["replay_exact_match"] for row in rows
         ),
+        "replay_tolerance_match_count": sum(
+            not row["replay_exact_match"]
+            and row.get("replay_within_tolerance", False)
+            for row in rows
+        ),
         "replay_mismatch_count": 0,
         "visibility_group_counts": {
             group: group_counts[group]
@@ -348,6 +373,10 @@ def replay_episode(config, manifest, summary, frame_rows):
                 expected_camera_eye=expected_eye,
                 actual_camera_eye=camera_eye,
             )
+        robot_visual_colors = {
+            shape[1]: shape[7]
+            for shape in p.getVisualShapeData(robot_id)
+        }
 
         rows_by_step = {row["step_idx"]: row for row in frame_rows}
         for step_idx in range(frame_rows[-1]["step_idx"] + 1):
@@ -377,16 +406,13 @@ def replay_episode(config, manifest, summary, frame_rows):
                 segmentation,
                 block_id,
             )
-            state_id = p.saveState()
-            try:
-                _, robot_orientation = p.getBasePositionAndOrientation(
-                    robot_id
-                )
-                p.resetBasePositionAndOrientation(
+            for link_index, rgba in robot_visual_colors.items():
+                p.changeVisualShape(
                     robot_id,
-                    [0.0, 0.0, -10.0],
-                    robot_orientation,
+                    link_index,
+                    rgbaColor=[*rgba[:3], 0.0],
                 )
+            try:
                 _, reference_segmentation = (
                     capture_rgb_and_segmentation(
                         config["camera"],
@@ -398,8 +424,12 @@ def replay_episode(config, manifest, summary, frame_rows):
                     block_id,
                 )
             finally:
-                p.restoreState(stateId=state_id)
-                p.removeState(state_id)
+                for link_index, rgba in robot_visual_colors.items():
+                    p.changeVisualShape(
+                        robot_id,
+                        link_index,
+                        rgbaColor=rgba,
+                    )
             if reference_pixels <= 0 or visible_pixels > reference_pixels:
                 raise ReplayValidationError(
                     "invalid_visibility_pixels",

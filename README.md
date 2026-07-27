@@ -176,7 +176,8 @@ vla-audit-dataset-visibility
 ```
 
 该命令使用数据集内的 `config_snapshot.yaml` 确定性重放每个保存帧，并且只有重放 JPEG
-与原图逐像素一致时才接受 PyBullet segmentation 标签。成功结果写入
+与原图精确一致，或只存在全量诊断界定的严格 OpenGL 舍入差异时，才接受 PyBullet
+segmentation 标签。成功结果写入
 `outputs/dataset/expert_scaling_v1/visibility_audit_v1/`；任一重放不一致时只写
 `visibility_audit_failure.json`，不会修改原始图片或 JSONL。
 

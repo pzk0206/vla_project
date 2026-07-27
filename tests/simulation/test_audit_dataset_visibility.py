@@ -12,6 +12,9 @@ import numpy as np
 import pybullet as p
 import yaml
 
+from vla_project.simulation import (
+    audit_dataset_visibility as visibility_audit,
+)
 from vla_project.simulation.audit_dataset_visibility import (
     ReplayValidationError,
     build_visibility_rows,
@@ -53,6 +56,33 @@ class VisibilityMathTests(unittest.TestCase):
 
 
 class ReplayImageTests(unittest.TestCase):
+    def test_accepts_only_diagnostic_bounded_renderer_difference(self):
+        try:
+            is_acceptable = (
+                visibility_audit.replay_difference_is_acceptable
+            )
+        except AttributeError as exc:
+            self.fail(f"缺少重放渲染差异门禁: {exc}")
+
+        self.assertTrue(
+            is_acceptable(
+                replay_pixel_mae=0.002,
+                max_pixel_error=3,
+            )
+        )
+        self.assertFalse(
+            is_acceptable(
+                replay_pixel_mae=0.0021,
+                max_pixel_error=3,
+            )
+        )
+        self.assertFalse(
+            is_acceptable(
+                replay_pixel_mae=0.001,
+                max_pixel_error=4,
+            )
+        )
+
     def test_accepts_same_image_after_default_jpeg_roundtrip(self):
         image = np.zeros((32, 32, 3), dtype=np.uint8)
         image[8:24, 8:24] = [0, 0, 255]

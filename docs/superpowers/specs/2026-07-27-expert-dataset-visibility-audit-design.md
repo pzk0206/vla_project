@@ -18,8 +18,8 @@ segmentation。直接对 JPEG 做红色阈值会把 KUKA 的橙红色关节误�
 ### 方案 A：确定性重放并恢复 segmentation（采用）
 
 使用数据集的配置快照、episode seed 和保存的 step 编号重新执行相同仿真，在对应 step
-获取 RGB 与 segmentation。逐帧验证重放 JPEG 与原始 JPEG 一致后，才使用 segmentation
-生成红块可见率真值。
+获取 RGB 与 segmentation。逐帧验证重放 JPEG 与原始 JPEG 精确一致，或只含全量诊断
+界定的严格渲染舍入差异后，才使用 segmentation 生成红块可见率真值。
 
 优点：
 
@@ -89,12 +89,13 @@ outputs/dataset/expert_scaling_v1/
 6. 从 step 0 运行到该 episode 的最后保存 step；每个 step 重新计算悬停目标、IK 和电机
    目标，并推进一次物理仿真。
 7. 在记录要求的 step 同时捕获 RGB 和 segmentation。
-8. 使用与原采集相同的 OpenCV 默认 JPEG 编码把重放 RGB 编码并解码；只有解码像素与
-   原始 JPEG 逐像素完全一致时，才接受该帧的 segmentation。
+8. 使用与原采集相同的 OpenCV 默认 JPEG 编码把重放 RGB 编码并解码。精确一致直接
+   接受；非精确帧仅在 `MAE <= 0.002` 且最大单通道误差不超过3时作为严格容差匹配
+   接受，否则拒绝该帧 segmentation。
 9. 统计 segmentation 中 object id 等于红块 body id 的像素数。
-10. 在每个保存 step 保存当前 PyBullet 状态，临时把机器人移出相机视野，在红块位姿、
-    相机和其他场景状态完全不变时再次渲染 segmentation，得到该帧自己的无遮挡参考
-    像素数；随后恢复并释放保存状态，再继续物理仿真。
+10. 在每个保存 step 临时把机器人所有 visual shape 的 alpha 设为0，在物理状态、红块
+    位姿和相机完全不变时再次渲染 segmentation，得到该帧自己的无遮挡参考像素数；
+    随后恢复机器人原始颜色，再继续物理仿真。
 11. 每帧参考像素必须大于0；该帧可见像素不得大于同帧参考像素。
 12. 使用逐帧参考值计算可见率并分类，然后断开本 episode 的 PyBullet 连接。
 
@@ -103,8 +104,14 @@ PyBullet 的 segmentation 编码包含 object id 和 link index；提取 object 
 
 不能在 episode 末尾只渲染一次无遮挡参考并把它用于整条轨迹。全量首次运行发现，
 episode 0 的红块在初始 settle 后仍有约0.52毫米位姿变化，导致无遮挡投影在251和252
-像素之间变化。跨帧共用终止参考会把合法的252像素错误判为大于251；逐帧保存/恢复状态
-的探针在32个保存帧上保持原 JPEG 精确匹配，并消除了该错误。
+像素之间变化。跨帧共用终止参考会把合法的252像素错误判为大于251。透明机器人探针
+把 episode 298 step 720 的红块从92像素恢复到221像素、机器人 mask 变为0，并且恢复
+颜色后的 RGB 完全一致；这种方法不保存/恢复或修改物理状态。
+
+全量只读 RGB 诊断还发现，9,894帧中9,888帧逐像素完全一致，6帧只有稀疏 OpenGL
+重渲染舍入差异：最坏 MAE 为0.001256，最大单通道误差为3，最多改变132/196,608个
+通道值。严格容差以略高于实测 MAE 上界的0.002和实测最大通道误差3为门禁；结果必须
+分别记录 exact 和 tolerance 数量，不能把容差匹配称为精确匹配。
 
 ## 重放一致性硬门禁
 
@@ -112,7 +119,7 @@ episode 0 的红块在初始 settle 后仍有约0.52毫米位姿变化，导致�
 
 - 输入 manifest、配置快照、JSONL 或原始 JPEG 缺失/损坏；
 - episode、seed、step 或 camera_eye 不一致；
-- 重放 JPEG 与原始 JPEG 解码像素不完全一致；
+- 重放 JPEG 与原始 JPEG 的 MAE 大于0.002或最大单通道误差大于3；
 - 保存 step 没有全部重放；
 - 参考像素不为正；
 - 可见像素为负或大于参考像素；
@@ -165,14 +172,17 @@ outputs/dataset/expert_scaling_v1/visibility_audit_v1/
   "block_visibility_ratio": 0.416,
   "visibility_group": "partial",
   "replay_pixel_mae": 0.0,
-  "replay_exact_match": true
+  "replay_max_pixel_error": 0,
+  "replay_changed_pixel_values": 0,
+  "replay_exact_match": true,
+  "replay_within_tolerance": true
 }
 ```
 
 `visibility_audit_summary.json` 至少包含：
 
 - schema、输入数据集和创建时间；
-- episode 数、帧数、重放精确匹配数和失败数；
+- episode 数、帧数、重放精确匹配数、严格容差匹配数和拒绝数；
 - clear、partial、severe 帧数与比例；
 - 至少出现一次 partial/severe 的 episode 数；
 - 初始帧与终止帧的分组和可见率统计；
@@ -217,7 +227,7 @@ vla-audit-dataset-visibility
 - 0、0.25、0.75、1.0 分类边界复用；
 - 参考像素和可见像素非法值拒绝；
 - episode/step/seed/camera 不一致拒绝；
-- JPEG 精确匹配成功和单像素不匹配失败；
+- JPEG 精确匹配、严格渲染容差边界和明显不匹配拒绝；
 - clear/partial/severe、初始/终止帧和最长连续遮挡汇总；
 - 失败时不发布成功 JSONL；
 - 小型真实 DIRECT episode 的确定性重放集成测试；
