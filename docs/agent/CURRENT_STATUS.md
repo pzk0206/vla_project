@@ -4,13 +4,12 @@
 
 ## 当前阶段
 
-专家数据规模化的基础设施和真实 pilot 已完成。`expert_v1` 使用版本化目录、每条
-episode 独立 home pose 复位、`random_seed + episode_idx`、manifest/config snapshot
-和只读质量门禁。真实 PyBullet pilot 使用 seeds 1000–1009，得到10/10 success、
-327帧、0项完整性错误，`pilot_gate.passed=true`，未调用 VLM API。质量检查现已区分
-pilot gate 和 scale gate，顶层 `passed` 代表当前阶段是否通过；当前配置已切到
-`clean_before_run: false`、`num_episodes: 290`，等待运行真实追加采集。严格 smoke 的
-自主停止1/3仍作为独立能力边界，不阻塞扩展。
+专家数据规模化已完成并通过门禁。`expert_v1` 使用版本化目录、每条 episode 独立
+home pose 复位、`random_seed + episode_idx`、manifest/config snapshot 和只读质量
+门禁；真实数据现为300/300 success、9,894帧、0项完整性错误，X/Y 五个分箱均非空。
+质量报告为 `active_gate=scale`、`scale_gate.passed=true`、顶层 `passed=true`，未调用
+VLM API。下一阶段进入 action tokenization；严格 smoke 的自主停止1/3仍作为独立能力
+边界，不阻塞动作表示实验。
 
 ## 已完成且仍有效
 
@@ -68,14 +67,16 @@ pilot gate 和 scale gate，顶层 `passed` 代表当前阶段是否通过；当
   `vla-evaluate-dataset` 会扫描 schema、动作维度、图片、重复 step、seed、帧数和终止
   标志，并把 pilot/scale 两阶段门禁、`active_gate` 和顶层 `passed` 写入
   `dataset_quality_report.json`。
-- 真实 pilot 保存在
-  `outputs/dataset/expert_scaling_v1/`：10条 episode、327帧、10/10 success；
-  最终距离 min/mean/median/max 为
-  0.029069/0.029546/0.029523/0.029983m，每条帧数为31/32.7/32.5/35。
-- pilot 的12项门禁全部通过，所有错误计数均为0；报告路径为
-  `outputs/dataset/expert_scaling_v1/dataset_quality_report.json`。旧数据仍为
-  50条摘要、286条帧记录和286张根目录 JPEG。
-- 当前完整自动测试为191/191通过，`compileall` 与 `git diff --check` 通过；本轮采集
+- 真实规模化数据保存在 `outputs/dataset/expert_scaling_v1/`：episode 0–299、seeds
+  1000–1299，共300条 episode、9,894帧、300/300 success；最终距离
+  min/mean/median/max 为0.028713/0.029419/0.029414/0.029998m，每条帧数为
+  29/32.98/33/36。
+- scale gate 全部通过，所有完整性错误计数均为0；X 五箱为
+  `[2057, 2257, 2492, 1523, 1565]`，Y 五箱为
+  `[1830, 2650, 2129, 1876, 1409]`。报告路径为
+  `outputs/dataset/expert_scaling_v1/dataset_quality_report.json`。旧数据仍为50条
+  摘要、286条帧记录和286张根目录 JPEG。
+- 当前完整自动测试为195/195通过，`compileall` 与 `git diff --check` 通过；本轮采集
   和质量评估代码不读取 VLM API 环境变量，也不导入 VLM API 调用函数。
 
 ## 未解决问题
@@ -90,26 +91,25 @@ pilot gate 和 scale gate，顶层 `passed` 代表当前阶段是否通过；当
 4. 永久遮挡、目标移动和 severe 遮挡恢复仍不在当前范围。
 5. README、学习计划和 BUGLOG 的阶段表述可能存在时间差；实验结论以
    原始摘要和对应证据链为准。
-6. 10条 pilot 只能验证流程与小样本质量，尚不能证明300条规模下仍有99%以上成功率和
-   足够的目标位置覆盖；pilot 的 X 分箱仍有一个空箱，扩展后必须重新审计覆盖。
+6. 300条数据已经证明当前专家控制器在固定任务分布下的采集稳定性和位置覆盖，但尚未
+   证明9维连续动作采用哪种 tokenization 最适合学习，也未形成训练/验证划分。
 
 ## 下一步优先级
 
-1. 保持 `expert_v1` schema 不变，按当前追加配置运行290条真实采集，使有效 episode
-   总数达到至少300。
-2. 扩展后重新运行完整质量扫描，要求有效 episode 至少300、总体成功率不低于99%、
-   完整性错误为0，并检查红块 X/Y 分箱覆盖。
-3. 通过规模化验收后进入 action tokenization，避免采集与动作表示同时改动。
+1. 冻结当前 `expert_v1` 数据集，不再运行当前290条追加配置或改动采集 schema。
+2. 设计 action tokenization：先统计7维关节目标、夹爪占位值和终止标志的分布与时序，
+   再选择连续回归、逐维分箱或其他轻量表示的最小对照实验。
+3. 在 episode 级划分训练/验证集，避免同一轨迹的相邻帧跨集合泄漏。
 4. 自主 stop 3/3继续作为严格 smoke 指标；只有后续训练或评估明确依赖时，才重新开启
    grounding 稳健性改进。
 
 ## 当前恢复点（2026-07-27）
 
-`expert_v1` 真实10条 pilot 已通过严格门禁，证据位于
-`outputs/dataset/expert_scaling_v1/`。当前配置已是
-`clean_before_run: false`、`num_episodes: 290`；下一次 `vla-collect` 会保留 pilot，
-从 episode 10 开始追加。扩展后重新运行 `vla-evaluate-dataset`，未达到至少300条有效
-episode、99%成功率、零完整性错误和 X/Y 五箱非空时不得进入 action tokenization。
+`expert_v1` 真实300条已通过 scale gate，权威报告位于
+`outputs/dataset/expert_scaling_v1/dataset_quality_report.json`。当前
+`sim_config.yaml` 的 `num_episodes: 290` 是本次已执行的追加批次配置，不应再次运行
+`vla-collect`，否则会继续追加到590条。恢复工作时先读取质量报告，再从 action
+tokenization 的设计与动作分布审计开始。
 
 ## 当前任务入口
 

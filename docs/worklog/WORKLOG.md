@@ -1119,3 +1119,61 @@ VLM API 调用：0
 主工作区重新安装 editable package，并再次验证191/191测试、`compileall`、
 `git diff --check` 和真实 pilot 质量门禁；结果仍为10/10、327帧、0错误。功能分支和
 worktree 已清理，用户原有未跟踪文档保持不动，远端尚未推送。
+
+## 32. Expert v1 真实300条规模化验收（2026-07-27）
+
+本轮先补齐规模化质量语义，避免原 pilot gate 的“恰好10条”规则把合格的300条数据
+误判为失败。质量报告现在同时保留 `pilot_gate` 和 `scale_gate`，并用
+`active_gate` 与顶层 `passed` 表示当前阶段结果。scale gate 要求：
+
+```text
+valid_episode_count >= 300
+success_rate >= 99%
+全部完整性错误计数 = 0
+红块 X/Y 五个分箱均非空
+```
+
+实现采用 TDD：先观察新门禁和阶段选择测试因接口缺失而失败，再完成最小实现。隔离
+worktree 的定向测试为21/21，全量测试为195/195，`compileall` 和
+`git diff --check` 均通过。两笔实现提交以 fast-forward 合并回 `main`。
+
+真实采集前只读确认已有10条 pilot、最大 episode 编号9、历史
+`pilot_gate.passed=true`，并确认配置为：
+
+```yaml
+clean_before_run: false
+num_episodes: 290
+```
+
+随后在主工作区运行不调用 VLM API 的 `vla-collect`，保留 episode 0–9，并追加
+episode 10–299（seeds 1010–1299）。采集进程退出码为0。完整质量扫描结果为：
+
+```text
+episode：300
+valid_episode：300
+frames：9894
+success：300/300（100%）
+termination_reason：success=300
+errors：0
+active_gate：scale
+scale_gate.passed：true
+顶层 passed：true
+```
+
+数值与覆盖统计为：
+
+```text
+final_distance min/mean/median/max：
+0.028713/0.029419/0.029414/0.029998m
+frames_per_episode min/mean/median/max：
+29/32.98/33/36
+X bin counts：[2057, 2257, 2492, 1523, 1565]
+Y bin counts：[1830, 2650, 2129, 1876, 1409]
+```
+
+权威报告位于
+`outputs/dataset/expert_scaling_v1/dataset_quality_report.json`。这证明当前固定任务
+分布下的专家采集稳定性、数据完整性和目标位置覆盖达到预定门槛，但不证明动作表示或
+训练效果。专家数据规模化阶段至此通过，下一阶段进入 action tokenization，并在
+episode 级别建立训练/验证划分。当前配置仍记录本次290条追加批次，不能直接重复运行
+`vla-collect`，否则会继续追加数据。

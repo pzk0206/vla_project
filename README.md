@@ -165,6 +165,9 @@ scale gate，要求有效 episode 至少300、总体成功率不低于99%、完�
 红块 X/Y 五个位置分箱均非空。顶层 `passed` 是能否进入 action tokenization 的机器
 判断字段；门禁失败时命令以非零状态退出。
 
+当前 `expert_v1` 已达到300条并通过 scale gate；不要直接重复运行配置中的290条追加
+批次，否则会继续增加数据。下一阶段从 action tokenization 开始。
+
 ## 阶段三闭环探路
 
 `src/vla_project/simulation/stage3_probe.py` 用来验证“观测图 -> 决策方向 -> 机械臂移动”的最小闭环。
