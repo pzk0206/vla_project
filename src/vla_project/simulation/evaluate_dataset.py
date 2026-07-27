@@ -42,6 +42,18 @@ REQUIRED_SUMMARY_FIELDS = {
     "final_target_pos",
     "final_ee_pos",
 }
+QUALITY_ERROR_COUNT_FIELDS = (
+    "schema_error_count",
+    "action_dim_error_count",
+    "missing_image_count",
+    "unreadable_image_count",
+    "image_size_mismatch_count",
+    "orphan_image_count",
+    "duplicate_step_key_count",
+    "seed_error_count",
+    "frame_count_mismatch_count",
+    "terminal_flag_error_count",
+)
 
 
 def _read_jsonl(path):
@@ -124,6 +136,49 @@ def evaluate_pilot_gate(report, manifest):
         "checks": checks,
         "failed_checks": failed,
     }
+
+
+def _has_full_axis_coverage(counts):
+    return (
+        isinstance(counts, list)
+        and len(counts) == 5
+        and all(isinstance(count, int) and count > 0 for count in counts)
+    )
+
+
+def evaluate_scale_gate(report, manifest):
+    """验收规模化数据数量、成功率、完整性和目标位置覆盖。"""
+    checks = {
+        "valid_episode_count": (
+            report["valid_episode_count"] >= manifest["target_num_episodes"]
+        ),
+        "success_rate": report["success_rate"] >= 0.99,
+        "x_bin_coverage": _has_full_axis_coverage(
+            report["block_position"]["x_bin_counts"]
+        ),
+        "y_bin_coverage": _has_full_axis_coverage(
+            report["block_position"]["y_bin_counts"]
+        ),
+    }
+    checks.update(
+        {
+            field.removesuffix("_count"): report[field] == 0
+            for field in QUALITY_ERROR_COUNT_FIELDS
+        }
+    )
+    failed = [name for name, passed in checks.items() if not passed]
+    return {
+        "passed": not failed,
+        "checks": checks,
+        "failed_checks": failed,
+    }
+
+
+def select_active_gate(report, manifest, pilot_gate, scale_gate):
+    """按已扫描的 episode 数选择 pilot 或规模化门禁。"""
+    if report["num_episodes"] >= manifest["target_num_episodes"]:
+        return "scale", scale_gate["passed"]
+    return "pilot", pilot_gate["passed"]
 
 
 def evaluate_dataset(dataset_dir):
@@ -360,6 +415,13 @@ def evaluate_dataset(dataset_dir):
         "errors": errors,
     }
     report["pilot_gate"] = evaluate_pilot_gate(report, manifest)
+    report["scale_gate"] = evaluate_scale_gate(report, manifest)
+    report["active_gate"], report["passed"] = select_active_gate(
+        report,
+        manifest,
+        report["pilot_gate"],
+        report["scale_gate"],
+    )
     return report
 
 
@@ -382,9 +444,10 @@ def main():
         f"数据质量报告: {report_path}；"
         f"episode={report['num_episodes']}，"
         f"success_rate={report['success_rate']:.2%}，"
-        f"errors={len(report['errors'])}"
+        f"errors={len(report['errors'])}，"
+        f"gate={report['active_gate']}"
     )
-    if not report["pilot_gate"]["passed"]:
+    if not report["passed"]:
         sys.exit(1)
 
 

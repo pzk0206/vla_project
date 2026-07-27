@@ -11,6 +11,8 @@ import numpy as np
 from vla_project.simulation.evaluate_dataset import (
     evaluate_dataset,
     evaluate_pilot_gate,
+    evaluate_scale_gate,
+    select_active_gate,
     write_quality_report,
 )
 
@@ -36,6 +38,7 @@ class EvaluateDatasetTests(unittest.TestCase):
             "action_dim": 9,
             "random_seed": 1000,
             "pilot_num_episodes": 1,
+            "target_num_episodes": 300,
             "image_width": 224,
             "image_height": 224,
             "jsonl_name": "trajectory_expert.jsonl",
@@ -115,6 +118,9 @@ class EvaluateDatasetTests(unittest.TestCase):
         self.assertEqual(report["success_count"], 1)
         self.assertEqual(report["success_rate"], 1.0)
         self.assertTrue(report["pilot_gate"]["passed"])
+        self.assertEqual(report["active_gate"], "pilot")
+        self.assertTrue(report["passed"])
+        self.assertFalse(report["scale_gate"]["passed"])
         for field in (
             "schema_error_count",
             "action_dim_error_count",
@@ -244,6 +250,85 @@ class EvaluateDatasetTests(unittest.TestCase):
         ):
             report[field] = 0
         return report
+
+    def valid_scale_report(self):
+        report = {
+            "valid_episode_count": 300,
+            "success_rate": 0.99,
+            "block_position": {
+                "x_bin_counts": [60, 60, 60, 60, 60],
+                "y_bin_counts": [60, 60, 60, 60, 60],
+            },
+        }
+        for field in (
+            "schema_error_count",
+            "action_dim_error_count",
+            "missing_image_count",
+            "unreadable_image_count",
+            "image_size_mismatch_count",
+            "orphan_image_count",
+            "duplicate_step_key_count",
+            "seed_error_count",
+            "frame_count_mismatch_count",
+            "terminal_flag_error_count",
+        ):
+            report[field] = 0
+        return report
+
+    def test_scale_gate_accepts_clean_covered_target_dataset(self):
+        gate = evaluate_scale_gate(
+            self.valid_scale_report(),
+            {"target_num_episodes": 300},
+        )
+
+        self.assertTrue(gate["passed"])
+        self.assertEqual(gate["failed_checks"], [])
+
+    def test_scale_gate_rejects_size_rate_integrity_and_coverage_failures(self):
+        corruptions = {
+            "valid_episode_count": 299,
+            "success_rate": 0.989,
+            "schema_error_count": 1,
+            "x_bin_counts": [0, 75, 75, 75, 75],
+            "y_bin_counts": [75, 75, 75, 75, 0],
+        }
+        for field, value in corruptions.items():
+            with self.subTest(field=field):
+                report = self.valid_scale_report()
+                if field in ("x_bin_counts", "y_bin_counts"):
+                    report["block_position"][field] = value
+                else:
+                    report[field] = value
+
+                gate = evaluate_scale_gate(
+                    report,
+                    {"target_num_episodes": 300},
+                )
+
+                self.assertFalse(gate["passed"])
+                self.assertTrue(gate["failed_checks"])
+
+    def test_selects_scale_gate_only_at_target_size(self):
+        active_gate, passed = select_active_gate(
+            {"num_episodes": 300},
+            {"target_num_episodes": 300},
+            {"passed": False},
+            {"passed": True},
+        )
+
+        self.assertEqual(active_gate, "scale")
+        self.assertTrue(passed)
+
+    def test_intermediate_dataset_does_not_pass_pilot_gate(self):
+        active_gate, passed = select_active_gate(
+            {"num_episodes": 11},
+            {"target_num_episodes": 300},
+            {"passed": False},
+            {"passed": False},
+        )
+
+        self.assertEqual(active_gate, "pilot")
+        self.assertFalse(passed)
 
     def test_pilot_gate_accepts_exactly_clean_ten_episode_run(self):
         gate = evaluate_pilot_gate(
