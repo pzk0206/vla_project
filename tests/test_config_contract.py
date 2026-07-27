@@ -158,7 +158,7 @@ class ConfigContractTests(unittest.TestCase):
         )
 
     def test_expert_dataset_scaling_config_is_frozen(self):
-        """pilot 必须使用版本化目录、固定 seed 和独立复位。"""
+        """规模化采集必须安全追加，同时保持数据契约与独立复位。"""
         dataset = self.config["dataset"]
 
         self.assertEqual(
@@ -169,7 +169,8 @@ class ConfigContractTests(unittest.TestCase):
         self.assertEqual(dataset["random_seed"], 1000)
         self.assertTrue(dataset["reset_robot_each_episode"])
         self.assertEqual(dataset["home_joint_positions"], [0.0] * 7)
-        self.assertEqual(dataset["num_episodes"], 10)
+        self.assertFalse(dataset["clean_before_run"])
+        self.assertEqual(dataset["num_episodes"], 290)
         self.assertEqual(dataset["pilot_num_episodes"], 10)
         self.assertEqual(dataset["target_num_episodes"], 300)
 

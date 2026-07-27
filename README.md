@@ -153,14 +153,17 @@ vla-collect
 - `episode_summary.jsonl`：每条轨迹的摘要，便于判断成功、卡住、超步数等失败原因。
 - `ep_*_step_*.jpg`：RGB 观测图。
 
-采集后运行质量检查与严格 pilot 门禁：
+采集后运行质量检查：
 
 ```bash
 vla-evaluate-dataset
 ```
 
-报告写入同一目录的 `dataset_quality_report.json`。pilot 必须达到10条全部成功且
-schema、seed、动作维度和图片完整性错误均为0；否则命令以非零状态退出。
+报告写入同一目录的 `dataset_quality_report.json`。10条 pilot 必须全部成功且
+schema、seed、动作维度和图片完整性错误均为0；达到300条后，命令会自动切换到
+scale gate，要求有效 episode 至少300、总体成功率不低于99%、完整性错误为0，并且
+红块 X/Y 五个位置分箱均非空。顶层 `passed` 是能否进入 action tokenization 的机器
+判断字段；门禁失败时命令以非零状态退出。
 
 ## 阶段三闭环探路
 

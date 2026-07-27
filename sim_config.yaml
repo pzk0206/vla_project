@@ -48,8 +48,8 @@ dataset:
   jsonl_name: "trajectory_expert.jsonl"  # 训练标签文件，一行对应一张图片。
   summary_jsonl_name: "episode_summary.jsonl"  # 每条轨迹的诊断摘要，一行对应一个 episode。
   schema_version: "expert_v1"        # 单帧、摘要和 manifest 共用的 schema 版本。
-  clean_before_run: true             # true 只清理当前版本化子目录；想追加数据时改 false。
-  num_episodes: 10                   # 首轮固定采集10条 pilot。
+  clean_before_run: false            # 保留已验收的10条 pilot，以追加模式扩展数据集。
+  num_episodes: 290                  # 从 episode 10 追加到299，最终总计300条。
   pilot_num_episodes: 10             # pilot 质量门禁要求的 episode 数。
   target_num_episodes: 300           # pilot 通过后的正式数据规模目标。
   random_seed: 1000                  # episode seed = random_seed + episode_idx。

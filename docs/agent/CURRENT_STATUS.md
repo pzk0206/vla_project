@@ -1,15 +1,16 @@
 # 当前项目状态
 
-**最后核对日期：** 2026-07-26
+**最后核对日期：** 2026-07-27
 
 ## 当前阶段
 
 专家数据规模化的基础设施和真实 pilot 已完成。`expert_v1` 使用版本化目录、每条
 episode 独立 home pose 复位、`random_seed + episode_idx`、manifest/config snapshot
 和只读质量门禁。真实 PyBullet pilot 使用 seeds 1000–1009，得到10/10 success、
-327帧、0项完整性错误，`pilot_gate.passed=true`，未调用 VLM API。当前阶段允许以
-追加模式扩到至少300条；实现已 fast-forward 合并到 `main`（`5481e85`），功能
-worktree 与分支已清理。严格 smoke 的自主停止1/3仍作为独立能力边界，不阻塞扩展。
+327帧、0项完整性错误，`pilot_gate.passed=true`，未调用 VLM API。质量检查现已区分
+pilot gate 和 scale gate，顶层 `passed` 代表当前阶段是否通过；当前配置已切到
+`clean_before_run: false`、`num_episodes: 290`，等待运行真实追加采集。严格 smoke 的
+自主停止1/3仍作为独立能力边界，不阻塞扩展。
 
 ## 已完成且仍有效
 
@@ -65,7 +66,8 @@ worktree 与分支已清理。严格 smoke 的自主停止1/3仍作为独立能�
   `passed=true` 仍按旧语义解释。本轮修复没有调用真实 VLM。
 - `expert_v1` 已冻结9维动作、帧/摘要 schema、seed 规则和版本化目录保护；
   `vla-evaluate-dataset` 会扫描 schema、动作维度、图片、重复 step、seed、帧数和终止
-  标志，并把严格 pilot gate 写入 `dataset_quality_report.json`。
+  标志，并把 pilot/scale 两阶段门禁、`active_gate` 和顶层 `passed` 写入
+  `dataset_quality_report.json`。
 - 真实 pilot 保存在
   `outputs/dataset/expert_scaling_v1/`：10条 episode、327帧、10/10 success；
   最终距离 min/mean/median/max 为
@@ -93,22 +95,21 @@ worktree 与分支已清理。严格 smoke 的自主停止1/3仍作为独立能�
 
 ## 下一步优先级
 
-1. 保持 `expert_v1` schema 不变，将 `clean_before_run` 改为 `false` 并追加290条，
-   使有效 episode 总数达到至少300。
+1. 保持 `expert_v1` schema 不变，按当前追加配置运行290条真实采集，使有效 episode
+   总数达到至少300。
 2. 扩展后重新运行完整质量扫描，要求有效 episode 至少300、总体成功率不低于99%、
    完整性错误为0，并检查红块 X/Y 分箱覆盖。
 3. 通过规模化验收后进入 action tokenization，避免采集与动作表示同时改动。
 4. 自主 stop 3/3继续作为严格 smoke 指标；只有后续训练或评估明确依赖时，才重新开启
    grounding 稳健性改进。
 
-## 当前恢复点（2026-07-26）
+## 当前恢复点（2026-07-27）
 
 `expert_v1` 真实10条 pilot 已通过严格门禁，证据位于
-`outputs/dataset/expert_scaling_v1/`，当前配置仍是保护性
-`clean_before_run: true`、`num_episodes: 10`。下次扩展前必须显式改为追加模式并把新增
-数量设为290，不能再次以 clean 模式运行，否则会清理已经验收的 pilot。扩展后重新运行
-`vla-evaluate-dataset`，未达到至少300条、99%成功率和零完整性错误时不得进入 action
-tokenization。
+`outputs/dataset/expert_scaling_v1/`。当前配置已是
+`clean_before_run: false`、`num_episodes: 290`；下一次 `vla-collect` 会保留 pilot，
+从 episode 10 开始追加。扩展后重新运行 `vla-evaluate-dataset`，未达到至少300条有效
+episode、99%成功率、零完整性错误和 X/Y 五箱非空时不得进入 action tokenization。
 
 ## 当前任务入口
 
