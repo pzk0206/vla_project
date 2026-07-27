@@ -1177,3 +1177,59 @@ Y bin counts：[1830, 2650, 2129, 1876, 1409]
 训练效果。专家数据规模化阶段至此通过，下一阶段进入 action tokenization，并在
 episode 级别建立训练/验证划分。当前配置仍记录本次290条追加批次，不能直接重复运行
 `vla-collect`，否则会继续追加数据。
+
+## 33. Expert v1 逐帧可见性确定性重放审计（2026-07-27）
+
+本轮没有清洗或删除数据，而是对现有300条、9,894帧补充红块视觉可见性诊断。审计只读
+使用数据集内的配置快照、`random_seed + episode_idx`、相机和保存 step 重放仿真；
+只有 RGB 重放通过门禁后，才接受同帧 segmentation。每个保存帧临时把机器人 visual
+shape 设为透明，在物理状态和红块位姿不变时得到无遮挡参考像素。
+
+实现过程中两次硬门禁正确暴露了设计假设：
+
+```text
+首次失败：episode 0 的可见像素252 > episode 终止参考251
+根因：红块仍有约0.52mm位姿变化，跨帧共用一个参考分母不成立
+修复：每帧单独渲染同状态无遮挡参考
+
+第二次失败：episode 28 step 480 JPEG 非逐像素一致
+根因：与参考渲染无关的稀疏 OpenGL 重渲染舍入差异
+全量只读诊断：9,888/9,894 exact，6帧非 exact；
+最坏 MAE 0.001256、最大通道误差3、最多132/196,608个通道值变化
+修复：exact 或 MAE <= 0.002 且 max_error <= 3；分别记录 exact/tolerance
+```
+
+最终运行成功并原子发布：
+
+```text
+episode：300
+frames：9,894
+replay exact：9,888
+replay tolerance：6
+replay rejected：0
+clear：9,479（95.81%）
+partial：411（4.15%）
+severe：4（0.04%）
+至少一帧非 clear 的 episode：55/300
+至少一帧 severe 的 episode：1/300（episode 105）
+首帧：300 clear
+终止帧：245 clear、55 partial
+最长连续非 clear：episode 105，step 504–807，14个保存帧
+```
+
+episode 105 的4个 severe 帧位于 step 552–624，最低可见率为27/254=0.1063；其终止帧
+已恢复到 partial。结果证明过程遮挡此前确实未被 success 门禁排除，但严重遮挡极少且
+集中；55个成功 episode 的终止帧为 partial，说明接近红块时的遮挡是任务过程组成部分。
+因此当前不直接删除 partial/severe 成功轨迹，而是保留全部数据和标签，在 episode 级
+训练/验证划分后设计“全量 vs 可见性筛选”的训练对照。
+
+输出位于：
+
+```text
+outputs/dataset/expert_scaling_v1/visibility_audit_v1/
+├── frame_visibility.jsonl
+└── visibility_audit_summary.json
+```
+
+最终完整自动测试为207/207通过，`compileall` 和 `git diff --check` 通过。全量审计未
+调用 VLM API，也未修改原始 JPEG、轨迹或 episode 摘要。

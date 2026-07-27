@@ -947,3 +947,37 @@ VLM API 调用：0
 191/191通过，`compileall` 与 `git diff --check` 通过；合并到 `main` 后再次运行结果
 不变。当前修复只证明10条 pilot 的独立性和完整性，300条规模下的成功率与位置覆盖仍
 需在追加290条后重新验收。
+
+## BUG-010：可见性审计跨帧共用分母并要求 OpenGL 逐像素绝对一致
+
+- 状态：已修复并通过9,894帧真实审计
+- 发现日期：2026-07-27
+- 影响模块：`src/vla_project/simulation/audit_dataset_visibility.py`
+- 证据目录：`outputs/dataset/expert_scaling_v1/visibility_audit_v1/`
+
+### 现象与根因
+
+首次全量运行在 episode 0 完成后失败：多个早期保存帧可见红块为252像素，而在 episode
+终止时移除机器人得到的统一参考只有251像素。探针证明红块从首帧到终止发生约0.52mm
+位姿变化，无遮挡投影在251和252像素之间改变；错误来自跨帧共用终止分母，不是
+segmentation 损坏。
+
+改成逐帧 `saveState/restoreState` 参考后，第二次运行在 episode 28 step 480 因 JPEG
+MAE 0.000558、最大通道误差2停止。无任何参考渲染的独立重放得到完全相同差异，排除了
+状态保存是根因。全量只读 RGB 诊断显示9,894帧中9,888帧逐像素一致，6帧只有稀疏
+OpenGL 重渲染舍入差异；最坏 MAE 0.001256、最大通道误差3、最多改变
+132/196,608个通道值。
+
+### 修复与验证
+
+- 每个保存帧临时把机器人所有 visual shape 设为透明，渲染同物理状态的无遮挡
+  segmentation 后恢复原颜色，不修改或保存/恢复物理状态。
+- JPEG 重放接受 exact，或接受 `MAE <= 0.002 && max_error <= 3` 的严格诊断容差；
+  输出分别记录 `replay_exact_match_count` 和 `replay_tolerance_match_count`，不得把
+  容差匹配称为精确匹配。
+- 任一帧超过容差、可见像素大于同帧参考、参考为0或契约不一致时仍使整批失败，并且只
+  写失败证据，不发布成功标签。
+
+最终审计为9,888 exact、6 tolerance、0 rejected，全部9,894帧均满足可见像素不超过
+同帧参考。clear/partial/severe 为9,479/411/4，成功输出原子发布；完整自动测试
+207/207、`compileall` 和 `git diff --check` 均通过。
