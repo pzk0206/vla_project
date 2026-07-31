@@ -13,6 +13,9 @@ EXPECTED_SCRIPTS = {
     "vla-audit-dataset-visibility": (
         "vla_project.simulation.audit_dataset_visibility:main"
     ),
+    "vla-render-expert-dataset-view": (
+        "vla_project.simulation.render_expert_dataset_view:main"
+    ),
     "vla-evaluate-dataset": "vla_project.simulation.evaluate_dataset:main",
     "vla-probe": "vla_project.simulation.stage3_probe:main",
     "vla-evaluate-probe": "vla_project.simulation.evaluate_probe:main",

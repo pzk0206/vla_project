@@ -5,6 +5,10 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+import cv2
+import numpy as np
+import yaml
+
 from vla_project.simulation.expert_dataset_replay import ReplayFrame
 from vla_project.simulation.render_expert_dataset_view import (
     DerivationValidationError,
@@ -13,7 +17,9 @@ from vla_project.simulation.render_expert_dataset_view import (
     derive_frame_row,
     derive_manifest,
     derive_summary_row,
+    main,
     publish_staging,
+    run_generation,
     sha256_file,
     validate_dataset_paths,
     validate_episode_termination,
@@ -350,6 +356,231 @@ class PublicationSafetyTests(unittest.TestCase):
             self.assertTrue((output / "dataset_manifest.json").is_file())
             with self.assertRaises(FileExistsError):
                 publish_staging(output, output)
+
+
+class GenerationRunnerTests(unittest.TestCase):
+    def _write_source_dataset(self, repo_root):
+        source = repo_root / "outputs/dataset/expert_scaling_v1"
+        source.mkdir(parents=True)
+        config = source_config()
+        config["dataset"].update(
+            {
+                "jsonl_name": "trajectory_expert.jsonl",
+                "summary_jsonl_name": "episode_summary.jsonl",
+            }
+        )
+        manifest = {
+            "schema_version": "expert_v1",
+            "dataset_name": "expert_scaling_v1",
+            "action_dim": 9,
+            "random_seed": 1000,
+            "pilot_num_episodes": 1,
+            "target_num_episodes": 2,
+            "jsonl_name": "trajectory_expert.jsonl",
+            "summary_jsonl_name": "episode_summary.jsonl",
+            "image_width": 224,
+            "image_height": 224,
+        }
+        frames = []
+        summaries = []
+        for episode_idx in range(2):
+            episode_rows = []
+            for frame_index, step_idx in enumerate((0, 24)):
+                row = source_row()
+                row.update(
+                    {
+                        "episode_idx": episode_idx,
+                        "step_idx": step_idx,
+                        "random_seed": 1000 + episode_idx,
+                        "image_path": (
+                            "outputs/dataset/expert_scaling_v1/"
+                            f"ep_{episode_idx}_step_{step_idx}.jpg"
+                        ),
+                    }
+                )
+                if frame_index == 1:
+                    row["action"][-1] = 1
+                    row["termination_reason"] = "success"
+                image = np.zeros((224, 224, 3), dtype=np.uint8)
+                self.assertTrue(
+                    cv2.imwrite(
+                        str(source / f"ep_{episode_idx}_step_{step_idx}.jpg"),
+                        image,
+                    )
+                )
+                frames.append(row)
+                episode_rows.append(row)
+            summaries.append(
+                {
+                    "schema_version": "expert_v1",
+                    "episode_idx": episode_idx,
+                    "random_seed": 1000 + episode_idx,
+                    "num_steps": 25,
+                    "num_frames": 2,
+                    "final_distance": 0.2,
+                    "termination_reason": "success",
+                    "camera_eye": [1.0, 0.4, 1.6],
+                }
+            )
+        (source / "dataset_manifest.json").write_text(
+            json.dumps(manifest), encoding="utf-8"
+        )
+        (source / "config_snapshot.yaml").write_text(
+            yaml.safe_dump(config, sort_keys=False), encoding="utf-8"
+        )
+        (source / "trajectory_expert.jsonl").write_text(
+            "".join(json.dumps(row) + "\n" for row in frames),
+            encoding="utf-8",
+        )
+        (source / "episode_summary.jsonl").write_text(
+            "".join(json.dumps(row) + "\n" for row in summaries),
+            encoding="utf-8",
+        )
+        return source
+
+    @patch(
+        "vla_project.simulation.render_expert_dataset_view.replay_episode_frames"
+    )
+    @patch("vla_project.simulation.render_expert_dataset_view.capture_rgb")
+    def test_generates_complete_traceable_dataset(
+        self, capture_rgb_mock, replay_mock
+    ):
+        capture_rgb_mock.side_effect = lambda camera, _eye: np.zeros(
+            (camera["image_height"], camera["image_width"], 3),
+            dtype=np.uint8,
+        )
+
+        def replay_side_effect(_config, _manifest, _summary, rows, callback):
+            results = []
+            for row in rows:
+                frame = ReplayFrame(
+                    source_row=row,
+                    robot_id=7,
+                    block_id=8,
+                    source_camera_eye=list(row["camera_eye"]),
+                    target_joint_angles=list(row["action"][:7]),
+                    target_pos=list(row["target_pos"]),
+                    ee_pos=list(row["ee_pos"]),
+                    block_pos=list(row["block_pos"]),
+                    distance_to_target=row["distance_to_target"],
+                )
+                results.append(callback(frame))
+            return results
+
+        replay_mock.side_effect = replay_side_effect
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo_root = Path(temp_dir)
+            source = self._write_source_dataset(repo_root)
+            output = repo_root / "outputs/dataset/expert_topdown_v1"
+
+            report = run_generation(
+                source,
+                output,
+                repo_root=repo_root,
+                expected_episode_count=2,
+                expected_frame_count=4,
+            )
+
+            manifest = json.loads(
+                (output / "dataset_manifest.json").read_text()
+            )
+            rows = [
+                json.loads(line)
+                for line in (output / "trajectory_expert.jsonl")
+                .read_text()
+                .splitlines()
+            ]
+            images = list(output.glob("*.jpg"))
+
+        self.assertTrue(report["passed"])
+        self.assertEqual(report["num_episodes"], 2)
+        self.assertEqual(report["num_frames"], 4)
+        self.assertEqual(report["num_images"], 4)
+        self.assertEqual(
+            report["observation_action_timing"],
+            "post_single_sim_step_with_current_target",
+        )
+        self.assertEqual(manifest["schema_version"], "expert_view_v1")
+        self.assertTrue(manifest["derived_read_only"])
+        self.assertEqual(rows[0]["camera_eye"], [0.0, 0.4, 3.0])
+        self.assertEqual(rows[0]["action"], [0.1] * 7 + [1.0, 0])
+        self.assertEqual(len(images), 4)
+
+    @patch(
+        "vla_project.simulation.render_expert_dataset_view.replay_episode_frames"
+    )
+    @patch("vla_project.simulation.render_expert_dataset_view.capture_rgb")
+    def test_failure_leaves_only_structured_evidence(
+        self, capture_rgb_mock, replay_mock
+    ):
+        capture_rgb_mock.return_value = np.full(
+            (224, 224, 3), 255, dtype=np.uint8
+        )
+
+        def replay_side_effect(_config, _manifest, _summary, rows, callback):
+            row = rows[0]
+            frame = ReplayFrame(
+                source_row=row,
+                robot_id=7,
+                block_id=8,
+                source_camera_eye=list(row["camera_eye"]),
+                target_joint_angles=list(row["action"][:7]),
+                target_pos=list(row["target_pos"]),
+                ee_pos=list(row["ee_pos"]),
+                block_pos=list(row["block_pos"]),
+                distance_to_target=row["distance_to_target"],
+            )
+            return [callback(frame)]
+
+        replay_mock.side_effect = replay_side_effect
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo_root = Path(temp_dir)
+            source = self._write_source_dataset(repo_root)
+            output = repo_root / "outputs/dataset/expert_topdown_v1"
+
+            with self.assertRaises(Exception):
+                run_generation(
+                    source,
+                    output,
+                    repo_root=repo_root,
+                    expected_episode_count=2,
+                    expected_frame_count=4,
+                )
+
+            failure = json.loads(
+                output.with_name("expert_topdown_v1_failure.json").read_text()
+            )
+            staging = list(
+                output.parent.glob(".expert_topdown_v1.staging-*")
+            )
+
+        self.assertFalse(output.exists())
+        self.assertFalse(failure["passed"])
+        self.assertEqual(failure["reason"], "replay_image_mismatch")
+        self.assertEqual(staging, [])
+
+
+class GenerationCliTests(unittest.TestCase):
+    @patch("vla_project.simulation.render_expert_dataset_view.run_generation")
+    def test_main_forwards_explicit_source_and_output(self, run_mock):
+        run_mock.return_value = {
+            "num_episodes": 300,
+            "num_frames": 9894,
+            "num_images": 9894,
+        }
+
+        main(
+            [
+                "--source-dataset",
+                "outputs/dataset/source",
+                "--output-dir",
+                "outputs/dataset/topdown",
+            ]
+        )
+
+        run_mock.assert_called_once_with(
+            "outputs/dataset/source", "outputs/dataset/topdown"
+        )
 
 
 if __name__ == "__main__":

@@ -1,12 +1,26 @@
 """从冻结 expert 轨迹确定性生成固定俯视视觉派生数据集。"""
 
+import argparse
+from collections import defaultdict
 import copy
+from datetime import datetime
 import hashlib
+import json
 import math
 from pathlib import Path
 import shutil
+import tempfile
 
+import cv2
 import numpy as np
+import yaml
+
+from vla_project.simulation.control_arm import capture_rgb
+from vla_project.simulation.expert_dataset_replay import (
+    load_replay_inputs,
+    replay_episode_frames,
+    validate_replay_image,
+)
 
 
 SCHEMA_VERSION = "expert_view_v1"
@@ -16,6 +30,8 @@ DEFAULT_OUTPUT_DIR = "outputs/dataset/expert_topdown_v1"
 TOPDOWN_EYE = [0.0, 0.4, 3.0]
 VALUE_ATOL = 1e-9
 MINIMUM_FREE_BYTES = 2 * 1024**3
+EXPECTED_EPISODES = 300
+EXPECTED_FRAMES = 9894
 
 
 class DerivationValidationError(RuntimeError):
@@ -135,6 +151,286 @@ def publish_staging(staging, output_dir):
     if output_dir.exists():
         raise FileExistsError(f"派生输出目录已存在: {output_dir}")
     staging.replace(output_dir)
+
+
+def _write_json(path, payload):
+    Path(path).write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _write_jsonl(path, rows):
+    with Path(path).open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def _source_hashes(source, manifest, frames, repo_root):
+    return {
+        "source_manifest_sha256": sha256_file(
+            source / "dataset_manifest.json"
+        ),
+        "source_config_sha256": sha256_file(source / "config_snapshot.yaml"),
+        "source_trajectory_sha256": sha256_file(
+            source / manifest["jsonl_name"]
+        ),
+        "source_summary_sha256": sha256_file(
+            source / manifest["summary_jsonl_name"]
+        ),
+        "source_images_sha256": aggregate_source_images_sha256(
+            frames, source, repo_root
+        ),
+    }
+
+
+def _repo_relative(path, repo_root):
+    try:
+        return Path(path).resolve().relative_to(Path(repo_root).resolve()).as_posix()
+    except ValueError as exc:
+        raise DerivationValidationError(
+            "path_outside_repository", path=str(path)
+        ) from exc
+
+
+def _write_checked_jpeg(path, image):
+    if not cv2.imwrite(str(path), image):
+        raise DerivationValidationError(
+            "derived_jpeg_write_failed", image_path=str(path)
+        )
+    decoded = cv2.imread(str(path))
+    if decoded is None or decoded.shape[:2] != (448, 448):
+        raise DerivationValidationError(
+            "derived_jpeg_validation_failed",
+            image_path=str(path),
+            actual_shape=None if decoded is None else list(decoded.shape),
+        )
+
+
+def _write_failure_report(output_dir, exc):
+    output_dir = Path(output_dir)
+    failure_path = output_dir.with_name(f"{output_dir.name}_failure.json")
+    payload = {
+        "schema_version": "expert_view_generation_failure_v1",
+        "passed": False,
+        "reason": getattr(exc, "reason", type(exc).__name__),
+        "error": repr(exc),
+        "evidence": getattr(exc, "evidence", {}),
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    with tempfile.NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        dir=failure_path.parent,
+        prefix=f".{failure_path.name}.",
+        delete=False,
+    ) as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=2)
+        handle.write("\n")
+        temp_path = Path(handle.name)
+    temp_path.replace(failure_path)
+
+
+def run_generation(
+    source_dataset,
+    output_dir,
+    repo_root=Path.cwd(),
+    expected_episode_count=EXPECTED_EPISODES,
+    expected_frame_count=EXPECTED_FRAMES,
+):
+    """重放源轨迹、渲染俯视图并原子发布完整派生数据集。"""
+    repo_root = Path(repo_root).resolve()
+    source, output = validate_dataset_paths(
+        repo_root, source_dataset, output_dir
+    )
+    started_at = datetime.now().isoformat(timespec="seconds")
+    try:
+        manifest, source_config, frames, summaries = load_replay_inputs(source)
+        if len(frames) != expected_frame_count:
+            raise DerivationValidationError(
+                "unexpected_source_frame_count",
+                expected=expected_frame_count,
+                actual=len(frames),
+            )
+        if len(summaries) != expected_episode_count:
+            raise DerivationValidationError(
+                "unexpected_source_episode_count",
+                expected=expected_episode_count,
+                actual=len(summaries),
+            )
+        summary_ids = [row["episode_idx"] for row in summaries]
+        if len(summary_ids) != len(set(summary_ids)):
+            raise DerivationValidationError("duplicate_episode_summary")
+        frames_by_episode = defaultdict(list)
+        for row in frames:
+            frames_by_episode[row["episode_idx"]].append(row)
+        if set(frames_by_episode) != set(summary_ids):
+            raise DerivationValidationError("episode_frame_set_mismatch")
+
+        source_hashes_before = _source_hashes(
+            source, manifest, frames, repo_root
+        )
+        topdown_config, topdown_eye = build_topdown_config(
+            source_config, output
+        )
+        derived_manifest = derive_manifest(
+            manifest,
+            _repo_relative(source, repo_root),
+            source_hashes_before,
+        )
+
+        with tempfile.TemporaryDirectory(
+            dir=output.parent,
+            prefix=f".{output.name}.staging-",
+        ) as temp_dir:
+            staging = Path(temp_dir)
+            derived_frames = []
+            derived_summaries = []
+            exact_matches = 0
+            tolerance_matches = 0
+
+            for summary in sorted(
+                summaries, key=lambda row: row["episode_idx"]
+            ):
+                episode_rows = sorted(
+                    frames_by_episode[summary["episode_idx"]],
+                    key=lambda row: row["step_idx"],
+                )
+                validate_episode_termination(episode_rows, summary)
+
+                def render_frame(frame):
+                    nonlocal exact_matches, tolerance_matches
+                    source_path = _resolve_source_image(
+                        source,
+                        repo_root,
+                        frame.source_row["image_path"],
+                    )
+                    source_bgr = capture_rgb(
+                        source_config["camera"], frame.source_camera_eye
+                    )
+                    replay_check = validate_replay_image(
+                        source_path, source_bgr
+                    )
+                    if replay_check["replay_exact_match"]:
+                        exact_matches += 1
+                    else:
+                        tolerance_matches += 1
+                    validate_replay_values(frame)
+                    image_name = (
+                        f"ep_{frame.source_row['episode_idx']}_"
+                        f"step_{frame.source_row['step_idx']}.jpg"
+                    )
+                    _write_checked_jpeg(
+                        staging / image_name,
+                        capture_rgb(
+                            topdown_config["camera"], topdown_eye
+                        ),
+                    )
+                    final_path = _repo_relative(output / image_name, repo_root)
+                    row = derive_frame_row(
+                        frame.source_row, final_path, topdown_eye
+                    )
+                    derived_frames.append(row)
+                    return row
+
+                replay_episode_frames(
+                    source_config,
+                    manifest,
+                    summary,
+                    episode_rows,
+                    render_frame,
+                )
+                derived_summaries.append(
+                    derive_summary_row(summary, topdown_eye)
+                )
+
+            if len(derived_frames) != expected_frame_count:
+                raise DerivationValidationError(
+                    "derived_frame_count_mismatch",
+                    expected=expected_frame_count,
+                    actual=len(derived_frames),
+                )
+            image_count = len(list(staging.glob("*.jpg")))
+            if image_count != expected_frame_count:
+                raise DerivationValidationError(
+                    "derived_image_count_mismatch",
+                    expected=expected_frame_count,
+                    actual=image_count,
+                )
+            source_hashes_after = _source_hashes(
+                source, manifest, frames, repo_root
+            )
+            if source_hashes_after != source_hashes_before:
+                raise DerivationValidationError(
+                    "source_hash_changed",
+                    before=source_hashes_before,
+                    after=source_hashes_after,
+                )
+
+            report = {
+                "schema_version": "expert_view_generation_report_v1",
+                "passed": True,
+                "source_dataset": _repo_relative(source, repo_root),
+                "output_dir": _repo_relative(output, repo_root),
+                "started_at": started_at,
+                "completed_at": datetime.now().isoformat(timespec="seconds"),
+                "view_name": "vlm_topdown",
+                "camera_eye": topdown_eye,
+                "image_width": 448,
+                "image_height": 448,
+                "num_episodes": len(derived_summaries),
+                "num_frames": len(derived_frames),
+                "num_images": image_count,
+                "source_replay_exact_match_count": exact_matches,
+                "source_replay_tolerance_match_count": tolerance_matches,
+                "source_hashes_before": source_hashes_before,
+                "source_hashes_after": source_hashes_after,
+                "source_hashes_unchanged": True,
+                "label_equivalence_passed": True,
+                "fixed_camera_passed": True,
+                "observation_action_timing": (
+                    "post_single_sim_step_with_current_target"
+                ),
+            }
+            _write_json(staging / "dataset_manifest.json", derived_manifest)
+            (staging / "config_snapshot.yaml").write_text(
+                yaml.safe_dump(
+                    topdown_config, allow_unicode=True, sort_keys=False
+                ),
+                encoding="utf-8",
+            )
+            _write_jsonl(
+                staging / manifest["jsonl_name"], derived_frames
+            )
+            _write_jsonl(
+                staging / manifest["summary_jsonl_name"], derived_summaries
+            )
+            _write_json(staging / "view_generation_report.json", report)
+            publish_staging(staging, output)
+            return report
+    except Exception as exc:
+        _write_failure_report(output, exc)
+        raise
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        description="确定性生成 expert 固定俯视派生数据集"
+    )
+    parser.add_argument("--source-dataset", default=DEFAULT_SOURCE_DATASET)
+    parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR)
+    args = parser.parse_args(argv)
+    report = run_generation(args.source_dataset, args.output_dir)
+    print(
+        "俯视派生数据集生成完成："
+        f"episodes={report['num_episodes']}，"
+        f"frames={report['num_frames']}，"
+        f"images={report['num_images']}"
+    )
+
+
+if __name__ == "__main__":
+    main()
 
 
 def build_topdown_config(source_config, output_dir):
