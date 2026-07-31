@@ -209,5 +209,89 @@ class ActionInputTests(unittest.TestCase):
         self.assertEqual(context.exception.reason, "invalid_episode_termination")
 
 
+class ActionStatisticsTests(unittest.TestCase):
+    def test_numeric_stats_uses_population_std_and_linear_percentiles(self):
+        module = importlib.import_module(
+            "vla_project.simulation.audit_action_tokenization"
+        )
+        self.assertTrue(
+            hasattr(module, "numeric_stats"),
+            "numeric_stats 尚未实现",
+        )
+
+        result = module.numeric_stats([0.0, 1.0, 2.0, 3.0])
+
+        self.assertEqual(result["count"], 4)
+        self.assertEqual(result["mean"], 1.5)
+        self.assertAlmostEqual(result["std"], 1.11803398875)
+        self.assertAlmostEqual(result["p25"], 0.75)
+        self.assertAlmostEqual(result["p99"], 2.97)
+
+    def test_summarizes_special_dimensions_and_visibility_groups(self):
+        module = importlib.import_module(
+            "vla_project.simulation.audit_action_tokenization"
+        )
+        self.assertTrue(
+            hasattr(module, "summarize_action_analysis"),
+            "summarize_action_analysis 尚未实现",
+        )
+        manifest = {"schema_version": "expert_v1", "action_dim": 9}
+        rows = build_frame_analysis(
+            manifest,
+            [
+                action_row(0, 0, [0.0] * 7),
+                action_row(0, 24, [0.24] * 7, terminate=1),
+                action_row(1, 0, [1.0] * 7),
+                action_row(1, 12, [0.88] * 7, terminate=1),
+            ],
+            [
+                visibility_row(0, 0),
+                visibility_row(0, 24, "partial"),
+                visibility_row(1, 0),
+                visibility_row(1, 12, "severe"),
+            ],
+        )
+
+        summary = module.summarize_action_analysis(rows)
+
+        self.assertEqual(summary["num_frames"], 4)
+        self.assertEqual(summary["num_episodes"], 2)
+        self.assertEqual(summary["num_transitions"], 2)
+        self.assertTrue(summary["gripper"]["is_constant"])
+        self.assertEqual(summary["gripper"]["counts"], {"1.0": 4})
+        self.assertEqual(summary["terminate"]["counts"], {"0": 2, "1": 2})
+        self.assertEqual(summary["step_gap"]["counts"], {"12": 1, "24": 1})
+        self.assertEqual(summary["by_visibility"]["severe"]["num_frames"], 1)
+        self.assertEqual(
+            summary["by_visibility"]["severe"]["episode_count"],
+            1,
+        )
+        self.assertTrue(
+            summary["by_visibility"]["severe"][
+                "insufficient_for_generalization"
+            ]
+        )
+
+    def test_keeps_empty_visibility_groups_in_summary(self):
+        module = importlib.import_module(
+            "vla_project.simulation.audit_action_tokenization"
+        )
+        self.assertTrue(hasattr(module, "summarize_action_analysis"))
+        rows = build_frame_analysis(
+            {"schema_version": "expert_v1", "action_dim": 9},
+            [action_row(0, 0, [0.0] * 7, terminate=1)],
+            [visibility_row(0, 0, "clear")],
+        )
+
+        summary = module.summarize_action_analysis(rows)
+
+        self.assertEqual(summary["by_visibility"]["partial"]["num_frames"], 0)
+        self.assertEqual(summary["by_visibility"]["severe"]["num_frames"], 0)
+        self.assertTrue(
+            summary["by_visibility"]["severe"][
+                "insufficient_for_generalization"
+            ]
+        )
+
 if __name__ == "__main__":
     unittest.main()

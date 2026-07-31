@@ -1,10 +1,14 @@
 """只读审计 expert_v1 动作表示与候选离散化。"""
 
 import math
+from collections import Counter
+
+import numpy as np
 
 
 SCHEMA_VERSION = "action_tokenization_audit_v1"
 ALLOWED_VISIBILITY_GROUPS = {"clear", "partial", "severe"}
+PERCENTILES = (1, 5, 25, 50, 75, 95, 99)
 
 
 class AuditValidationError(ValueError):
@@ -55,6 +59,99 @@ def _validate_episode_termination(rows):
                 episode_idx=episode_idx,
                 terminate_values=terminated,
             )
+
+
+def numeric_stats(values):
+    """计算一维有限数值序列的稳定描述统计。"""
+    array = np.asarray(values, dtype=float)
+    if array.ndim != 1 or array.size == 0 or not np.isfinite(array).all():
+        raise AuditValidationError("invalid_numeric_series")
+    percentile_values = np.percentile(
+        array,
+        PERCENTILES,
+        method="linear",
+    )
+    result = {
+        "count": int(array.size),
+        "min": float(array.min()),
+        "max": float(array.max()),
+        "mean": float(array.mean()),
+        "std": float(array.std(ddof=0)),
+        "non_finite_count": 0,
+    }
+    result.update(
+        {
+            f"p{percentile:02d}": float(value)
+            for percentile, value in zip(PERCENTILES, percentile_values)
+        }
+    )
+    return result
+
+
+def _joint_statistics(rows, field):
+    vectors = [row[field] for row in rows if row[field] is not None]
+    if not vectors:
+        return []
+    return [
+        numeric_stats([vector[joint_index] for vector in vectors])
+        for joint_index in range(7)
+    ]
+
+
+def _summarize_rows(rows, visibility_group=None):
+    transition_count = sum(row["delta_q"] is not None for row in rows)
+    summary = {
+        "num_frames": len(rows),
+        "episode_count": len({row["episode_idx"] for row in rows}),
+        "num_transitions": transition_count,
+        "absolute_q": _joint_statistics(rows, "q_target"),
+        "delta_q": _joint_statistics(rows, "delta_q"),
+        "delta_q_per_step": _joint_statistics(rows, "delta_q_per_step"),
+    }
+    if visibility_group == "severe":
+        summary["insufficient_for_generalization"] = len(rows) < 20
+    return summary
+
+
+def _string_counts(values):
+    return {
+        str(value): count
+        for value, count in sorted(Counter(values).items())
+    }
+
+
+def summarize_action_analysis(rows):
+    """汇总动作、特殊维度、step gap 与可见性条件分布。"""
+    global_summary = _summarize_rows(rows)
+    gripper_values = [row["gripper"] for row in rows]
+    terminate_values = [row["terminate"] for row in rows]
+    step_gaps = [row["step_gap"] for row in rows if row["step_gap"] is not None]
+    global_summary.update(
+        {
+            "num_episodes": len({row["episode_idx"] for row in rows}),
+            "gripper": {
+                "counts": _string_counts(gripper_values),
+                "is_constant": len(set(gripper_values)) <= 1,
+            },
+            "terminate": {
+                "counts": _string_counts(terminate_values),
+                "rate": (
+                    sum(terminate_values) / len(terminate_values)
+                    if terminate_values
+                    else 0.0
+                ),
+            },
+            "step_gap": {"counts": _string_counts(step_gaps)},
+            "by_visibility": {
+                group: _summarize_rows(
+                    [row for row in rows if row["visibility_group"] == group],
+                    group,
+                )
+                for group in ("clear", "partial", "severe")
+            },
+        }
+    )
+    return global_summary
 
 
 def build_frame_analysis(manifest, trajectory_rows, visibility_rows):
