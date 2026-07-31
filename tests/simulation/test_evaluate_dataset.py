@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import cv2
 import numpy as np
@@ -12,6 +13,7 @@ from vla_project.simulation.evaluate_dataset import (
     evaluate_dataset,
     evaluate_pilot_gate,
     evaluate_scale_gate,
+    main,
     select_active_gate,
     write_quality_report,
 )
@@ -307,6 +309,51 @@ class EvaluateDatasetTests(unittest.TestCase):
 
                 self.assertFalse(gate["passed"])
                 self.assertTrue(gate["failed_checks"])
+
+
+    def report(self):
+        return {
+            "num_episodes": 1,
+            "success_rate": 1.0,
+            "errors": [],
+            "active_gate": "pilot",
+            "passed": True,
+        }
+
+    @patch("vla_project.simulation.evaluate_dataset.write_quality_report")
+    @patch("vla_project.simulation.evaluate_dataset.evaluate_dataset")
+    def test_explicit_dataset_dir_bypasses_config(
+        self, evaluate_mock, write_mock
+    ):
+        evaluate_mock.return_value = self.report()
+
+        main(["--dataset-dir", "outputs/dataset/expert_topdown_v1"])
+
+        evaluate_mock.assert_called_once_with(
+            Path("outputs/dataset/expert_topdown_v1")
+        )
+
+    @patch("vla_project.simulation.evaluate_dataset.write_quality_report")
+    @patch("vla_project.simulation.evaluate_dataset.evaluate_dataset")
+    def test_default_still_reads_dataset_dir_from_config(
+        self, evaluate_mock, write_mock
+    ):
+        evaluate_mock.return_value = self.report()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.yaml"
+            config_path.write_text(
+                "dataset:\n  output_dir: outputs/dataset/original\n",
+                encoding="utf-8",
+            )
+            with patch(
+                "vla_project.simulation.evaluate_dataset.CONFIG_PATH",
+                str(config_path),
+            ):
+                main([])
+
+        evaluate_mock.assert_called_once_with(
+            Path("outputs/dataset/original")
+        )
 
     def test_selects_scale_gate_only_at_target_size(self):
         active_gate, passed = select_active_gate(

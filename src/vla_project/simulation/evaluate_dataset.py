@@ -1,5 +1,6 @@
 """只读扫描 expert 数据集，并生成可机器判断的质量报告。"""
 
+import argparse
 import json
 import statistics
 import sys
@@ -434,10 +435,16 @@ def write_quality_report(dataset_dir, report):
     return path
 
 
-def main():
-    with Path(CONFIG_PATH).open("r", encoding="utf-8") as config_file:
-        config = yaml.safe_load(config_file)
-    dataset_dir = Path(config["dataset"]["output_dir"])
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="扫描 expert 数据集质量")
+    parser.add_argument("--dataset-dir")
+    args = parser.parse_args(argv)
+    if args.dataset_dir is None:
+        with Path(CONFIG_PATH).open("r", encoding="utf-8") as config_file:
+            config = yaml.safe_load(config_file)
+        dataset_dir = Path(config["dataset"]["output_dir"])
+    else:
+        dataset_dir = Path(args.dataset_dir)
     report = evaluate_dataset(dataset_dir)
     report_path = write_quality_report(dataset_dir, report)
     print(
