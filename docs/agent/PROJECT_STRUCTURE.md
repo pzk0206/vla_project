@@ -165,7 +165,7 @@ vla_project/
 | 文件 | 作用 | 什么时候修改 |
 | --- | --- | --- |
 | `.gitignore` | 指定不提交的缓存、生成输出和本机配置 | 新增可再生成或仅本机使用的文件类型时 |
-| `pyproject.toml` | 定义 `vla-project` 包、`src/` 布局和 15 个 `vla-*` 命令 | 增加包元数据或命令入口时 |
+| `pyproject.toml` | 定义 `vla-project` 包、`src/` 布局和 16 个 `vla-*` 命令 | 增加包元数据或命令入口时 |
 | `README.md` | 给使用者说明项目目标、安装方法、运行命令和当前阶段 | 使用方式或阶段结论变化时 |
 | `requirements.txt` | 记录 PyBullet、OpenCV、NumPy 等第三方依赖 | 正式代码新增或移除外部依赖时 |
 | `sim_config.yaml` | 保存仿真、相机、采集、probe、VLM 和输出目录参数 | 调整实验变量时，优先改这里而非写死在代码中 |
@@ -183,6 +183,8 @@ vla_project/
 | `evaluate_dataset.py` | 只读扫描专家数据完整性、生成质量报告并执行严格 pilot 门禁 |
 | `audit_dataset_visibility.py` | 确定性重放专家帧，验证 JPEG 一致性并生成红块可见率审计 |
 | `audit_action_tokenization.py` | 对齐专家动作与可见性，模拟分箱并生成动作表示审计 |
+| `expert_dataset_replay.py` | 统一加载、校验并确定性重放冻结的专家 episode |
+| `render_expert_dataset_view.py` | 保留源数据并原子生成固定相机视觉派生数据集 |
 
 ### `vlm/`：视觉语言模型评估
 
@@ -222,10 +224,13 @@ src/vla_project/tools/x.py       -> tests/tools/test_x.py
 ```
 
 - `tests/test_config_contract.py`：保护 `sim_config.yaml` 的跨模块配置约束和统一输出路径。
-- `tests/test_package_metadata.py`：保护 `src/` 包结构和 15 个控制台命令入口。
+- `tests/test_package_metadata.py`：保护 `src/` 包结构和 16 个控制台命令入口。
 - `tests/simulation/test_evaluate_dataset.py`：保护专家数据质量扫描和 pilot 门禁。
 - `tests/simulation/test_audit_dataset_visibility.py`：保护确定性重放、可见率和原子输出。
 - `tests/simulation/test_audit_action_tokenization.py`：保护动作/可见性对齐、统计、分箱推荐和原子输出。
+- `tests/simulation/test_expert_dataset_replay.py`：保护共享重放输入、episode 契约和帧次序。
+- `tests/simulation/test_render_expert_dataset_view.py`：保护派生 schema、路径安全、标签等价、
+  独立双阶段重放和原子发布。
 - `tests/vlm/grounding_smoke/`：镜像测试 targeting、runner 和 screening。
 - 新增或修复行为时，应同时新增对应领域测试；不要把测试文件放进 `src/`。
 

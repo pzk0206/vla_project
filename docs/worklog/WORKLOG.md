@@ -1291,3 +1291,46 @@ outputs/dataset/expert_scaling_v1/action_tokenization_audit_v1/
 验证 episode 会泄漏到 tokenizer。下一步先固定 episode 级训练/验证划分，再只用训练集
 重拟合32箱 absolute_q 和64箱 delta_q，并与连续回归进行最小训练/rollout 对照。当前不
 修改 `expert_v1` schema，也不因 partial/severe 标签删除成功轨迹。
+
+## 35. Expert 固定垂直俯视视觉派生与审计（2026-08-01）
+
+原斜视专家图片没有删除或覆盖。本轮以冻结的300条专家轨迹为唯一标签来源，确定性重放
+每条 episode，并额外生成相机 eye=`[0.0, 0.4, 3.0]` 的448×448垂直俯视图。新流程复用
+统一专家重放模块，逐帧验证状态、9维动作和终止标志与源数据等价，并用临时目录加原子
+重命名发布完整数据集；磁盘不足、路径重叠、重放不一致或中途异常都不会留下伪成功目录。
+
+第一次全量生成在 episode 135 step 264 遇到源 JPEG 差异：MAE 0.002770、最大通道误差4，
+超过原可见性审计门槛。独立只重放源斜视时该帧精确一致；在同一个物理循环里交替渲染
+224斜视和448俯视则稳定复现，证明不同相机/分辨率的 OpenGL 状态会污染后续源图验证。
+修复没有放宽 MAE 或最大误差，而是把源斜视验证和俯视渲染拆成两个独立重放阶段。
+
+最终派生和质量门禁结果：
+
+```text
+episode：300
+frames / JPEG：9,894 / 9,894
+image size：448×448
+source replay：9,888 exact、6 tolerance、0 rejected
+source validation passes：300
+topdown render passes：300
+状态/动作等价：true
+源文件哈希不变：true
+dataset scale gate：passed
+```
+
+派生数据位于 `outputs/dataset/expert_topdown_v1/`。随后对同一批俯视图执行可见性审计：
+
+```text
+clear：7,024（70.99%）
+partial：477（4.82%）
+severe：2,393（24.19%）
+含 severe 的 episode：300/300
+首帧：300 clear
+终止帧：300 severe
+最长连续非 clear：episode 51，step 432–778，16个保存帧
+```
+
+原斜视对照为 clear 9,479（95.81%）、partial 411（4.15%）、severe 4（0.04%）。因此
+“相机更垂直”并不等于“训练图更清楚”：机械臂靠近红块时从正上方遮住目标，恰好让动作
+最关键的终止阶段全部变成 severe。结论是两套图片都保留，派生数据在完整性意义上通过，
+但下次训练前必须先决定斜视主基线、俯视对照或双视角；本轮没有启动行为克隆训练。

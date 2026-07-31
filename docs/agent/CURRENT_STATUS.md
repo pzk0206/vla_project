@@ -1,15 +1,15 @@
 # 当前项目状态
 
-**最后核对日期：** 2026-07-31
+**最后核对日期：** 2026-08-01
 
 ## 当前阶段
 
-专家数据规模化、逐帧可见性审计和 action tokenization 只读审计均已完成。`expert_v1`
-保持300/300 success、9,894帧、0项完整性错误；动作与可见性标签9,894/9,894完整对齐，
-得到9,594个 episode 内 transition。12个离散候选的固定规则推荐32箱等频 absolute_q
-和64箱等频 delta_q，并始终保留连续回归基线。该结论只确定下一轮最小训练对照组；
-正式分箱边界必须在 episode 级训练/验证划分后只用训练集拟合。严格 smoke 的自主停止
-1/3仍作为独立能力边界，不阻塞动作表示实验。
+专家数据规模化、原斜视可见性审计、action tokenization 只读审计和固定垂直俯视视觉
+派生均已完成。`expert_topdown_v1` 保留300条 episode 和9,894帧标签，生成9,894张
+448×448图片，状态/动作逐项等价且质量门禁通过；原 `expert_scaling_v1` 未被修改。
+但俯视可见性 clear/partial/severe=7,024/477/2,393，300个终止帧全部 severe，明显差于
+原斜视的9,479/411/4。当前暂停在训练前的视觉策略决策点，下次先决定斜视主基线、俯视
+对照或双视角，再做 episode 级划分和轻量行为克隆，不能直接默认俯视单视角。
 
 ## 已完成且仍有效
 
@@ -18,7 +18,7 @@
 - 直接方向预测的能力边界已确定：448px 为 3/4，grounding 中间表示为 4/4。
 - 相机反投影几何、可见率分组和离线真值隔离已建立。
 - 冻结 XY 补偿在独立 clear 验证集上为 15/15 不超过 3cm。
-- 正式源码已迁移到 `src/vla_project/`，并通过 `pyproject.toml` 暴露 15 个命令入口。
+- 正式源码已迁移到 `src/vla_project/`，并通过 `pyproject.toml` 暴露 16 个命令入口。
 - `grounding_smoke` targeting、runner、screening 已迁入正式子包；测试不调用真实 API。
 - 旧的全轨迹 clear 筛选在 seeds 55–100 × left/right/front 的138个候选中为0个
   合格：131个 `visibility_below_threshold`、7个 `start_pose_error`；该结果继续
@@ -91,8 +91,17 @@
   16箱等频因误差5.41%被拒；delta_q 的16/32箱等频因误差6.89%/6.74%被拒。
 - 所有等宽候选至少存在尾部箱不足20帧；64箱 absolute/delta 等宽还分别存在占用率
   0.891/0.750，不满足0.90门槛，因此本轮没有推荐等宽分箱。
-- 当前完整自动测试为231/231通过；采集、质量评估、可见性和动作审计代码不调用 VLM
-  API。`compileall` 与 `git diff --check` 在最终提交前再次执行。
+- 固定垂直俯视派生集位于 `outputs/dataset/expert_topdown_v1/`：300条 episode、9,894帧、
+  9,894张448×448 JPEG，相机 eye 固定为`[0.0, 0.4, 3.0]`；状态和动作以`1e-9`容差逐项
+  验证，源文件哈希不变，`dataset_quality_report.json` 的 scale gate 通过。
+- 派生过程先独立验证原斜视重放，再在新的重放阶段渲染俯视图；这样避免不同相机和分辨率
+  交替渲染污染 OpenGL 状态。源重放为9,888 exact、6 tolerance、0 rejected，原有严格
+  MAE/max-error门槛未放宽。
+- 俯视可见性报告位于 `outputs/dataset/expert_topdown_v1/visibility_audit_v1/`：clear
+  7,024（70.99%）、partial 477（4.82%）、severe 2,393（24.19%）；300/300 episode
+  出现 severe，300个首帧 clear，300个终止帧 severe。原斜视数据仍有95.81% clear、
+  0.04% severe，因此两套图像均保留，尚未选择唯一训练视角。
+- 当前完整自动测试为253/253通过；`compileall` 和 `git diff --check` 在本轮收尾时通过。
 
 ## 未解决问题
 
@@ -110,24 +119,30 @@
 6. 离线审计已证明当前数据统计上支持32箱等频 absolute_q 和64箱等频 delta_q，但尚未
    通过真实训练或 rollout 证明哪种动作表示最好，也未形成 episode 级训练/验证划分。
    全量审计边界包含未来验证 episode，不能直接作为正式 tokenizer 资产。
+7. 垂直俯视会在机械臂接近红块时产生系统性遮挡，severe 比例为24.19%，且所有终止帧
+   severe。派生数据技术上有效，但不能据此声称它比原斜视更适合作为唯一视觉输入。
 
 ## 下一步优先级
 
-1. 冻结当前 `expert_v1` 数据集，不再运行当前290条追加配置或改动采集 schema。
-2. 固定 episode 级训练/验证划分，避免同一轨迹的相邻帧跨集合泄漏；只用训练 episode
+1. 冻结原斜视 `expert_scaling_v1` 和派生 `expert_topdown_v1`，不再运行当前290条追加
+   配置，不覆盖任何一套图片，也不改动采集 schema。
+2. 先写视觉输入实验决策：至少比较“原斜视单视角主基线”和“垂直俯视对照”；如资源允许，
+   再加入双视角融合。不要直接以俯视单视角开始正式训练。
+3. 固定 episode 级训练/验证划分，避免同一轨迹的相邻帧跨集合泄漏；只用训练 episode
    重新拟合32箱等频 absolute_q 和64箱等频 delta_q 边界。
-3. 实现连续回归、32箱等频 absolute_q 和64箱等频 delta_q 的最小训练对照；当前不因 partial
+4. 实现连续回归、32箱等频 absolute_q 和64箱等频 delta_q 的最小训练对照；当前不因 partial
    或 severe 标签直接删除成功轨迹，后续用保留全部数据与可见性筛选做对照。
-4. 自主 stop 3/3继续作为严格 smoke 指标；只有后续训练或评估明确依赖时，才重新开启
+5. 自主 stop 3/3继续作为严格 smoke 指标；只有后续训练或评估明确依赖时，才重新开启
    grounding 稳健性改进。
 
-## 当前恢复点（2026-07-31）
+## 当前恢复点（2026-08-01）
 
-`expert_v1` 真实300条已通过 scale gate、可见性审计和 action tokenization 审计。动作
-报告位于 `outputs/dataset/expert_scaling_v1/action_tokenization_audit_v1/`，恢复时先读取
-其中的 `action_tokenization_audit.json`，再从 episode 级划分和“连续回归 vs 32箱等频
-absolute_q vs 64箱等频 delta_q”实现开始。当前 `sim_config.yaml` 的
-`num_episodes: 290` 是已执行的追加批次配置，不应再次运行 `vla-collect`，否则会继续
+原斜视与固定垂直俯视两套300条专家视觉数据均已冻结，派生报告位于
+`outputs/dataset/expert_topdown_v1/view_generation_report.json`，可见性报告位于其
+`visibility_audit_v1/visibility_audit_summary.json`。恢复时先阅读这两个报告和
+`docs/superpowers/specs/2026-07-31-expert-topdown-view-dataset-design.md`，从“斜视主基线、
+俯视对照或双视角”的视觉输入决策开始；尚未启动行为克隆训练。当前 `sim_config.yaml`
+的 `num_episodes: 290` 是已执行的追加批次配置，不应再次运行 `vla-collect`，否则会继续
 追加到590条。
 
 ## 当前任务入口
@@ -149,6 +164,10 @@ absolute_q vs 64箱等频 delta_q”实现开始。当前 `sim_config.yaml` 的
 - 专家数据质量检查：[evaluate_dataset.py](../../src/vla_project/simulation/evaluate_dataset.py)
 - 专家数据可见性审计：[audit_dataset_visibility.py](../../src/vla_project/simulation/audit_dataset_visibility.py)
 - 动作表示审计：[audit_action_tokenization.py](../../src/vla_project/simulation/audit_action_tokenization.py)
+- 共享专家重放：[expert_dataset_replay.py](../../src/vla_project/simulation/expert_dataset_replay.py)
+- 固定视角派生：[render_expert_dataset_view.py](../../src/vla_project/simulation/render_expert_dataset_view.py)
+- 俯视派生设计：[2026-07-31-expert-topdown-view-dataset-design.md](../superpowers/specs/2026-07-31-expert-topdown-view-dataset-design.md)
+- 俯视派生计划：[2026-07-31-expert-topdown-view-dataset.md](../superpowers/plans/2026-07-31-expert-topdown-view-dataset.md)
 - 动作审计设计：[2026-07-31-action-tokenization-audit-design.md](../superpowers/specs/2026-07-31-action-tokenization-audit-design.md)
 - 动作审计计划：[2026-07-31-action-tokenization-audit.md](../superpowers/plans/2026-07-31-action-tokenization-audit.md)
 - 可见性审计设计：[2026-07-27-expert-dataset-visibility-audit-design.md](../superpowers/specs/2026-07-27-expert-dataset-visibility-audit-design.md)

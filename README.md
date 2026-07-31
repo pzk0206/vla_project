@@ -12,10 +12,15 @@
 
 ## 当前阶段
 
-当前主线已经完成 `expert_v1` 的300条规模化采集、质量门禁、逐帧可见性重放审计和
-action tokenization 只读审计。真实数据为300/300 success、9,894帧、0项完整性错误；
-动作审计得到9,594个相邻保存帧 transition，并推荐下一轮比较连续回归、32箱等频绝对
-关节目标和64箱等频 `Δq`。这些推荐只表示当前数据统计上可支持，不代表训练或闭环最优。
+当前主线已经完成 `expert_v1` 的300条规模化采集、质量门禁、逐帧可见性重放审计、
+action tokenization 只读审计，以及同一批轨迹的固定垂直俯视视觉派生。派生数据位于
+`outputs/dataset/expert_topdown_v1/`，包含300条 episode、9,894张448×448图片，状态、
+动作和终止标签与原数据逐项一致，质量门禁通过，原斜视图片保持不变。
+
+真实可见性审计同时给出了重要限制：原斜视图 clear/partial/severe 为
+95.81%/4.15%/0.04%，垂直俯视图则为70.99%/4.82%/24.19%，且300个终止帧全部 severe。
+因此下次不会直接把俯视图当作唯一训练视角，而是先确定“斜视主基线、俯视对照或双视角”
+的实验方案，再继续 episode 级划分和轻量行为克隆训练。
 
 在线侧 Stage 3 heuristic 在50个固定随机种子下稳定运行；固定 grounding smoke 案例
 任务到达3/3，但自主停止仍为1/3。该能力边界与动作表示实验保持分离，当前不阻塞进入
@@ -37,6 +42,8 @@ episode 级训练/验证划分和轻量 tokenizer 实现。
 - 最近可靠目标保持：第1至第4个 held 步骤不调用 VLM，第5次仍不可见则安全停止。
 - 只读 action tokenization 审计：联合7维关节目标、夹爪、终止标志和逐帧可见性，
   比较12个离散候选并保存透明推荐理由。
+- 固定轨迹多视角派生：确定性重放原专家轨迹，保留原斜视数据并生成448×448垂直俯视
+  数据；源图验证和目标视角渲染采用独立重放阶段，避免跨相机 OpenGL 状态污染。
 
 五位置 grounding 评估使用 seeds 42–46、固定正俯视相机、448px 和 20cm 相对距离，共 20 张。20/20 返回合法框；整体 XY 误差 mean/median/max 为 `3.94/3.77/10.06cm`。其中 15 张清晰样本为 `3.34/3.45/4.00cm`，3 张严重遮挡样本平均 `6.92cm`。清晰样本全部表现为 X 负偏、Y 正偏，平均有符号偏差约 `(-2.49cm, +1.95cm)`；因此后续使用独立校准集和验证集测试固定补偿，没有直接把同集均值写进控制器。
 
@@ -127,6 +134,7 @@ pip install -e .
 | `vla-audit-action-tokenization` | 审计动作分布、候选分箱和最小训练对照组 |
 | `vla-audit-dataset-visibility` | 确定性重放专家数据并审计红块逐帧可见率 |
 | `vla-evaluate-dataset` | 扫描专家数据并生成 `dataset_quality_report.json` |
+| `vla-render-expert-dataset-view` | 从冻结轨迹生成固定垂直俯视视觉派生集 |
 | `vla-probe` | 运行 Stage 3 单次闭环 |
 | `vla-evaluate-probe` | 批量评估 heuristic 闭环 |
 | `vla-collect-vlm-samples` | 生成固定 VLM 离线评估样本 |
@@ -176,6 +184,17 @@ scale gate，要求有效 episode 至少300、总体成功率不低于99%、完�
 
 当前 `expert_v1` 已达到300条并通过 scale gate；不要直接重复运行配置中的290条追加
 批次，否则会继续增加数据。
+
+保留原斜视图片并生成固定垂直俯视派生集：
+
+```bash
+vla-render-expert-dataset-view
+vla-evaluate-dataset --dataset-dir outputs/dataset/expert_topdown_v1
+```
+
+命令会验证源轨迹、状态和动作，使用独立重放阶段渲染9,894张448×448俯视图，并原子
+发布到 `outputs/dataset/expert_topdown_v1/`。当前派生集质量门禁通过，但可见性审计的
+severe 比例为24.19%，所以它是保留的实验对照，不是已经确定的唯一训练输入。
 
 在动作表示审计链中先运行只读视觉可见性审计：
 
