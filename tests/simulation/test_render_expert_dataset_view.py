@@ -1,15 +1,21 @@
 import copy
+import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from vla_project.simulation.expert_dataset_replay import ReplayFrame
 from vla_project.simulation.render_expert_dataset_view import (
     DerivationValidationError,
+    aggregate_source_images_sha256,
     build_topdown_config,
     derive_frame_row,
     derive_manifest,
     derive_summary_row,
+    publish_staging,
+    sha256_file,
+    validate_dataset_paths,
     validate_episode_termination,
     validate_replay_values,
 )
@@ -220,6 +226,130 @@ class DerivedRowTests(unittest.TestCase):
         )
         self.assertTrue(derived_manifest["derived_read_only"])
         self.assertEqual(derived_manifest["image_width"], 448)
+
+
+class DatasetPathTests(unittest.TestCase):
+    def test_accepts_new_sibling_below_outputs_dataset(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo_root = Path(temp_dir)
+            source = repo_root / "outputs/dataset/expert_scaling_v1"
+            source.mkdir(parents=True)
+            output = repo_root / "outputs/dataset/expert_topdown_v1"
+
+            resolved_source, resolved_output = validate_dataset_paths(
+                repo_root, source, output
+            )
+
+        self.assertEqual(resolved_source, source.resolve())
+        self.assertEqual(resolved_output, output.resolve())
+
+    def test_rejects_source_output_overlap_and_escape(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo_root = Path(temp_dir)
+            source = repo_root / "outputs/dataset/expert_scaling_v1"
+            source.mkdir(parents=True)
+            unsafe = (
+                source,
+                source / "topdown",
+                repo_root / "outside/expert_topdown_v1",
+            )
+            for output in unsafe:
+                with self.subTest(output=output):
+                    with self.assertRaises(DerivationValidationError):
+                        validate_dataset_paths(repo_root, source, output)
+
+    def test_rejects_output_parent_symlinked_back_into_source(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo_root = Path(temp_dir)
+            source = repo_root / "outputs/dataset/expert_scaling_v1"
+            source.mkdir(parents=True)
+            alias = repo_root / "outputs/dataset/alias"
+            alias.symlink_to(source, target_is_directory=True)
+
+            with self.assertRaises(DerivationValidationError) as caught:
+                validate_dataset_paths(repo_root, source, alias / "topdown")
+
+        self.assertEqual(caught.exception.reason, "dataset_path_overlap")
+
+    @patch("vla_project.simulation.render_expert_dataset_view.shutil.disk_usage")
+    def test_rejects_less_than_two_gibibytes_free(self, disk_usage):
+        disk_usage.return_value = (10, 9, 2 * 1024**3 - 1)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo_root = Path(temp_dir)
+            source = repo_root / "outputs/dataset/expert_scaling_v1"
+            source.mkdir(parents=True)
+            output = repo_root / "outputs/dataset/expert_topdown_v1"
+
+            with self.assertRaises(DerivationValidationError) as caught:
+                validate_dataset_paths(repo_root, source, output)
+
+        self.assertEqual(caught.exception.reason, "insufficient_disk_space")
+
+
+class SourceHashTests(unittest.TestCase):
+    def test_image_digest_is_order_independent_but_content_sensitive(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo_root = Path(temp_dir)
+            source = repo_root / "outputs/dataset/expert_scaling_v1"
+            source.mkdir(parents=True)
+            first = source / "ep_0_step_0.jpg"
+            second = source / "ep_0_step_24.jpg"
+            first.write_bytes(b"first")
+            second.write_bytes(b"second")
+            rows = [
+                {
+                    "episode_idx": 0,
+                    "step_idx": 0,
+                    "image_path": str(first.relative_to(repo_root)),
+                },
+                {
+                    "episode_idx": 0,
+                    "step_idx": 24,
+                    "image_path": str(second.relative_to(repo_root)),
+                },
+            ]
+
+            original = aggregate_source_images_sha256(
+                list(reversed(rows)), source, repo_root
+            )
+            self.assertEqual(
+                original,
+                aggregate_source_images_sha256(rows, source, repo_root),
+            )
+            first.write_bytes(b"changed")
+            changed = aggregate_source_images_sha256(
+                rows, source, repo_root
+            )
+
+        self.assertNotEqual(original, changed)
+
+    def test_file_digest_matches_known_sha256(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "value.json"
+            path.write_bytes(b"abc")
+            self.assertEqual(
+                sha256_file(path),
+                "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+            )
+
+
+class PublicationSafetyTests(unittest.TestCase):
+    def test_publish_renames_complete_staging_without_overwrite(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            parent = Path(temp_dir)
+            staging = parent / ".expert_topdown_v1.staging-test"
+            output = parent / "expert_topdown_v1"
+            staging.mkdir()
+            (staging / "dataset_manifest.json").write_text(
+                json.dumps({"passed": True}), encoding="utf-8"
+            )
+
+            publish_staging(staging, output)
+
+            self.assertFalse(staging.exists())
+            self.assertTrue((output / "dataset_manifest.json").is_file())
+            with self.assertRaises(FileExistsError):
+                publish_staging(output, output)
 
 
 if __name__ == "__main__":

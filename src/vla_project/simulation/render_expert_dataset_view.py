@@ -1,8 +1,10 @@
 """从冻结 expert 轨迹确定性生成固定俯视视觉派生数据集。"""
 
 import copy
+import hashlib
 import math
 from pathlib import Path
+import shutil
 
 import numpy as np
 
@@ -13,6 +15,7 @@ DEFAULT_SOURCE_DATASET = "outputs/dataset/expert_scaling_v1"
 DEFAULT_OUTPUT_DIR = "outputs/dataset/expert_topdown_v1"
 TOPDOWN_EYE = [0.0, 0.4, 3.0]
 VALUE_ATOL = 1e-9
+MINIMUM_FREE_BYTES = 2 * 1024**3
 
 
 class DerivationValidationError(RuntimeError):
@@ -22,6 +25,116 @@ class DerivationValidationError(RuntimeError):
         super().__init__(reason)
         self.reason = reason
         self.evidence = evidence
+
+
+def _is_within(path, parent):
+    try:
+        path.relative_to(parent)
+    except ValueError:
+        return False
+    return True
+
+
+def validate_dataset_paths(repo_root, source_dataset, output_dir):
+    """解析并隔离源、输出和允许的数据集根目录。"""
+    repo_root = Path(repo_root).resolve()
+    data_root = (repo_root / "outputs/dataset").resolve()
+    source = Path(source_dataset).resolve()
+    output = Path(output_dir).resolve(strict=False)
+    if not source.is_dir():
+        raise DerivationValidationError(
+            "source_dataset_missing", source_dataset=str(source)
+        )
+    if not _is_within(output, data_root):
+        raise DerivationValidationError(
+            "output_outside_dataset_root", output_dir=str(output)
+        )
+    if source == output or _is_within(output, source) or _is_within(
+        source, output
+    ):
+        raise DerivationValidationError(
+            "dataset_path_overlap",
+            source_dataset=str(source),
+            output_dir=str(output),
+        )
+    if output.exists():
+        raise FileExistsError(f"派生输出目录已存在: {output}")
+    stale = sorted(
+        output.parent.glob(f".{output.name}.staging-*")
+    )
+    if stale:
+        raise DerivationValidationError(
+            "stale_staging_exists",
+            paths=[str(path) for path in stale],
+        )
+    free_bytes = shutil.disk_usage(output.parent)[2]
+    if free_bytes < MINIMUM_FREE_BYTES:
+        raise DerivationValidationError(
+            "insufficient_disk_space",
+            required_bytes=MINIMUM_FREE_BYTES,
+            free_bytes=free_bytes,
+        )
+    return source, output
+
+
+def sha256_file(path):
+    """流式计算单文件 SHA-256。"""
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _resolve_source_image(source_dataset, repo_root, raw_path):
+    raw = Path(raw_path)
+    candidates = [raw] if raw.is_absolute() else [repo_root / raw, source_dataset / raw]
+    image_path = next((path for path in candidates if path.is_file()), candidates[0])
+    resolved = image_path.resolve()
+    if not resolved.is_file():
+        raise DerivationValidationError(
+            "source_image_missing", image_path=str(resolved)
+        )
+    if not _is_within(resolved, source_dataset):
+        raise DerivationValidationError(
+            "source_image_path_escape", image_path=str(resolved)
+        )
+    return resolved
+
+
+def aggregate_source_images_sha256(frame_rows, source_dataset, repo_root):
+    """对排序后的图片路径和内容计算无歧义聚合摘要。"""
+    source_dataset = Path(source_dataset).resolve()
+    repo_root = Path(repo_root).resolve()
+    ordered = sorted(
+        frame_rows, key=lambda row: (row["episode_idx"], row["step_idx"])
+    )
+    keys = [(row["episode_idx"], row["step_idx"]) for row in ordered]
+    if len(keys) != len(set(keys)):
+        raise DerivationValidationError("duplicate_frame_key")
+    digest = hashlib.sha256()
+    for row in ordered:
+        image_path = _resolve_source_image(
+            source_dataset, repo_root, row["image_path"]
+        )
+        relative = image_path.relative_to(source_dataset).as_posix().encode(
+            "utf-8"
+        )
+        digest.update(len(relative).to_bytes(8, "big"))
+        digest.update(relative)
+        with image_path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    return digest.hexdigest()
+
+
+def publish_staging(staging, output_dir):
+    """只把完整 staging 一次性改名为最终数据集目录。"""
+    staging = Path(staging)
+    output_dir = Path(output_dir)
+    if output_dir.exists():
+        raise FileExistsError(f"派生输出目录已存在: {output_dir}")
+    staging.replace(output_dir)
 
 
 def build_topdown_config(source_config, output_dir):
