@@ -9,6 +9,11 @@ import numpy as np
 SCHEMA_VERSION = "action_tokenization_audit_v1"
 ALLOWED_VISIBILITY_GROUPS = {"clear", "partial", "severe"}
 PERCENTILES = (1, 5, 25, 50, 75, 95, 99)
+RECOMMENDATION_THRESHOLDS = {
+    "minimum_nonempty_bin_occupancy": 0.90,
+    "minimum_nonempty_bin_count": 20,
+    "maximum_normalized_p95_reconstruction_error": 0.05,
+}
 
 
 class AuditValidationError(ValueError):
@@ -152,6 +157,237 @@ def summarize_action_analysis(rows):
         }
     )
     return global_summary
+
+
+def evaluate_binning(values, method, num_bins):
+    """模拟一维分箱、重建并返回数据支持度与误差。"""
+    array = np.asarray(values, dtype=float)
+    if array.ndim != 1 or array.size == 0 or not np.isfinite(array).all():
+        raise AuditValidationError("invalid_binning_series")
+    if method not in {"uniform_width", "quantile"}:
+        raise ValueError(f"未知分箱方法: {method}")
+    if not isinstance(num_bins, int) or num_bins <= 1:
+        raise ValueError("num_bins 必须是大于1的整数")
+
+    if float(array.min()) == float(array.max()):
+        edges = np.asarray([float(array.min()), float(array.max())])
+        assignments = np.zeros(array.size, dtype=int)
+        reconstruction_array = np.asarray([float(array.min())])
+        reported_reconstruction_values = [float(array.min())]
+    else:
+        if method == "uniform_width":
+            edges = np.linspace(array.min(), array.max(), num_bins + 1)
+        else:
+            edges = np.unique(
+                np.quantile(
+                    array,
+                    np.linspace(0.0, 1.0, num_bins + 1),
+                    method="linear",
+                )
+            )
+        assignments = np.searchsorted(
+            edges[1:-1],
+            array,
+            side="right",
+        )
+        interval_count = len(edges) - 1
+        counts = np.bincount(assignments, minlength=interval_count)
+        if method == "uniform_width":
+            reconstruction_array = (edges[:-1] + edges[1:]) / 2.0
+            reported_reconstruction_values = [
+                float(value) for value in reconstruction_array
+            ]
+        else:
+            reconstruction_array = np.asarray(
+                [
+                    (
+                        np.median(array[assignments == index])
+                        if counts[index] > 0
+                        else (edges[index] + edges[index + 1]) / 2.0
+                    )
+                    for index in range(interval_count)
+                ],
+                dtype=float,
+            )
+            reported_reconstruction_values = [
+                (
+                    float(reconstruction_array[index])
+                    if counts[index] > 0
+                    else None
+                )
+                for index in range(interval_count)
+            ]
+
+    effective_num_bins = len(reconstruction_array)
+    counts = np.bincount(assignments, minlength=effective_num_bins)
+    nonempty_counts = counts[counts > 0]
+    reconstructed = reconstruction_array[assignments]
+    errors = np.abs(array - reconstructed)
+    probabilities = nonempty_counts / array.size
+    normalized_entropy = float(
+        -np.sum(probabilities * np.log(probabilities)) / np.log(num_bins)
+    )
+    p01, p99 = np.percentile(array, [1, 99], method="linear")
+    robust_range = float(p99 - p01)
+    mae = float(errors.mean())
+    p95_error = float(np.percentile(errors, 95, method="linear"))
+    return {
+        "method": method,
+        "requested_num_bins": num_bins,
+        "effective_num_bins": effective_num_bins,
+        "edges": [float(value) for value in edges],
+        "reconstruction_values": reported_reconstruction_values,
+        "counts": [int(value) for value in counts],
+        "nonempty_bin_occupancy": float(len(nonempty_counts) / num_bins),
+        "minimum_nonempty_bin_count": int(nonempty_counts.min()),
+        "maximum_class_fraction": float(nonempty_counts.max() / array.size),
+        "normalized_entropy": normalized_entropy,
+        "mae": mae,
+        "p95_absolute_error": p95_error,
+        "max_absolute_error": float(errors.max()),
+        "robust_range_p99_p01": robust_range,
+        "normalized_mae": None if robust_range == 0.0 else mae / robust_range,
+        "normalized_p95_reconstruction_error": (
+            None if robust_range == 0.0 else p95_error / robust_range
+        ),
+        "eligible_metrics": robust_range > 0.0,
+        "metric_failure_reason": (
+            "zero_robust_range" if robust_range == 0.0 else None
+        ),
+    }
+
+
+def _candidate_worst_joint_metrics(per_joint):
+    normalized_errors = [
+        result["normalized_p95_reconstruction_error"]
+        for result in per_joint
+        if result["normalized_p95_reconstruction_error"] is not None
+    ]
+    return {
+        "nonempty_bin_occupancy": min(
+            result["nonempty_bin_occupancy"] for result in per_joint
+        ),
+        "minimum_nonempty_bin_count": min(
+            result["minimum_nonempty_bin_count"] for result in per_joint
+        ),
+        "normalized_p95_reconstruction_error": (
+            max(normalized_errors) if normalized_errors else None
+        ),
+        "zero_robust_range": any(
+            not result["eligible_metrics"] for result in per_joint
+        ),
+    }
+
+
+def evaluate_candidates(rows):
+    """评估固定的12个绝对目标与目标差分候选。"""
+    sources = {
+        "absolute_q": [row["q_target"] for row in rows],
+        "delta_q": [
+            row["delta_q"] for row in rows if row["delta_q"] is not None
+        ],
+    }
+    candidates = []
+    for representation, vectors in sources.items():
+        if not vectors:
+            raise AuditValidationError(
+                "missing_representation_samples",
+                representation=representation,
+            )
+        for method in ("uniform_width", "quantile"):
+            for num_bins in (16, 32, 64):
+                per_joint = [
+                    evaluate_binning(
+                        [vector[joint_index] for vector in vectors],
+                        method,
+                        num_bins,
+                    )
+                    for joint_index in range(7)
+                ]
+                candidates.append(
+                    {
+                        "representation": representation,
+                        "binning": method,
+                        "num_bins": num_bins,
+                        "per_joint": per_joint,
+                        "worst_joint_metrics": (
+                            _candidate_worst_joint_metrics(per_joint)
+                        ),
+                    }
+                )
+    return candidates
+
+
+def _candidate_rejection_reasons(candidate, thresholds):
+    metrics = candidate["worst_joint_metrics"]
+    reasons = []
+    if metrics.get("zero_robust_range"):
+        reasons.append("zero_robust_range")
+    if (
+        metrics["nonempty_bin_occupancy"]
+        < thresholds["minimum_nonempty_bin_occupancy"]
+    ):
+        reasons.append("occupancy_below_threshold")
+    if (
+        metrics["minimum_nonempty_bin_count"]
+        < thresholds["minimum_nonempty_bin_count"]
+    ):
+        reasons.append("minimum_count_below_threshold")
+    normalized_error = metrics["normalized_p95_reconstruction_error"]
+    if (
+        normalized_error is not None
+        and normalized_error
+        > thresholds["maximum_normalized_p95_reconstruction_error"]
+    ):
+        reasons.append("normalized_p95_above_threshold")
+    return reasons
+
+
+def _candidate_sort_key(candidate):
+    metrics = candidate["worst_joint_metrics"]
+    normalized_error = metrics["normalized_p95_reconstruction_error"]
+    return (
+        candidate["num_bins"],
+        float("inf") if normalized_error is None else normalized_error,
+        -metrics["minimum_nonempty_bin_count"],
+        0 if candidate["binning"] == "uniform_width" else 1,
+    )
+
+
+def select_recommendations(candidates, thresholds=None):
+    """按透明门槛为两类离散表示选择最小合格候选。"""
+    thresholds = dict(thresholds or RECOMMENDATION_THRESHOLDS)
+    result = {
+        "rule_version": "action_tokenization_recommendation_v1",
+        "thresholds": thresholds,
+        "continuous_regression": {
+            "included": True,
+            "reason": "unquantized_baseline",
+        },
+    }
+    for representation in ("absolute_q", "delta_q"):
+        ranked = []
+        for source in candidates:
+            if source["representation"] != representation:
+                continue
+            candidate = dict(source)
+            candidate["rejection_reasons"] = _candidate_rejection_reasons(
+                candidate,
+                thresholds,
+            )
+            candidate["eligible"] = not candidate["rejection_reasons"]
+            ranked.append(candidate)
+        ranked.sort(key=_candidate_sort_key)
+        selected = next(
+            (candidate for candidate in ranked if candidate["eligible"]),
+            None,
+        )
+        result[representation] = {
+            "status": "selected" if selected else "no_eligible_candidate",
+            "candidate": selected,
+            "ranked_candidates": ranked,
+        }
+    return result
 
 
 def build_frame_analysis(manifest, trajectory_rows, visibility_rows):
