@@ -1233,3 +1233,61 @@ outputs/dataset/expert_scaling_v1/visibility_audit_v1/
 
 最终完整自动测试为207/207通过，`compileall` 和 `git diff --check` 通过。全量审计未
 调用 VLM API，也未修改原始 JPEG、轨迹或 episode 摘要。
+
+## 34. Expert v1 Action Tokenization 只读审计（2026-07-31）
+
+本轮没有直接生成 token，而是先回答“当前9,894帧数据统计上能支撑哪些动作表示”。
+新命令把 `trajectory_expert.jsonl` 与逐帧可见性标签按 `(episode_idx, step_idx)` 严格
+一一对齐，验证9维有限动作、step 单调性和每条 episode 唯一终止帧，再计算7维绝对 IK
+目标、相邻保存目标差 `delta_q`、单位 step 差分、夹爪、终止和可见性条件分布。
+
+真实输入门禁结果：
+
+```text
+episode：300
+frames：9,894
+episode 内 transitions：9,594
+夹爪：1.0 = 9,894/9,894
+terminate：300/9,894（3.03%）
+visibility frames：clear/partial/severe = 9,479/411/4
+visibility transitions：clear/partial/severe = 9,179/411/4
+常规 step_gap=24：9,304/9,594
+```
+
+manifest、trajectory 和 visibility 输入的 SHA-256 在审计前后分别保持：
+
+```text
+ad1be1c48e92bbe19ba3865e71e89471b652b7e91f7cdb9d08f1e579b117dfba
+213cd296111ce5c6ef578caecb5616a33d3a52f9bd3ac02ce0f39cbc12c19afd
+48d0e5339dae92ea14b6ac9b8b2dcbc56c5ace32e66453d607ed0bb14a970359
+```
+
+固定候选为 `absolute_q|delta_q × uniform_width|quantile × 16|32|64`。资格门槛要求
+所有7个关节的非空箱占用率至少0.90、最小非空箱至少20帧、以 `p99-p01` 归一化的 p95
+重建误差不超过5%。真实推荐为：
+
+```text
+连续回归：始终保留的无量化基线
+absolute_q：32箱 quantile
+  worst occupancy=1.0，minimum count=309，normalized p95 error=2.71%
+delta_q：64箱 quantile
+  worst occupancy=1.0，minimum count=149，normalized p95 error=1.97%
+```
+
+拒绝证据同样重要：absolute_q 16箱 quantile 的最坏误差为5.41%；delta_q 16/32箱
+quantile 为6.89%/6.74%。所有 uniform_width 候选至少有尾部箱少于20帧；64箱
+absolute/delta 的占用率还分别只有0.891/0.750。这说明当前动作分布存在长尾，单纯按
+观测 min/max 等宽切分会把 token 预算浪费在极少出现的区域。
+
+输出位于：
+
+```text
+outputs/dataset/expert_scaling_v1/action_tokenization_audit_v1/
+├── frame_action_analysis.jsonl
+└── action_tokenization_audit.json
+```
+
+报告中的 quantile 边界用全量数据拟合，只用于可行性审计，不能直接进入正式训练，否则
+验证 episode 会泄漏到 tokenizer。下一步先固定 episode 级训练/验证划分，再只用训练集
+重拟合32箱 absolute_q 和64箱 delta_q，并与连续回归进行最小训练/rollout 对照。当前不
+修改 `expert_v1` schema，也不因 partial/severe 标签删除成功轨迹。

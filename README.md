@@ -12,9 +12,14 @@
 
 ## 当前阶段
 
-当前主线是：Baseline 1 数据基线可用，Stage 3 heuristic 闭环稳定性验收已经通过，VLM 直接方向基线、目标坐标反投影、清晰样本独立校准验证和短时目标保持状态机已经完成离线验证。
+当前主线已经完成 `expert_v1` 的300条规模化采集、质量门禁、逐帧可见性重放审计和
+action tokenization 只读审计。真实数据为300/300 success、9,894帧、0项完整性错误；
+动作审计得到9,594个相邻保存帧 transition，并推荐下一轮比较连续回归、32箱等频绝对
+关节目标和64箱等频 `Δq`。这些推荐只表示当前数据统计上可支持，不代表训练或闭环最优。
 
-也就是说，离线专家采集已经能生成可诊断的悬停数据；在线 heuristic 闭环已在 50 个固定随机种子下稳定运行。Qwen 的 448px 四方向框可以支持方向级 `4/4` 判断；冻结 seeds 42–46 清晰样本拟合出的固定 XY 补偿后，未参与拟合的 seeds 47–51 清晰样本已全部低于 3cm。遮挡时可最多4步复用最近可靠 VLM 世界目标，并依据当前末端位置重新计算动作；该机制目前只有 mock/契约证据，尚无真实 API 闭环结果。
+在线侧 Stage 3 heuristic 在50个固定随机种子下稳定运行；固定 grounding smoke 案例
+任务到达3/3，但自主停止仍为1/3。该能力边界与动作表示实验保持分离，当前不阻塞进入
+episode 级训练/验证划分和轻量 tokenizer 实现。
 
 已经具备：
 
@@ -30,6 +35,8 @@
 - PyBullet segmentation 可见率诊断，可把清晰、部分遮挡和严重遮挡样本分开统计。
 - 校准集/验证集严格隔离的固定 XY 偏差验证，验证阶段不会重新拟合补偿。
 - 最近可靠目标保持：第1至第4个 held 步骤不调用 VLM，第5次仍不可见则安全停止。
+- 只读 action tokenization 审计：联合7维关节目标、夹爪、终止标志和逐帧可见性，
+  比较12个离散候选并保存透明推荐理由。
 
 五位置 grounding 评估使用 seeds 42–46、固定正俯视相机、448px 和 20cm 相对距离，共 20 张。20/20 返回合法框；整体 XY 误差 mean/median/max 为 `3.94/3.77/10.06cm`。其中 15 张清晰样本为 `3.34/3.45/4.00cm`，3 张严重遮挡样本平均 `6.92cm`。清晰样本全部表现为 X 负偏、Y 正偏，平均有符号偏差约 `(-2.49cm, +1.95cm)`；因此后续使用独立校准集和验证集测试固定补偿，没有直接把同集均值写进控制器。
 
@@ -117,6 +124,7 @@ pip install -e .
 | 命令 | 用途 |
 | --- | --- |
 | `vla-collect` | 采集版本化专家训练数据 |
+| `vla-audit-action-tokenization` | 审计动作分布、候选分箱和最小训练对照组 |
 | `vla-audit-dataset-visibility` | 确定性重放专家数据并审计红块逐帧可见率 |
 | `vla-evaluate-dataset` | 扫描专家数据并生成 `dataset_quality_report.json` |
 | `vla-probe` | 运行 Stage 3 单次闭环 |
@@ -169,7 +177,7 @@ scale gate，要求有效 episode 至少300、总体成功率不低于99%、完�
 当前 `expert_v1` 已达到300条并通过 scale gate；不要直接重复运行配置中的290条追加
 批次，否则会继续增加数据。
 
-在 action tokenization 前运行只读视觉可见性审计：
+在动作表示审计链中先运行只读视觉可见性审计：
 
 ```bash
 vla-audit-dataset-visibility
@@ -180,6 +188,22 @@ vla-audit-dataset-visibility
 segmentation 标签。成功结果写入
 `outputs/dataset/expert_scaling_v1/visibility_audit_v1/`；任一重放不一致时只写
 `visibility_audit_failure.json`，不会修改原始图片或 JSONL。
+
+可见性审计通过后运行动作表示只读审计：
+
+```bash
+vla-audit-action-tokenization
+```
+
+命令把 `trajectory_expert.jsonl` 与 `visibility_audit_v1/frame_visibility.jsonl` 按
+`(episode_idx, step_idx)` 严格对齐，统计绝对关节目标、相邻保存目标差、夹爪、终止
+标志和可见性条件分布，并模拟 absolute/`Δq` × 等宽/等频 × 16/32/64箱。成功结果写入
+`outputs/dataset/expert_scaling_v1/action_tokenization_audit_v1/`。
+
+当前真实报告通过9,894帧和9,594个 transition 的输入门禁；夹爪9,894/9,894均为1.0，
+终止标志为300/9,894。规则推荐连续回归基线、32箱等频 absolute_q 和64箱等频
+delta_q。报告边界使用全量数据只做可行性审计；正式 tokenizer 必须在 episode 级划分
+后只使用训练集拟合边界。
 
 ## 阶段三闭环探路
 

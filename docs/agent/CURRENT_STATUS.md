@@ -1,16 +1,15 @@
 # 当前项目状态
 
-**最后核对日期：** 2026-07-27
+**最后核对日期：** 2026-07-31
 
 ## 当前阶段
 
-专家数据规模化已完成并通过门禁。`expert_v1` 使用版本化目录、每条 episode 独立
-home pose 复位、`random_seed + episode_idx`、manifest/config snapshot 和只读质量
-门禁；真实数据现为300/300 success、9,894帧、0项完整性错误，X/Y 五个分箱均非空。
-质量报告为 `active_gate=scale`、`scale_gate.passed=true`、顶层 `passed=true`。逐帧
-确定性重放可见性审计也已通过：9,888帧精确匹配、6帧通过严格渲染容差、0帧拒绝；
-clear/partial/severe 为9,479/411/4。两项实验都未调用 VLM API。下一阶段进入 action
-tokenization；严格 smoke 的自主停止1/3仍作为独立能力边界，不阻塞动作表示实验。
+专家数据规模化、逐帧可见性审计和 action tokenization 只读审计均已完成。`expert_v1`
+保持300/300 success、9,894帧、0项完整性错误；动作与可见性标签9,894/9,894完整对齐，
+得到9,594个 episode 内 transition。12个离散候选的固定规则推荐32箱等频 absolute_q
+和64箱等频 delta_q，并始终保留连续回归基线。该结论只确定下一轮最小训练对照组；
+正式分箱边界必须在 episode 级训练/验证划分后只用训练集拟合。严格 smoke 的自主停止
+1/3仍作为独立能力边界，不阻塞动作表示实验。
 
 ## 已完成且仍有效
 
@@ -19,7 +18,7 @@ tokenization；严格 smoke 的自主停止1/3仍作为独立能力边界，不�
 - 直接方向预测的能力边界已确定：448px 为 3/4，grounding 中间表示为 4/4。
 - 相机反投影几何、可见率分组和离线真值隔离已建立。
 - 冻结 XY 补偿在独立 clear 验证集上为 15/15 不超过 3cm。
-- 正式源码已迁移到 `src/vla_project/`，并通过 `pyproject.toml` 暴露 14 个命令入口。
+- 正式源码已迁移到 `src/vla_project/`，并通过 `pyproject.toml` 暴露 15 个命令入口。
 - `grounding_smoke` targeting、runner、screening 已迁入正式子包；测试不调用真实 API。
 - 旧的全轨迹 clear 筛选在 seeds 55–100 × left/right/front 的138个候选中为0个
   合格：131个 `visibility_below_threshold`、7个 `start_pose_error`；该结果继续
@@ -83,8 +82,17 @@ tokenization；严格 smoke 的自主停止1/3仍作为独立能力边界，不�
   55/300条 episode 至少有一帧非 clear，只有 episode 105 出现4个 severe 帧。
   300个首帧全部 clear，终止帧为245 clear、55 partial；全局最长连续非 clear 段为
   episode 105 的14个保存帧（step 504–807）。
-- 当前完整自动测试为207/207通过，`compileall` 与 `git diff --check` 通过；采集、
-  质量评估和可见性审计代码不调用 VLM API。
+- action tokenization 审计报告位于
+  `outputs/dataset/expert_scaling_v1/action_tokenization_audit_v1/`。输入门禁为300个
+  episode、9,894帧、9,594 transitions；输入 manifest/trajectory/visibility 的 SHA-256
+  在运行前后完全一致。夹爪9,894帧均为1.0，终止标志为300/9,894（3.03%）。
+- absolute_q 推荐32箱等频：最坏关节非空箱占用率1.0、最小箱309帧、归一化 p95
+  重建误差2.71%；delta_q 推荐64箱等频：对应为1.0、149帧、1.97%。absolute_q 的
+  16箱等频因误差5.41%被拒；delta_q 的16/32箱等频因误差6.89%/6.74%被拒。
+- 所有等宽候选至少存在尾部箱不足20帧；64箱 absolute/delta 等宽还分别存在占用率
+  0.891/0.750，不满足0.90门槛，因此本轮没有推荐等宽分箱。
+- 当前完整自动测试为231/231通过；采集、质量评估、可见性和动作审计代码不调用 VLM
+  API。`compileall` 与 `git diff --check` 在最终提交前再次执行。
 
 ## 未解决问题
 
@@ -99,28 +107,28 @@ tokenization；严格 smoke 的自主停止1/3仍作为独立能力边界，不�
    当前控制范围；4个 severe 帧集中在 episode 105，不能据此声称已解决 severe 遮挡。
 5. README、学习计划和 BUGLOG 的阶段表述可能存在时间差；实验结论以
    原始摘要和对应证据链为准。
-6. 300条数据已经证明当前专家控制器在固定任务分布下的采集稳定性、位置覆盖和主要
-   视觉可见性分布，但尚未证明9维连续动作采用哪种 tokenization 最适合学习，也未形成
-   训练/验证划分。
+6. 离线审计已证明当前数据统计上支持32箱等频 absolute_q 和64箱等频 delta_q，但尚未
+   通过真实训练或 rollout 证明哪种动作表示最好，也未形成 episode 级训练/验证划分。
+   全量审计边界包含未来验证 episode，不能直接作为正式 tokenizer 资产。
 
 ## 下一步优先级
 
 1. 冻结当前 `expert_v1` 数据集，不再运行当前290条追加配置或改动采集 schema。
-2. 设计 action tokenization：先把逐帧可见性标签与7维关节目标、夹爪占位值和终止
-   标志联合统计，再选择连续回归、逐维分箱或其他轻量表示的最小对照实验。
-3. 在 episode 级划分训练/验证集，避免同一轨迹的相邻帧跨集合泄漏；当前不因 partial
+2. 固定 episode 级训练/验证划分，避免同一轨迹的相邻帧跨集合泄漏；只用训练 episode
+   重新拟合32箱等频 absolute_q 和64箱等频 delta_q 边界。
+3. 实现连续回归、32箱等频 absolute_q 和64箱等频 delta_q 的最小训练对照；当前不因 partial
    或 severe 标签直接删除成功轨迹，后续用保留全部数据与可见性筛选做对照。
 4. 自主 stop 3/3继续作为严格 smoke 指标；只有后续训练或评估明确依赖时，才重新开启
    grounding 稳健性改进。
 
-## 当前恢复点（2026-07-27）
+## 当前恢复点（2026-07-31）
 
-`expert_v1` 真实300条已通过 scale gate，权威报告位于
-`outputs/dataset/expert_scaling_v1/dataset_quality_report.json`，可见性报告位于同一
-数据集的 `visibility_audit_v1/visibility_audit_summary.json`。当前 `sim_config.yaml`
-的 `num_episodes: 290` 是本次已执行的追加批次配置，不应再次运行 `vla-collect`，
-否则会继续追加到590条。恢复工作时先读取两份报告，再从 action tokenization 的设计与
-动作/可见性联合分布审计开始。
+`expert_v1` 真实300条已通过 scale gate、可见性审计和 action tokenization 审计。动作
+报告位于 `outputs/dataset/expert_scaling_v1/action_tokenization_audit_v1/`，恢复时先读取
+其中的 `action_tokenization_audit.json`，再从 episode 级划分和“连续回归 vs 32箱等频
+absolute_q vs 64箱等频 delta_q”实现开始。当前 `sim_config.yaml` 的
+`num_episodes: 290` 是已执行的追加批次配置，不应再次运行 `vla-collect`，否则会继续
+追加到590条。
 
 ## 当前任务入口
 
@@ -140,6 +148,9 @@ tokenization；严格 smoke 的自主停止1/3仍作为独立能力边界，不�
 - 单次闭环基线：[stage3_probe.py](../../src/vla_project/simulation/stage3_probe.py)
 - 专家数据质量检查：[evaluate_dataset.py](../../src/vla_project/simulation/evaluate_dataset.py)
 - 专家数据可见性审计：[audit_dataset_visibility.py](../../src/vla_project/simulation/audit_dataset_visibility.py)
+- 动作表示审计：[audit_action_tokenization.py](../../src/vla_project/simulation/audit_action_tokenization.py)
+- 动作审计设计：[2026-07-31-action-tokenization-audit-design.md](../superpowers/specs/2026-07-31-action-tokenization-audit-design.md)
+- 动作审计计划：[2026-07-31-action-tokenization-audit.md](../superpowers/plans/2026-07-31-action-tokenization-audit.md)
 - 可见性审计设计：[2026-07-27-expert-dataset-visibility-audit-design.md](../superpowers/specs/2026-07-27-expert-dataset-visibility-audit-design.md)
 - 专家数据规模化设计：[2026-07-26-expert-dataset-scaling-design.md](../superpowers/specs/2026-07-26-expert-dataset-scaling-design.md)
 - 专家数据规模化计划：[2026-07-26-expert-dataset-scaling.md](../superpowers/plans/2026-07-26-expert-dataset-scaling.md)
