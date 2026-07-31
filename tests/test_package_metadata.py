@@ -7,6 +7,9 @@ import unittest
 
 EXPECTED_SCRIPTS = {
     "vla-collect": "vla_project.simulation.control_arm:main",
+    "vla-audit-action-tokenization": (
+        "vla_project.simulation.audit_action_tokenization:main"
+    ),
     "vla-audit-dataset-visibility": (
         "vla_project.simulation.audit_dataset_visibility:main"
     ),

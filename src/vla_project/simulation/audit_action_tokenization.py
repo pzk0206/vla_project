@@ -1,7 +1,13 @@
 """只读审计 expert_v1 动作表示与候选离散化。"""
 
+import argparse
+from datetime import datetime
+import hashlib
+import json
 import math
 from collections import Counter
+from pathlib import Path
+import tempfile
 
 import numpy as np
 
@@ -9,6 +15,7 @@ import numpy as np
 SCHEMA_VERSION = "action_tokenization_audit_v1"
 ALLOWED_VISIBILITY_GROUPS = {"clear", "partial", "severe"}
 PERCENTILES = (1, 5, 25, 50, 75, 95, 99)
+DEFAULT_DATASET_DIR = "outputs/dataset/expert_scaling_v1"
 RECOMMENDATION_THRESHOLDS = {
     "minimum_nonempty_bin_occupancy": 0.90,
     "minimum_nonempty_bin_count": 20,
@@ -130,6 +137,9 @@ def summarize_action_analysis(rows):
     global_summary = _summarize_rows(rows)
     gripper_values = [row["gripper"] for row in rows]
     terminate_values = [row["terminate"] for row in rows]
+    episode_termination_counts = Counter()
+    for row in rows:
+        episode_termination_counts[row["episode_idx"]] += row["terminate"]
     step_gaps = [row["step_gap"] for row in rows if row["step_gap"] is not None]
     global_summary.update(
         {
@@ -140,6 +150,12 @@ def summarize_action_analysis(rows):
             },
             "terminate": {
                 "counts": _string_counts(terminate_values),
+                "per_episode_counts": {
+                    str(episode_idx): int(count)
+                    for episode_idx, count in sorted(
+                        episode_termination_counts.items()
+                    )
+                },
                 "rate": (
                     sum(terminate_values) / len(terminate_values)
                     if terminate_values
@@ -388,6 +404,225 @@ def select_recommendations(candidates, thresholds=None):
             "ranked_candidates": ranked,
         }
     return result
+
+
+def read_jsonl(path):
+    """读取对象型 JSONL，并把解析失败转换成稳定审计错误。"""
+    rows = []
+    try:
+        with Path(path).open("r", encoding="utf-8") as handle:
+            for line_number, line in enumerate(handle, start=1):
+                if not line.strip():
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    raise AuditValidationError(
+                        "invalid_jsonl",
+                        path=str(path),
+                        line_number=line_number,
+                        error=str(exc),
+                    ) from exc
+                if not isinstance(row, dict):
+                    raise AuditValidationError(
+                        "invalid_jsonl_row",
+                        path=str(path),
+                        line_number=line_number,
+                    )
+                rows.append(row)
+    except FileNotFoundError as exc:
+        raise AuditValidationError("missing_input_file", path=str(path)) from exc
+    return rows
+
+
+def _file_metadata(path):
+    digest = hashlib.sha256()
+    try:
+        with Path(path).open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except FileNotFoundError as exc:
+        raise AuditValidationError("missing_input_file", path=str(path)) from exc
+    return {
+        "path": str(path),
+        "size_bytes": Path(path).stat().st_size,
+        "sha256": digest.hexdigest(),
+    }
+
+
+def load_audit_inputs(dataset_dir):
+    """从冻结数据集加载 manifest、轨迹、可见性和输入指纹。"""
+    dataset_dir = Path(dataset_dir)
+    manifest_path = dataset_dir / "dataset_manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise AuditValidationError(
+            "missing_input_file",
+            path=str(manifest_path),
+        ) from exc
+    except json.JSONDecodeError as exc:
+        raise AuditValidationError(
+            "invalid_manifest",
+            path=str(manifest_path),
+            error=str(exc),
+        ) from exc
+    trajectory_name = manifest.get("jsonl_name")
+    if not isinstance(trajectory_name, str) or not trajectory_name:
+        raise AuditValidationError("missing_trajectory_name")
+    trajectory_path = dataset_dir / trajectory_name
+    visibility_path = (
+        dataset_dir / "visibility_audit_v1" / "frame_visibility.jsonl"
+    )
+    trajectory_rows = read_jsonl(trajectory_path)
+    visibility_rows = read_jsonl(visibility_path)
+    inputs = {
+        "manifest": _file_metadata(manifest_path),
+        "trajectory": _file_metadata(trajectory_path),
+        "visibility": _file_metadata(visibility_path),
+    }
+    return manifest, trajectory_rows, visibility_rows, inputs
+
+
+def _write_json(path, payload):
+    Path(path).write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _write_failure(dataset_dir, exc):
+    evidence = {
+        "schema_version": SCHEMA_VERSION,
+        "passed": False,
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "reason": (
+            exc.reason
+            if isinstance(exc, AuditValidationError)
+            else type(exc).__name__
+        ),
+        "error": repr(exc),
+        "evidence": (
+            exc.evidence if isinstance(exc, AuditValidationError) else {}
+        ),
+    }
+    dataset_dir = Path(dataset_dir)
+    dataset_dir.mkdir(parents=True, exist_ok=True)
+    failure_path = dataset_dir / "action_tokenization_audit_failure.json"
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        dir=dataset_dir,
+        prefix=".action_tokenization_failure_",
+        suffix=".json",
+        delete=False,
+    ) as handle:
+        json.dump(evidence, handle, ensure_ascii=False, indent=2)
+        handle.write("\n")
+        temp_path = Path(handle.name)
+    temp_path.replace(failure_path)
+
+
+def _publish_success(output_dir, frame_rows, summary):
+    output_dir = Path(output_dir)
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=output_dir.parent) as temp_dir:
+        temp_root = Path(temp_dir)
+        staging = temp_root / output_dir.name
+        staging.mkdir()
+        frame_path = staging / "frame_action_analysis.jsonl"
+        with frame_path.open("w", encoding="utf-8") as handle:
+            for row in frame_rows:
+                handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+        summary_path = staging / "action_tokenization_audit.json"
+        _write_json(summary_path, summary)
+        if len(read_jsonl(frame_path)) != len(frame_rows):
+            raise RuntimeError("staged_frame_count_mismatch")
+        if json.loads(summary_path.read_text(encoding="utf-8")) != summary:
+            raise RuntimeError("staged_summary_mismatch")
+
+        backup = temp_root / "previous_success"
+        if output_dir.exists():
+            output_dir.replace(backup)
+        try:
+            staging.replace(output_dir)
+        except Exception:
+            if backup.exists() and not output_dir.exists():
+                backup.replace(output_dir)
+            raise
+
+
+def run_action_tokenization_audit(dataset_dir, output_dir=None):
+    """运行全量只读动作审计并原子发布结果。"""
+    dataset_dir = Path(dataset_dir)
+    output_dir = (
+        Path(output_dir)
+        if output_dir is not None
+        else dataset_dir / "action_tokenization_audit_v1"
+    )
+    try:
+        manifest, trajectories, visibility, inputs = load_audit_inputs(
+            dataset_dir
+        )
+        frame_rows = build_frame_analysis(
+            manifest,
+            trajectories,
+            visibility,
+        )
+        statistics = summarize_action_analysis(frame_rows)
+        candidates = evaluate_candidates(frame_rows)
+        recommendations = select_recommendations(candidates)
+        summary = {
+            "schema_version": SCHEMA_VERSION,
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+            "dataset_dir": str(dataset_dir),
+            "inputs": inputs,
+            "input_validation": {"passed": True},
+            **statistics,
+            "candidates": candidates,
+            "recommendations": recommendations,
+            "limitations": {
+                "delta_q_is_saved_target_difference": True,
+                "boundaries_are_exploratory_full_dataset_fits": True,
+                "training_or_rollout_validation_completed": False,
+            },
+            "passed": True,
+        }
+        _publish_success(output_dir, frame_rows, summary)
+    except Exception as exc:
+        _write_failure(dataset_dir, exc)
+        raise
+
+    failure_path = dataset_dir / "action_tokenization_audit_failure.json"
+    failure_path.unlink(missing_ok=True)
+    return summary
+
+
+def main():
+    """CLI：审计 expert_v1 动作分布与候选离散表示。"""
+    parser = argparse.ArgumentParser(
+        description="审计 expert_v1 action tokenization 候选"
+    )
+    parser.add_argument("--dataset-dir", default=DEFAULT_DATASET_DIR)
+    parser.add_argument("--output-dir")
+    args = parser.parse_args()
+    summary = run_action_tokenization_audit(
+        args.dataset_dir,
+        args.output_dir,
+    )
+    recommendations = summary["recommendations"]
+    print(
+        "Action tokenization 审计完成："
+        f"episodes={summary['num_episodes']}，"
+        f"frames={summary['num_frames']}，"
+        f"transitions={summary['num_transitions']}，"
+        f"absolute={recommendations['absolute_q']['status']}，"
+        f"delta={recommendations['delta_q']['status']}"
+    )
+
+
+if __name__ == "__main__":
+    main()
 
 
 def build_frame_analysis(manifest, trajectory_rows, visibility_rows):

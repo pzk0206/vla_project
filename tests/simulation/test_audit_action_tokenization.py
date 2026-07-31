@@ -1,7 +1,10 @@
 """保护 expert_v1 动作表示只读审计契约。"""
 
 import importlib
+import json
 import math
+from pathlib import Path
+import tempfile
 import unittest
 import warnings
 
@@ -261,6 +264,11 @@ class ActionStatisticsTests(unittest.TestCase):
         self.assertTrue(summary["gripper"]["is_constant"])
         self.assertEqual(summary["gripper"]["counts"], {"1.0": 4})
         self.assertEqual(summary["terminate"]["counts"], {"0": 2, "1": 2})
+        self.assertIn("per_episode_counts", summary["terminate"])
+        self.assertEqual(
+            summary["terminate"]["per_episode_counts"],
+            {"0": 1, "1": 1},
+        )
         self.assertEqual(summary["step_gap"]["counts"], {"12": 1, "24": 1})
         self.assertEqual(summary["by_visibility"]["severe"]["num_frames"], 1)
         self.assertEqual(
@@ -465,6 +473,115 @@ class BinningTests(unittest.TestCase):
                 "insufficient_for_generalization"
             ]
         )
+
+
+class PublicationTests(unittest.TestCase):
+    def write_jsonl(self, path, rows):
+        Path(path).write_text(
+            "".join(json.dumps(row) + "\n" for row in rows),
+            encoding="utf-8",
+        )
+
+    def make_dataset(self, root):
+        dataset_dir = Path(root) / "expert_fixture"
+        visibility_dir = dataset_dir / "visibility_audit_v1"
+        visibility_dir.mkdir(parents=True)
+        manifest = {
+            "schema_version": "expert_v1",
+            "action_dim": 9,
+            "jsonl_name": "trajectory_expert.jsonl",
+        }
+        (dataset_dir / "dataset_manifest.json").write_text(
+            json.dumps(manifest),
+            encoding="utf-8",
+        )
+        trajectories = [
+            action_row(0, 0, [0.0] * 7),
+            action_row(0, 24, [0.4] * 7, terminate=1),
+            action_row(1, 0, [1.0] * 7),
+            action_row(1, 12, [0.2] * 7, terminate=1),
+        ]
+        visibility = [
+            visibility_row(0, 0),
+            visibility_row(0, 24, "partial"),
+            visibility_row(1, 0),
+            visibility_row(1, 12, "severe"),
+        ]
+        self.write_jsonl(dataset_dir / "trajectory_expert.jsonl", trajectories)
+        self.write_jsonl(visibility_dir / "frame_visibility.jsonl", visibility)
+        return dataset_dir, trajectories
+
+    def test_publishes_complete_audit(self):
+        module = importlib.import_module(
+            "vla_project.simulation.audit_action_tokenization"
+        )
+        self.assertTrue(
+            hasattr(module, "run_action_tokenization_audit"),
+            "run_action_tokenization_audit 尚未实现",
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dataset_dir, _ = self.make_dataset(temp_dir)
+
+            summary = module.run_action_tokenization_audit(dataset_dir)
+
+            output_dir = dataset_dir / "action_tokenization_audit_v1"
+            self.assertTrue(summary["passed"])
+            self.assertEqual(summary["num_frames"], 4)
+            self.assertEqual(summary["num_episodes"], 2)
+            self.assertEqual(summary["num_transitions"], 2)
+            self.assertEqual(len(summary["candidates"]), 12)
+            self.assertTrue(
+                output_dir.joinpath("frame_action_analysis.jsonl").is_file()
+            )
+            summary_path = output_dir / "action_tokenization_audit.json"
+            self.assertTrue(summary_path.is_file())
+            saved = json.loads(summary_path.read_text(encoding="utf-8"))
+            self.assertEqual(saved, summary)
+            self.assertEqual(len(saved["inputs"]["trajectory"]["sha256"]), 64)
+
+    def test_failure_preserves_previous_success_and_recovery_replaces_it(self):
+        module = importlib.import_module(
+            "vla_project.simulation.audit_action_tokenization"
+        )
+        self.assertTrue(hasattr(module, "run_action_tokenization_audit"))
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dataset_dir, trajectories = self.make_dataset(temp_dir)
+            output_dir = dataset_dir / "action_tokenization_audit_v1"
+            output_dir.mkdir()
+            sentinel = output_dir / "sentinel.txt"
+            sentinel.write_text("previous success", encoding="utf-8")
+            trajectories[0]["action"].append(0.0)
+            self.write_jsonl(
+                dataset_dir / "trajectory_expert.jsonl",
+                trajectories,
+            )
+
+            with self.assertRaises(AuditValidationError):
+                module.run_action_tokenization_audit(dataset_dir)
+
+            self.assertEqual(
+                sentinel.read_text(encoding="utf-8"),
+                "previous success",
+            )
+            failure_path = (
+                dataset_dir / "action_tokenization_audit_failure.json"
+            )
+            failure = json.loads(failure_path.read_text(encoding="utf-8"))
+            self.assertFalse(failure["passed"])
+            self.assertEqual(failure["reason"], "invalid_action")
+
+            trajectories[0]["action"].pop()
+            self.write_jsonl(
+                dataset_dir / "trajectory_expert.jsonl",
+                trajectories,
+            )
+            module.run_action_tokenization_audit(dataset_dir)
+
+            self.assertFalse(sentinel.exists())
+            self.assertFalse(failure_path.exists())
+            self.assertTrue(
+                output_dir.joinpath("action_tokenization_audit.json").is_file()
+            )
 
 if __name__ == "__main__":
     unittest.main()
