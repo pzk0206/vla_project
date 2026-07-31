@@ -510,6 +510,61 @@ class GenerationRunnerTests(unittest.TestCase):
         "vla_project.simulation.render_expert_dataset_view.replay_episode_frames"
     )
     @patch("vla_project.simulation.render_expert_dataset_view.capture_rgb")
+    def test_separates_source_validation_from_topdown_rendering(
+        self, capture_rgb_mock, replay_mock
+    ):
+        render_state = {"topdown_seen_in_pass": False}
+
+        def capture_side_effect(camera, _eye):
+            if camera["image_width"] == 448:
+                render_state["topdown_seen_in_pass"] = True
+                return np.zeros((448, 448, 3), dtype=np.uint8)
+            fill = 255 if render_state["topdown_seen_in_pass"] else 0
+            return np.full((224, 224, 3), fill, dtype=np.uint8)
+
+        capture_rgb_mock.side_effect = capture_side_effect
+
+        def replay_side_effect(_config, _manifest, _summary, rows, callback):
+            render_state["topdown_seen_in_pass"] = False
+            results = []
+            for row in rows:
+                frame = ReplayFrame(
+                    source_row=row,
+                    robot_id=7,
+                    block_id=8,
+                    source_camera_eye=list(row["camera_eye"]),
+                    target_joint_angles=list(row["action"][:7]),
+                    target_pos=list(row["target_pos"]),
+                    ee_pos=list(row["ee_pos"]),
+                    block_pos=list(row["block_pos"]),
+                    distance_to_target=row["distance_to_target"],
+                )
+                results.append(callback(frame))
+            return results
+
+        replay_mock.side_effect = replay_side_effect
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo_root = Path(temp_dir)
+            source = self._write_source_dataset(repo_root)
+            output = repo_root / "outputs/dataset/expert_topdown_v1"
+
+            report = run_generation(
+                source,
+                output,
+                repo_root=repo_root,
+                expected_episode_count=2,
+                expected_frame_count=4,
+            )
+
+        self.assertTrue(report["passed"])
+        self.assertEqual(replay_mock.call_count, 4)
+        self.assertEqual(report["source_validation_pass_count"], 2)
+        self.assertEqual(report["topdown_render_pass_count"], 2)
+
+    @patch(
+        "vla_project.simulation.render_expert_dataset_view.replay_episode_frames"
+    )
+    @patch("vla_project.simulation.render_expert_dataset_view.capture_rgb")
     def test_failure_leaves_only_structured_evidence(
         self, capture_rgb_mock, replay_mock
     ):

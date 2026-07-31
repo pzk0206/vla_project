@@ -288,6 +288,8 @@ def run_generation(
             derived_summaries = []
             exact_matches = 0
             tolerance_matches = 0
+            source_validation_pass_count = 0
+            topdown_render_pass_count = 0
 
             for summary in sorted(
                 summaries, key=lambda row: row["episode_idx"]
@@ -298,7 +300,7 @@ def run_generation(
                 )
                 validate_episode_termination(episode_rows, summary)
 
-                def render_frame(frame):
+                def validate_source_frame(frame):
                     nonlocal exact_matches, tolerance_matches
                     source_path = _resolve_source_image(
                         source,
@@ -315,6 +317,19 @@ def run_generation(
                         exact_matches += 1
                     else:
                         tolerance_matches += 1
+                    validate_replay_values(frame)
+                    return replay_check
+
+                replay_episode_frames(
+                    source_config,
+                    manifest,
+                    summary,
+                    episode_rows,
+                    validate_source_frame,
+                )
+                source_validation_pass_count += 1
+
+                def render_topdown_frame(frame):
                     validate_replay_values(frame)
                     image_name = (
                         f"ep_{frame.source_row['episode_idx']}_"
@@ -338,8 +353,9 @@ def run_generation(
                     manifest,
                     summary,
                     episode_rows,
-                    render_frame,
+                    render_topdown_frame,
                 )
+                topdown_render_pass_count += 1
                 derived_summaries.append(
                     derive_summary_row(summary, topdown_eye)
                 )
@@ -383,6 +399,10 @@ def run_generation(
                 "num_images": image_count,
                 "source_replay_exact_match_count": exact_matches,
                 "source_replay_tolerance_match_count": tolerance_matches,
+                "source_validation_pass_count": (
+                    source_validation_pass_count
+                ),
+                "topdown_render_pass_count": topdown_render_pass_count,
                 "source_hashes_before": source_hashes_before,
                 "source_hashes_after": source_hashes_after,
                 "source_hashes_unchanged": True,
