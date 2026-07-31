@@ -5,26 +5,23 @@ from collections import Counter, defaultdict
 from datetime import datetime
 import json
 from pathlib import Path
-import random
 import statistics
 import tempfile
 
-import cv2
 import numpy as np
 import pybullet as p
-import yaml
 
 from vla_project.simulation.control_arm import (
-    apply_joint_targets,
-    calculate_target_joints,
     capture_rgb_and_segmentation,
-    connect_physics,
-    get_hover_target,
-    load_block,
-    reset_robot_to_home,
-    sample_camera_eye,
-    settle_object,
-    setup_world,
+)
+from vla_project.simulation.expert_dataset_replay import (
+    ReplayValidationError,
+    load_replay_inputs as load_audit_inputs,
+    read_jsonl,
+    replay_difference_is_acceptable,
+    replay_episode_frames,
+    validate_episode_contract,
+    validate_replay_image,
 )
 from vla_project.vlm.evaluate_grounding_backprojection import (
     classify_visibility,
@@ -33,28 +30,6 @@ from vla_project.vlm.evaluate_grounding_backprojection import (
 
 OBJECT_ID_MASK = (1 << 24) - 1
 DEFAULT_DATASET_DIR = "outputs/dataset/expert_scaling_v1"
-MAX_REPLAY_PIXEL_MAE = 0.002
-MAX_REPLAY_PIXEL_ERROR = 3
-
-
-class ReplayValidationError(RuntimeError):
-    """携带结构化证据的确定性重放失败。"""
-
-    def __init__(self, reason, **evidence):
-        super().__init__(reason)
-        self.reason = reason
-        self.evidence = evidence
-
-
-def replay_difference_is_acceptable(
-    replay_pixel_mae,
-    max_pixel_error,
-):
-    """只接受全量诊断界定的微小 OpenGL 重渲染差异。"""
-    return (
-        replay_pixel_mae <= MAX_REPLAY_PIXEL_MAE
-        and max_pixel_error <= MAX_REPLAY_PIXEL_ERROR
-    )
 
 
 def count_block_pixels(segmentation, block_id):
@@ -63,49 +38,6 @@ def count_block_pixels(segmentation, block_id):
         raise ValueError("block_id 必须是整数")
     object_ids = np.asarray(segmentation, dtype=np.int64) & OBJECT_ID_MASK
     return int(np.count_nonzero(object_ids == block_id))
-
-
-def validate_replay_image(original_path, replay_bgr):
-    """确认重放 JPEG 精确一致或只含诊断界定的渲染舍入差异。"""
-    original_path = Path(original_path)
-    original = cv2.imread(str(original_path))
-    if original is None:
-        raise ReplayValidationError(
-            "unreadable_original_image",
-            image_path=str(original_path),
-        )
-    encoded, buffer = cv2.imencode(".jpg", replay_bgr)
-    if not encoded:
-        raise ReplayValidationError("replay_jpeg_encode_failed")
-    roundtrip = cv2.imdecode(buffer, cv2.IMREAD_COLOR)
-    if roundtrip is None or roundtrip.shape != original.shape:
-        raise ReplayValidationError(
-            "replay_image_shape_mismatch",
-            expected_shape=list(original.shape),
-            actual_shape=None if roundtrip is None else list(roundtrip.shape),
-        )
-    diff = np.abs(
-        roundtrip.astype(np.int16) - original.astype(np.int16)
-    )
-    mae = float(np.mean(diff))
-    max_error = int(diff.max())
-    changed_values = int(np.count_nonzero(diff))
-    exact_match = changed_values == 0
-    if not replay_difference_is_acceptable(mae, max_error):
-        raise ReplayValidationError(
-            "replay_image_mismatch",
-            image_path=str(original_path),
-            replay_pixel_mae=mae,
-            max_pixel_error=max_error,
-            changed_pixel_values=changed_values,
-        )
-    return {
-        "replay_exact_match": exact_match,
-        "replay_within_tolerance": True,
-        "replay_pixel_mae": mae,
-        "replay_max_pixel_error": max_error,
-        "replay_changed_pixel_values": changed_values,
-    }
 
 
 def build_visibility_rows(frame_observations, reference_pixels=None):
@@ -306,163 +238,67 @@ def summarize_visibility(rows):
     }
 
 
-def validate_episode_contract(manifest, summary, frame_rows):
-    """拒绝无法一一重放的 episode、seed、step 和相机记录。"""
-    episode_idx = summary["episode_idx"]
-    expected_seed = manifest["random_seed"] + episode_idx
-    if summary["random_seed"] != expected_seed:
-        raise ReplayValidationError(
-            "seed_mismatch",
-            episode_idx=episode_idx,
-            expected_seed=expected_seed,
-            actual_seed=summary["random_seed"],
-        )
-    if not frame_rows:
-        raise ReplayValidationError(
-            "missing_episode_frames",
-            episode_idx=episode_idx,
-        )
-    steps = [row["step_idx"] for row in frame_rows]
-    if len(steps) != len(set(steps)):
-        raise ReplayValidationError(
-            "duplicate_step",
-            episode_idx=episode_idx,
-        )
-    camera_eyes = {tuple(row["camera_eye"]) for row in frame_rows}
-    if len(camera_eyes) != 1:
-        raise ReplayValidationError(
-            "camera_mismatch",
-            episode_idx=episode_idx,
-        )
-    for row in frame_rows:
-        if row["episode_idx"] != episode_idx:
-            raise ReplayValidationError(
-                "episode_mismatch",
-                episode_idx=episode_idx,
-                frame_episode_idx=row["episode_idx"],
-            )
-        if row["random_seed"] != expected_seed:
-            raise ReplayValidationError(
-                "frame_seed_mismatch",
-                episode_idx=episode_idx,
-                step_idx=row["step_idx"],
-            )
-
-
 def replay_episode(config, manifest, summary, frame_rows):
     """按原始 seed 和控制顺序重放一条 episode。"""
-    frame_rows = sorted(frame_rows, key=lambda row: row["step_idx"])
-    validate_episode_contract(manifest, summary, frame_rows)
-    episode_idx = summary["episode_idx"]
-    random.seed(summary["random_seed"])
-    connect_physics("DIRECT")
-    observations = []
-    try:
-        _, robot_id = setup_world(config)
-        reset_robot_to_home(robot_id, config["robot"], config["dataset"])
-        for _ in range(config["task"]["initial_settle_steps"]):
-            p.stepSimulation()
-        block_id = load_block(config["task"])
-        settle_object(config, config["task"]["initial_settle_steps"])
-        camera_eye = sample_camera_eye(config["camera"])
-        expected_eye = frame_rows[0]["camera_eye"]
-        if camera_eye != expected_eye:
-            raise ReplayValidationError(
-                "replayed_camera_mismatch",
-                episode_idx=episode_idx,
-                expected_camera_eye=expected_eye,
-                actual_camera_eye=camera_eye,
-            )
-        robot_visual_colors = {
-            shape[1]: shape[7]
-            for shape in p.getVisualShapeData(robot_id)
-        }
+    robot_visual_colors = {}
 
-        rows_by_step = {row["step_idx"]: row for row in frame_rows}
-        for step_idx in range(frame_rows[-1]["step_idx"] + 1):
-            target = get_hover_target(
-                block_id,
-                config["task"]["hover_height"],
-            )
-            joints = calculate_target_joints(
-                robot_id,
-                config["robot"],
-                target,
-            )
-            apply_joint_targets(robot_id, config["robot"], joints)
-            p.stepSimulation()
-            if step_idx not in rows_by_step:
-                continue
-            source = rows_by_step[step_idx]
-            replay_bgr, segmentation = capture_rgb_and_segmentation(
-                config["camera"],
-                camera_eye,
-            )
-            replay_check = validate_replay_image(
-                source["image_path"],
-                replay_bgr,
-            )
-            visible_pixels = count_block_pixels(
-                segmentation,
-                block_id,
-            )
-            for link_index, rgba in robot_visual_colors.items():
-                p.changeVisualShape(
-                    robot_id,
-                    link_index,
-                    rgbaColor=[*rgba[:3], 0.0],
-                )
-            try:
-                _, reference_segmentation = (
-                    capture_rgb_and_segmentation(
-                        config["camera"],
-                        camera_eye,
-                    )
-                )
-                reference_pixels = count_block_pixels(
-                    reference_segmentation,
-                    block_id,
-                )
-            finally:
-                for link_index, rgba in robot_visual_colors.items():
-                    p.changeVisualShape(
-                        robot_id,
-                        link_index,
-                        rgbaColor=rgba,
-                    )
-            if reference_pixels <= 0 or visible_pixels > reference_pixels:
-                raise ReplayValidationError(
-                    "invalid_visibility_pixels",
-                    episode_idx=episode_idx,
-                    step_idx=step_idx,
-                    visible_block_pixels=visible_pixels,
-                    reference_block_pixels=reference_pixels,
-                )
-            observations.append(
+    def observe(frame):
+        source = frame.source_row
+        if not robot_visual_colors:
+            robot_visual_colors.update(
                 {
-                    "schema_version": "visibility_audit_v1",
-                    "episode_idx": episode_idx,
-                    "random_seed": summary["random_seed"],
-                    "step_idx": step_idx,
-                    "image_path": source["image_path"],
-                    "visible_block_pixels": visible_pixels,
-                    "reference_block_pixels": reference_pixels,
-                    **replay_check,
+                    shape[1]: shape[7]
+                    for shape in p.getVisualShapeData(frame.robot_id)
                 }
             )
+        replay_bgr, segmentation = capture_rgb_and_segmentation(
+            config["camera"], frame.source_camera_eye
+        )
+        replay_check = validate_replay_image(
+            source["image_path"], replay_bgr
+        )
+        visible_pixels = count_block_pixels(segmentation, frame.block_id)
+        for link_index, rgba in robot_visual_colors.items():
+            p.changeVisualShape(
+                frame.robot_id,
+                link_index,
+                rgbaColor=[*rgba[:3], 0.0],
+            )
+        try:
+            _, reference_segmentation = capture_rgb_and_segmentation(
+                config["camera"], frame.source_camera_eye
+            )
+            reference_pixels = count_block_pixels(
+                reference_segmentation, frame.block_id
+            )
+        finally:
+            for link_index, rgba in robot_visual_colors.items():
+                p.changeVisualShape(
+                    frame.robot_id, link_index, rgbaColor=rgba
+                )
+        if reference_pixels <= 0 or visible_pixels > reference_pixels:
+            raise ReplayValidationError(
+                "invalid_visibility_pixels",
+                episode_idx=source["episode_idx"],
+                step_idx=source["step_idx"],
+                visible_block_pixels=visible_pixels,
+                reference_block_pixels=reference_pixels,
+            )
+        return {
+            "schema_version": "visibility_audit_v1",
+            "episode_idx": source["episode_idx"],
+            "random_seed": source["random_seed"],
+            "step_idx": source["step_idx"],
+            "image_path": source["image_path"],
+            "visible_block_pixels": visible_pixels,
+            "reference_block_pixels": reference_pixels,
+            **replay_check,
+        }
 
-        return build_visibility_rows(observations)
-    except ReplayValidationError as exc:
-        exc.evidence.setdefault("episode_idx", episode_idx)
-        raise
-    finally:
-        p.disconnect()
-
-
-def read_jsonl(path):
-    """读取非空 JSONL 行。"""
-    with Path(path).open("r", encoding="utf-8") as handle:
-        return [json.loads(line) for line in handle if line.strip()]
+    observations = replay_episode_frames(
+        config, manifest, summary, frame_rows, observe
+    )
+    return build_visibility_rows(observations)
 
 
 def write_json(path, payload):
@@ -471,26 +307,6 @@ def write_json(path, payload):
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
-
-
-def load_audit_inputs(dataset_dir):
-    """从版本化数据集自身加载重放契约与记录。"""
-    dataset_dir = Path(dataset_dir)
-    with (dataset_dir / "dataset_manifest.json").open(
-        "r",
-        encoding="utf-8",
-    ) as handle:
-        manifest = json.load(handle)
-    with (dataset_dir / "config_snapshot.yaml").open(
-        "r",
-        encoding="utf-8",
-    ) as handle:
-        config = yaml.safe_load(handle)
-    frames = read_jsonl(dataset_dir / manifest["jsonl_name"])
-    summaries = read_jsonl(
-        dataset_dir / manifest["summary_jsonl_name"]
-    )
-    return manifest, config, frames, summaries
 
 
 def run_visibility_audit(dataset_dir, output_dir=None):
