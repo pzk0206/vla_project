@@ -259,6 +259,45 @@ def load_block(task_config):
     return block_id
 
 
+def load_second_block(task_cfg):
+    """加载蓝色积木（第二目标物）并设置视觉颜色。
+
+    每个 episode 都会和红色积木一起新建一个蓝色积木，
+    episode 结束后随红块一起 removeBody。
+    """
+    second_cfg = task_cfg["second_block"]
+    position = [
+        random_uniform_from_range(second_cfg["x_range"]),
+        random_uniform_from_range(second_cfg["y_range"]),
+        second_cfg["z"],
+    ]
+    block_id = p.loadURDF(
+        task_cfg["block_urdf_path"],
+        basePosition=position,
+        globalScaling=second_cfg.get(
+            "global_scaling", task_cfg["block_global_scaling"]
+        ),
+    )
+    p.changeVisualShape(block_id, -1, rgbaColor=second_cfg["color_rgba"])
+    return block_id
+
+
+def select_task(config):
+    """按配置选择本 episode 的任务指令和目标积木颜色。
+
+    新配置使用 task.tasks 列表随机挑选“悬停红块 / 悬停蓝块”之一；
+    旧配置没有 tasks 列表时，回退到 dataset.instruction 和红色积木。
+    返回 (instruction, target_block)，其中 target_block 为 "red" 或 "blue"。
+    """
+    task_cfg = config["task"]
+    dataset_cfg = config["dataset"]
+    tasks = task_cfg.get("tasks")
+    if tasks:
+        selected = random.choice(tasks)
+        return selected["instruction"], selected["target_block"]
+    return dataset_cfg.get("instruction", "悬停在红色积木上方"), "red"
+
+
 def settle_object(config, num_steps):
     """让新加载的物体先在物理世界里稳定下来，再开始正式采集。"""
     for _ in range(num_steps):
@@ -500,6 +539,8 @@ def write_episode_summary(
     final_block_pos,
     final_target_pos,
     final_ee_pos,
+    task_instruction=None,
+    target_block=None,
 ):
     """为每条轨迹写一行摘要，方便快速审计数据集质量。"""
     summary = {
@@ -516,6 +557,8 @@ def write_episode_summary(
         "final_block_pos": list(final_block_pos),
         "final_target_pos": list(final_target_pos),
         "final_ee_pos": list(final_ee_pos),
+        "task_instruction": task_instruction,
+        "target_block": target_block,
     }
     with open(summary_jsonl_path, "a", encoding="utf-8") as summary_file:
         summary_file.write(json.dumps(summary, ensure_ascii=False) + "\n")
@@ -527,6 +570,8 @@ def write_episode_error_summary(
     episode_idx,
     random_seed,
     error,
+    task_instruction=None,
+    target_block=None,
 ):
     """记录单条 episode 异常，并保留未知状态为空值。"""
     summary = {
@@ -543,6 +588,8 @@ def write_episode_error_summary(
         "final_block_pos": None,
         "final_target_pos": None,
         "final_ee_pos": None,
+        "task_instruction": task_instruction,
+        "target_block": target_block,
         "error": error,
     }
     with open(summary_jsonl_path, "a", encoding="utf-8") as summary_file:
@@ -594,11 +641,11 @@ def run_episode(
     """执行一条任务轨迹并写入图片/JSONL 数据。
 
     一个 episode 的生命周期：
-    1. 生成一个随机位置的红色积木。
-    2. 生成一个本 episode 固定的相机位置。
+    1. 随机选择本 episode 的任务：悬停红块或悬停蓝块。
+    2. 同时加载红色积木和（若启用）蓝色积木，并生成固定相机位置。
     3. 循环执行“感知目标 -> IK 求解 -> 电机控制 -> 物理步进 -> 采图写标签”。
     4. 成功到达或达到最大步数后终止。
-    5. 删除积木，避免影响下一个 episode。
+    5. 删除两个积木，避免影响下一个 episode。
     """
     robot_cfg = config["robot"]
     task_cfg = config["task"]
@@ -614,12 +661,22 @@ def run_episode(
         robot_cfg["ee_link_index"],
     )
 
-    # 每条轨迹只对应一个红色积木，位置由 task.block_position 控制。
-    block_id = None
-    block_id = load_block(task_cfg)
-
+    # 每条轨迹随机挑选一个任务（悬停红块 / 悬停蓝块），
+    # 并同时加载红色积木和（若启用）蓝色积木。
+    instruction, target_block = select_task(config)
+    red_block_id = load_block(task_cfg)
+    blue_block_id = (
+        load_second_block(task_cfg)
+        if task_cfg.get("second_block", {}).get("enabled")
+        else None
+    )
     settle_object(config, task_cfg["initial_settle_steps"])
-    initial_block_pos = get_object_position(block_id)
+    initial_block_pos = get_object_position(red_block_id)
+    target_block_id = (
+        blue_block_id
+        if target_block == "blue" and blue_block_id is not None
+        else red_block_id
+    )
 
     # 同一个 episode 内固定相机，有利于形成稳定的时序视觉输入。
     camera_eye = sample_camera_eye(camera_cfg)
@@ -638,7 +695,7 @@ def run_episode(
     try:
         for step_idx in range(dataset_cfg["max_steps_per_episode"]):
             # 阶段 A：根据当前积木位置，计算“悬停点”。
-            target_pos = get_hover_target(block_id, task_cfg["hover_height"])
+            target_pos = get_hover_target(target_block_id, task_cfg["hover_height"])
 
             # 阶段 B：把悬停点转换成机械臂 7 个关节的目标角度。
             target_joint_angles = calculate_target_joints(robot_id, robot_cfg, target_pos)
@@ -654,7 +711,7 @@ def run_episode(
             # 阶段 E：读取末端位置，计算它离悬停目标还差多远。
             ee_pos = get_link_position(robot_id, robot_cfg["ee_link_index"])
             distance_to_target = euclidean_distance(ee_pos, target_pos)
-            block_pos = get_object_position(block_id)
+            block_pos = get_object_position(target_block_id)
             final_distance = distance_to_target
             final_block_pos = block_pos
             final_target_pos = target_pos
@@ -709,7 +766,7 @@ def run_episode(
                     step_idx=step_idx,
                     random_seed=random_seed,
                     image_path=image_path,
-                    instruction=dataset_cfg["instruction"],
+                    instruction=instruction,
                     action=action,
                     camera_eye=camera_eye,
                     block_pos=block_pos,
@@ -739,11 +796,14 @@ def run_episode(
             final_block_pos=final_block_pos,
             final_target_pos=final_target_pos,
             final_ee_pos=final_ee_pos,
+            task_instruction=instruction,
+            target_block=target_block,
         )
     finally:
-        # 无论 episode 正常结束还是中途报错，都尽量清理当前积木。
-        if block_id is not None:
-            p.removeBody(block_id)
+        # 无论 episode 正常结束还是中途报错，都尽量清理当前两个积木。
+        for block_id in (red_block_id, blue_block_id):
+            if block_id is not None:
+                p.removeBody(block_id)
 
 
 def main():
@@ -777,6 +837,8 @@ def main():
                 episode_idx=episode_idx,
                 random_seed=random_seed,
                 error=repr(exc),
+                task_instruction=None,
+                target_block=None,
             )
 
     p.disconnect()

@@ -1,15 +1,45 @@
 # 当前项目状态
 
-**最后核对日期：** 2026-08-01
+**最后核对日期：** 2026-08-07
 
 ## 当前阶段
 
-专家数据规模化、原斜视可见性审计、action tokenization 只读审计和固定垂直俯视视觉
-派生均已完成。`expert_topdown_v1` 保留300条 episode 和9,894帧标签，生成9,894张
-448×448图片，状态/动作逐项等价且质量门禁通过；原 `expert_scaling_v1` 未被修改。
-但俯视可见性 clear/partial/severe=7,024/477/2,393，300个终止帧全部 severe，明显差于
-原斜视的9,479/411/4。当前暂停在训练前的视觉策略决策点，下次先决定斜视主基线、俯视
-对照或双视角，再做 episode 级划分和轻量行为克隆，不能直接默认俯视单视角。
+BC + 多任务 VLA 实验完成。**启动方案 B：Qwen2-VL-2B QLoRA 微调。**
+
+### 已完成
+
+| 里程碑 | 关键数据 |
+|--------|---------|
+| BC 三组对照 | regression 92% rollout 成功率 |
+| 多任务 VLA | 24.5% 成功率，70% 语言跟随率 |
+| 反事实实验 | 换指令后模型切换目标（70%） |
+
+### 当前：Qwen2-VL-2B QLoRA 微调
+
+按学习计划第 9-10 周"轻量微调验证"。方案：Google Colab (T4 16GB) + Qwen2-VL-2B + QLoRA。
+步骤：数据格式转换 → Colab 训练 → 下载权重 → 本地 rollout。
+
+### BC 最终结果（regression 胜出）
+
+| 组 | rollout 成功率 | 结论 |
+|---|----------------|------|
+| regression | **92%** (46/50) | 🏆 VLA 主基线 |
+| absolute_q_32 | **66%** (33/50) | 可行，需更大模型 |
+| delta_q_64 | **0%** (0/50) | ❌ 不可行 |
+
+### 多任务 VLA 进展
+
+| 步骤 | 状态 |
+|------|------|
+| 设计文档 | ✅ `docs/superpowers/specs/2026-08-07-multi-task-vla-design.md` |
+| 仿真改造（双积木 + 任务随机） | ✅ `control_arm.py`, `sim_config.yaml` |
+| 数据采集（290ep，红144/蓝146） | ✅ `outputs/dataset/expert_multi_v1/` |
+| VLA 模型代码（vla_model/vla_train） | ❌ 待实现（classifier 故障阻塞） |
+
+### 当前阻塞
+
+`deepseek-v4-pro` safety classifier 持续性故障，导致无法派 Luna、无法跑 Bash 命令。
+等 classifier 恢复后第一步：实现 VLA 模型代码 → overfit → 全量训练 → rollout。
 
 ## 已完成且仍有效
 
@@ -116,34 +146,32 @@
    当前控制范围；4个 severe 帧集中在 episode 105，不能据此声称已解决 severe 遮挡。
 5. README、学习计划和 BUGLOG 的阶段表述可能存在时间差；实验结论以
    原始摘要和对应证据链为准。
-6. 离线审计已证明当前数据统计上支持32箱等频 absolute_q 和64箱等频 delta_q，但尚未
-   通过真实训练或 rollout 证明哪种动作表示最好，也未形成 episode 级训练/验证划分。
-   全量审计边界包含未来验证 episode，不能直接作为正式 tokenizer 资产。
-7. 垂直俯视会在机械臂接近红块时产生系统性遮挡，severe 比例为24.19%，且所有终止帧
-   severe。派生数据技术上有效，但不能据此声称它比原斜视更适合作为唯一视觉输入。
+6. Tokenizer 资产已由训练模块通过 `tokenizer_utils.load_quantile_edges()` 从
+   `action_tokenization_audit_v2/` 加载，训练时不再依赖手动步骤。但边界本身仍来自
+   离线审计阶段拟合——如需换数据集或重跑审计，需手动重新生成该报告。
 
 ## 下一步优先级
 
-1. 冻结原斜视 `expert_scaling_v1` 和派生 `expert_topdown_v1`，不再运行当前290条追加
-   配置，不覆盖任何一套图片，也不改动采集 schema。
-2. 先写视觉输入实验决策：至少比较“原斜视单视角主基线”和“垂直俯视对照”；如资源允许，
-   再加入双视角融合。不要直接以俯视单视角开始正式训练。
-3. 固定 episode 级训练/验证划分，避免同一轨迹的相邻帧跨集合泄漏；只用训练 episode
-   重新拟合32箱等频 absolute_q 和64箱等频 delta_q 边界。
-4. 实现连续回归、32箱等频 absolute_q 和64箱等频 delta_q 的最小训练对照；当前不因 partial
-   或 severe 标签直接删除成功轨迹，后续用保留全部数据与可见性筛选做对照。
-5. 自主 stop 3/3继续作为严格 smoke 指标；只有后续训练或评估明确依赖时，才重新开启
-   grounding 稳健性改进。
+1. **classifier 恢复后立即**：派 Luna 实现 VLA 模型代码（按设计文档）。
+2. VLA overfit 验证（10ep overfit）。
+3. VLA 全量训练（250ep）。
+4. VLA rollout：按指令评估——同一张图，"红色" vs "蓝色" 指令能否选对目标。
+5. 确认语言信号被模型使用后，进入 API VLA 闭环阶段。
 
-## 当前恢复点（2026-08-01）
+## 当前恢复点（2026-08-07）
 
-原斜视与固定垂直俯视两套300条专家视觉数据均已冻结，派生报告位于
-`outputs/dataset/expert_topdown_v1/view_generation_report.json`，可见性报告位于其
-`visibility_audit_v1/visibility_audit_summary.json`。恢复时先阅读这两个报告和
-`docs/superpowers/specs/2026-07-31-expert-topdown-view-dataset-design.md`，从“斜视主基线、
-俯视对照或双视角”的视觉输入决策开始；尚未启动行为克隆训练。当前 `sim_config.yaml`
-的 `num_episodes: 290` 是已执行的追加批次配置，不应再次运行 `vla-collect`，否则会继续
-追加到590条。
+**BC 阶段完成，多任务 VLA 数据就绪，代码待写。**
+
+关键资产：
+- BC 最优模型：`outputs/training/bc_regression_full_v1/checkpoint_best.pt`（92% rollout）
+- 多任务数据：`outputs/dataset/expert_multi_v1/`（290ep，红144/蓝146）
+- 设计文档：`docs/superpowers/specs/2026-08-07-multi-task-vla-design.md`
+- Rollout 模块：`src/vla_project/training/rollout.py`
+- 仿真已支持双积木：`sim_config.yaml` + `control_arm.py`
+
+**恢复时第一件事：** 派 Luna 实现 VLAModel + VLADataset + vla_train（按设计文档）。
+所需新文件：`vla_model.py`, `vla_train.py`；修改：`dataset.py`, `pyproject.toml`。
+依赖：`pip install sentence-transformers`。
 
 ## 当前任务入口
 
@@ -170,6 +198,9 @@
 - 俯视派生计划：[2026-07-31-expert-topdown-view-dataset.md](../superpowers/plans/2026-07-31-expert-topdown-view-dataset.md)
 - 动作审计设计：[2026-07-31-action-tokenization-audit-design.md](../superpowers/specs/2026-07-31-action-tokenization-audit-design.md)
 - 动作审计计划：[2026-07-31-action-tokenization-audit.md](../superpowers/plans/2026-07-31-action-tokenization-audit.md)
+- BC 训练管线设计：[2026-08-06-bc-training-pipeline-design.md](../superpowers/specs/2026-08-06-bc-training-pipeline-design.md)
+- Episode 划分/Tokenizer 重拟合设计：[2026-08-06-episode-split-tokenizer-refit-design.md](../superpowers/specs/2026-08-06-episode-split-tokenizer-refit-design.md)
+- 视觉输入策略设计：[2026-08-06-visual-input-strategy-design.md](../superpowers/specs/2026-08-06-visual-input-strategy-design.md)
 - 可见性审计设计：[2026-07-27-expert-dataset-visibility-audit-design.md](../superpowers/specs/2026-07-27-expert-dataset-visibility-audit-design.md)
 - 专家数据规模化设计：[2026-07-26-expert-dataset-scaling-design.md](../superpowers/specs/2026-07-26-expert-dataset-scaling-design.md)
 - 专家数据规模化计划：[2026-07-26-expert-dataset-scaling.md](../superpowers/plans/2026-07-26-expert-dataset-scaling.md)

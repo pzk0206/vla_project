@@ -44,7 +44,8 @@ robot:
 
 # 5. 数据集采集配置：
 dataset:
-  output_dir: "outputs/dataset/expert_scaling_v1"  # 新版专家数据独立写入版本化子目录。
+  output_dir: "outputs/dataset/expert_multi_v1"  # 新版专家数据独立写入版本化子目录。
+  task_selection: "random"                      # 每条轨迹随机选择悬停红块或蓝块。
   jsonl_name: "trajectory_expert.jsonl"  # 训练标签文件，一行对应一张图片。
   summary_jsonl_name: "episode_summary.jsonl"  # 每条轨迹的诊断摘要，一行对应一个 episode。
   schema_version: "expert_v1"        # 单帧、摘要和 manifest 共用的 schema 版本。
@@ -75,6 +76,20 @@ task:
   initial_settle_steps: 30           # 积木加载后先让物理稳定一小段时间，避免未落稳就开始录制。
   stuck_window_steps: 120            # 最近多少个 step 用来判断机械臂是否卡住。
   stuck_min_improvement: 0.0005      # 在窗口期内如果总改善小于该值，就认为基本没有继续靠近目标。
+
+  second_block:
+    enabled: true
+    color_rgba: [0, 0, 1, 1]
+    x_range: [0.05, 0.2]
+    y_range: [0.40, 0.50]
+    z: 0.1
+    global_scaling: 0.1
+
+  tasks:
+    - instruction: "悬停在红色积木上方"
+      target_block: "red"
+    - instruction: "悬停在蓝色积木上方"
+      target_block: "blue"
 
 # 7. 摄像机配置：
 camera:
@@ -200,3 +215,29 @@ grounding_smoke:
     seed_range: [55, 100]            # 与既有校准、验证及首轮失败 seeds 隔离。
     directions: ["left", "right", "front"]
     max_pose_error: 0.005            # 起点姿态误差最多允许 5mm。
+
+# —— BC 训练 ——
+training:
+  # 数据
+  dataset_dir: "outputs/dataset/expert_scaling_v1"
+  split_file: "episode_split.json"             # vla-split-episodes 的输出
+  tokenizer_audit_dir: "action_tokenization_audit_v2"  # 训练集重拟合后的边界
+
+  # 图像
+  image_width: 224
+  image_height: 224
+
+  # 动作表示: regression | absolute_q_32 | delta_q_64
+  action_representation: "regression"
+
+  # 优化器
+  batch_size: 32
+  learning_rate: 0.0001
+  weight_decay: 0.0001
+  epochs: 50
+
+  # Overfit 验证（设为 >0 时只用前 N 个训练 episode）
+  overfit_episodes: 0
+
+  # 输出
+  output_dir: "outputs/training"

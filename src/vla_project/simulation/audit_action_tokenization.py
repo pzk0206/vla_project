@@ -552,8 +552,12 @@ def _publish_success(output_dir, frame_rows, summary):
             raise
 
 
-def run_action_tokenization_audit(dataset_dir, output_dir=None):
-    """运行全量只读动作审计并原子发布结果。"""
+def run_action_tokenization_audit(dataset_dir, output_dir=None, episode_ids=None):
+    """运行全量只读动作审计并原子发布结果。
+
+    episode_ids: 可选，int 列表。提供时只用这些 episode 拟合分箱边界；
+        其他 episode 的帧仍参与统计但分箱边界不由它们决定。
+    """
     dataset_dir = Path(dataset_dir)
     output_dir = (
         Path(output_dir)
@@ -564,6 +568,16 @@ def run_action_tokenization_audit(dataset_dir, output_dir=None):
         manifest, trajectories, visibility, inputs = load_audit_inputs(
             dataset_dir
         )
+        if episode_ids is not None:
+            episode_set = set(episode_ids)
+            trajectories = [
+                r for r in trajectories
+                if r.get("episode_idx") in episode_set
+            ]
+            visibility = [
+                r for r in visibility
+                if r.get("episode_idx") in episode_set
+            ]
         frame_rows = build_frame_analysis(
             manifest,
             trajectories,
@@ -581,13 +595,28 @@ def run_action_tokenization_audit(dataset_dir, output_dir=None):
             **statistics,
             "candidates": candidates,
             "recommendations": recommendations,
+            "boundary_fit_episodes": (
+                len(episode_ids)
+                if episode_ids is not None
+                else statistics.get("num_episodes", 0)
+            ),
             "limitations": {
                 "delta_q_is_saved_target_difference": True,
-                "boundaries_are_exploratory_full_dataset_fits": True,
+                "boundaries_are_exploratory_full_dataset_fits": (
+                    episode_ids is None
+                ),
                 "training_or_rollout_validation_completed": False,
             },
             "passed": True,
         }
+        if episode_ids is not None:
+            summary["split"] = {
+                "boundary_fit_episode_count": len(episode_ids),
+                "note": (
+                    "分箱边界仅由 boundary_fit_episode_count 个 episode 拟合；"
+                    "验证集 episode 不参与边界拟合。"
+                ),
+            }
         _publish_success(output_dir, frame_rows, summary)
     except Exception as exc:
         _write_failure(dataset_dir, exc)
@@ -605,10 +634,25 @@ def main():
     )
     parser.add_argument("--dataset-dir", default=DEFAULT_DATASET_DIR)
     parser.add_argument("--output-dir")
+    parser.add_argument(
+        "--episode-ids-file",
+        help="episode_split.json 路径；提供时只用其 train 列表拟合分箱边界",
+    )
     args = parser.parse_args()
+    episode_ids = None
+    if args.episode_ids_file:
+        split_doc = json.loads(
+            Path(args.episode_ids_file).read_text(encoding="utf-8")
+        )
+        episode_ids = split_doc.get("train")
+        if not isinstance(episode_ids, list) or not episode_ids:
+            raise ValueError(
+                "episode_split.json 缺少 train 列表或列表为空"
+            )
     summary = run_action_tokenization_audit(
         args.dataset_dir,
         args.output_dir,
+        episode_ids=episode_ids,
     )
     recommendations = summary["recommendations"]
     print(
@@ -619,10 +663,6 @@ def main():
         f"absolute={recommendations['absolute_q']['status']}，"
         f"delta={recommendations['delta_q']['status']}"
     )
-
-
-if __name__ == "__main__":
-    main()
 
 
 def build_frame_analysis(manifest, trajectory_rows, visibility_rows):
@@ -702,3 +742,7 @@ def build_frame_analysis(manifest, trajectory_rows, visibility_rows):
         )
     _validate_episode_termination(output)
     return output
+
+
+if __name__ == "__main__":
+    main()

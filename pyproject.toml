@@ -13,6 +13,7 @@ vla-audit-action-tokenization = "vla_project.simulation.audit_action_tokenizatio
 vla-audit-dataset-visibility = "vla_project.simulation.audit_dataset_visibility:main"
 vla-render-expert-dataset-view = "vla_project.simulation.render_expert_dataset_view:main"
 vla-evaluate-dataset = "vla_project.simulation.evaluate_dataset:main"
+vla-split-episodes = "vla_project.simulation.split_episodes:main"
 vla-probe = "vla_project.simulation.stage3_probe:main"
 vla-evaluate-probe = "vla_project.simulation.evaluate_probe:main"
 vla-collect-vlm-samples = "vla_project.vlm.collect_vlm_eval_samples:main"
@@ -24,6 +25,10 @@ vla-validate-grounding-calibration = "vla_project.vlm.validate_grounding_calibra
 vla-migrate-generated-outputs = "vla_project.tools.migrate_generated_outputs:main"
 vla-run-grounding-smoke = "vla_project.vlm.grounding_smoke.runner:main"
 vla-screen-grounding-smoke = "vla_project.vlm.grounding_smoke.screening:main"
+vla-train-bc = "vla_project.training.train:main"
+vla-rollout = "vla_project.training.rollout:main"
+vla-train = "vla_project.training.vla_train:main"
+vla-convert-qwen = "vla_project.training.convert_to_qwen_format:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
