@@ -359,6 +359,39 @@ def get_object_position(obj_id):
     return position
 
 
+def capture_scene_state(
+    robot_id,
+    robot_config,
+    block_ids,
+    camera_eye,
+    target_block,
+):
+    """只读捕获确定性重放所需的双积木、机器人和相机状态。"""
+    blocks = {}
+    for color in ("red", "blue"):
+        position, orientation = p.getBasePositionAndOrientation(block_ids[color])
+        blocks[color] = {
+            "position": list(position),
+            "orientation": list(orientation),
+        }
+    joint_states = [
+        p.getJointState(robot_id, joint)
+        for joint in range(robot_config["controlled_joints"])
+    ]
+    return {
+        "target_block": target_block,
+        "blocks": blocks,
+        "robot": {
+            "joint_positions": [state[0] for state in joint_states],
+            "joint_velocities": [state[1] for state in joint_states],
+            "ee_position": list(
+                get_link_position(robot_id, robot_config["ee_link_index"])
+            ),
+        },
+        "camera_eye": list(camera_eye),
+    }
+
+
 def get_hover_target(block_id, hover_height):
     """生成位于积木正上方的安全悬停目标点。
 
@@ -538,6 +571,7 @@ def write_dataset_step(
     ee_pos,
     distance_to_target,
     termination_reason,
+    scene_state=None,
 ):
     """写入单帧 VLA 数据，保留调试所需的关键状态。
 
@@ -549,6 +583,19 @@ def write_dataset_step(
     - distance_to_target: 用来判断轨迹是否真的在接近目标。
     - termination_reason: 当前帧对应的结束原因，便于区分成功、卡住或跑满步数。
     """
+    if schema_version == "expert_multi_v2":
+        if not isinstance(scene_state, dict):
+            raise ValueError("expert_multi_v2 requires scene_state")
+        target_block = scene_state.get("target_block")
+        target_state = scene_state.get("blocks", {}).get(target_block)
+        if not isinstance(target_state, dict) or not np.allclose(
+            target_state.get("position", []),
+            block_pos,
+            rtol=0.0,
+            atol=1e-6,
+        ):
+            raise ValueError("block_pos does not match scene_state target")
+
     step_data = {
         "schema_version": schema_version,
         "episode_idx": episode_idx,
@@ -564,6 +611,8 @@ def write_dataset_step(
         "distance_to_target": distance_to_target,
         "termination_reason": termination_reason,
     }
+    if scene_state is not None:
+        step_data["scene_state"] = scene_state
     with open(jsonl_path, "a", encoding="utf-8") as jsonl_file:
         jsonl_file.write(json.dumps(step_data, ensure_ascii=False) + "\n")
 
@@ -585,8 +634,15 @@ def write_episode_summary(
     final_ee_pos,
     task_instruction=None,
     target_block=None,
+    initial_scene_state=None,
+    final_scene_state=None,
 ):
     """为每条轨迹写一行摘要，方便快速审计数据集质量。"""
+    if schema_version == "expert_multi_v2" and (
+        not isinstance(initial_scene_state, dict)
+        or not isinstance(final_scene_state, dict)
+    ):
+        raise ValueError("expert_multi_v2 requires initial/final scene_state")
     summary = {
         "schema_version": schema_version,
         "episode_idx": episode_idx,
@@ -604,6 +660,10 @@ def write_episode_summary(
         "task_instruction": task_instruction,
         "target_block": target_block,
     }
+    if initial_scene_state is not None:
+        summary["initial_scene_state"] = initial_scene_state
+    if final_scene_state is not None:
+        summary["final_scene_state"] = final_scene_state
     with open(summary_jsonl_path, "a", encoding="utf-8") as summary_file:
         summary_file.write(json.dumps(summary, ensure_ascii=False) + "\n")
 

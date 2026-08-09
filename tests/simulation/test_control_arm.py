@@ -458,6 +458,140 @@ class DatasetRunContractTests(unittest.TestCase):
                 )
 
 
+class SceneStateTests(unittest.TestCase):
+    """保护确定性重放需要的完整双积木动态状态。"""
+
+    def make_scene_state(self, target_block="blue"):
+        return {
+            "target_block": target_block,
+            "blocks": {
+                "red": {
+                    "position": [-0.15, 0.40, 0.05],
+                    "orientation": [0.0, 0.0, 0.0, 1.0],
+                },
+                "blue": {
+                    "position": [0.15, 0.40, 0.05],
+                    "orientation": [0.0, 0.0, 0.0, 1.0],
+                },
+            },
+            "robot": {
+                "joint_positions": [0.1 * index for index in range(7)],
+                "joint_velocities": [0.01 * index for index in range(7)],
+                "ee_position": [0.0, 0.4, 0.2],
+            },
+            "camera_eye": [1.05, 0.4, 1.65],
+        }
+
+    @patch(
+        "vla_project.simulation.control_arm.get_link_position",
+        return_value=(0.0, 0.4, 0.2),
+    )
+    @patch("vla_project.simulation.control_arm.p.getJointState")
+    @patch("vla_project.simulation.control_arm.p.getBasePositionAndOrientation")
+    def test_capture_reads_both_blocks_robot_and_camera(
+        self,
+        get_base_pose,
+        get_joint_state,
+        _get_link_position,
+    ):
+        get_base_pose.side_effect = {
+            10: ((-0.15, 0.40, 0.05), (0.0, 0.0, 0.0, 1.0)),
+            11: ((0.15, 0.40, 0.05), (0.0, 0.0, 0.0, 1.0)),
+        }.get
+        get_joint_state.side_effect = lambda _robot, joint: (
+            0.1 * joint,
+            0.01 * joint,
+            0.0,
+            0.0,
+        )
+
+        state = control_arm.capture_scene_state(
+            robot_id=3,
+            robot_config={"controlled_joints": 7, "ee_link_index": 6},
+            block_ids={"red": 10, "blue": 11},
+            camera_eye=[1.05, 0.4, 1.65],
+            target_block="blue",
+        )
+
+        self.assertEqual(state, self.make_scene_state())
+
+    def test_v2_frame_rejects_missing_scene_state(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaisesRegex(ValueError, "scene_state"):
+                control_arm.write_dataset_step(
+                    jsonl_path=Path(temp_dir) / "trajectory.jsonl",
+                    schema_version="expert_multi_v2",
+                    episode_idx=0,
+                    step_idx=0,
+                    random_seed=1000,
+                    image_path="ep_0_step_0.jpg",
+                    instruction="悬停在蓝色积木上方",
+                    action=[0.0] * 7 + [1.0, 0],
+                    camera_eye=[1.05, 0.4, 1.65],
+                    block_pos=[0.15, 0.40, 0.05],
+                    target_pos=[0.15, 0.40, 0.20],
+                    ee_pos=[0.0, 0.4, 1.26],
+                    distance_to_target=1.0,
+                    termination_reason="running",
+                )
+
+    def test_v2_frame_writes_complete_scene_state(self):
+        state = self.make_scene_state()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "trajectory.jsonl"
+            control_arm.write_dataset_step(
+                jsonl_path=path,
+                schema_version="expert_multi_v2",
+                episode_idx=0,
+                step_idx=0,
+                random_seed=1000,
+                image_path="ep_0_step_0.jpg",
+                instruction="悬停在蓝色积木上方",
+                action=[0.0] * 7 + [1.0, 0],
+                camera_eye=[1.05, 0.4, 1.65],
+                block_pos=[0.15, 0.40, 0.05],
+                target_pos=[0.15, 0.40, 0.20],
+                ee_pos=[0.0, 0.4, 1.26],
+                distance_to_target=1.0,
+                termination_reason="running",
+                scene_state=state,
+            )
+
+            row = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(row["scene_state"], state)
+
+    def test_v2_summary_writes_initial_and_final_scene_state(self):
+        initial = self.make_scene_state()
+        final = self.make_scene_state()
+        final["robot"]["ee_position"] = [0.15, 0.40, 0.20]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "summary.jsonl"
+            control_arm.write_episode_summary(
+                summary_jsonl_path=path,
+                schema_version="expert_multi_v2",
+                episode_idx=0,
+                random_seed=1000,
+                initial_ee_pos=[0.0, 0.0, 1.261],
+                initial_block_pos=[0.15, 0.40, 0.05],
+                num_steps=25,
+                num_frames=2,
+                final_distance=0.01,
+                termination_reason="success",
+                camera_eye=[1.05, 0.4, 1.65],
+                final_block_pos=[0.15, 0.40, 0.05],
+                final_target_pos=[0.15, 0.40, 0.20],
+                final_ee_pos=[0.15, 0.40, 0.19],
+                task_instruction="悬停在蓝色积木上方",
+                target_block="blue",
+                initial_scene_state=initial,
+                final_scene_state=final,
+            )
+
+            row = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(row["initial_scene_state"], initial)
+            self.assertEqual(row["final_scene_state"], final)
+
+
 class EpisodeReproducibilityTests(unittest.TestCase):
     """保护独立复位、确定性 seed 和 expert_v1 写入契约。"""
 
