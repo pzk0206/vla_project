@@ -4,11 +4,11 @@
 
 ## 当前阶段
 
-正在隔离分支 `fix/vla-data-integrity` 按顺序修复数据与实验完整性问题；在安全修复、
-delta 标签、数据重采集、确定性 rollout 和成对反事实评估完成前，**不继续
-Qwen2-VL QLoRA，不运行真实采集或训练**。
+目录删除、覆盖和路径逃逸安全阶段已经完成，当前进入 **delta 标签语义修复与数据集
+语义测试**。在 delta 修复、数据重采集、确定性 rollout 和成对反事实评估完成前，
+**不继续 Qwen2-VL QLoRA**。
 
-### 2026-08-09 暂停恢复点
+### 2026-08-09 目录安全完成点
 
 - 工作树：`/home/pzk/vla_project/.worktrees/vla-data-integrity`
 - 已完成提交：
@@ -17,18 +17,14 @@ Qwen2-VL QLoRA，不运行真实采集或训练**。
   - `6915498`：VLM 样本 staging 校验后原子发布。
   - `a4fd0d0`：动作审计、可见性审计和派生数据输出边界。
   - `9540e2b`：Probe 与 grounding smoke 运行名路径逃逸。
-- 已验证证据：上述阶段分别通过18、23、23、60、56项定向/组合测试；未调用真实采集、
-  GPU 训练或付费 API。
-- 当前未提交工作：训练/rollout 四入口的输出预校验、三个可续跑 VLM 评估入口、
-  grounding backprojection/calibration 编排入口及相应测试。现有定向结果为训练边界
-  5/5、三类 VLM 17/17、backprojection/calibration 18/18 通过。
-- 精确续做点：`tests/simulation/test_stage3_probe.py` 已加入
-  `OutputBoundaryTests.test_rejects_output_escape_before_connecting_physics`，旧实现因
-  `run_probe_episode()` 尚无 `project_root_override` 参数而红灯。刚才尝试修改
-  `stage3_probe.py` 和 `evaluate_probe.py` 的补丁未应用成功；恢复时应先重新实施这两个
-  文件的最小修复，再运行 `tests.simulation.test_stage3_probe`。
-- 工作树内还有未提交修改，恢复前先运行 `git status --short`；不要丢弃它们，也不要触碰
-  主工作树中用户修改的 `notebooks/qwen2_vl_qlora_vla.ipynb`。
+  - `ff7eaff`：训练、rollout、单次 Probe 和剩余 VLM CLI 输出边界。
+- 攻击输入与发布恢复回归：187/187通过；新增/修改入口组合回归：87/87通过。
+- 完整回归：303项中300项通过、3项失败，恰好是修复前已记录的两个配置契约和一个
+  package CLI 元数据不一致，没有新增失败。
+- `compileall -q src tests` 和 `git diff --check` 通过；全程未运行真实采集、GPU 训练或
+  付费 API。
+- 工作树在实现提交后为 clean；继续工作前仍应检查状态，并且不要触碰主工作树中用户修改
+  的 `notebooks/qwen2_vl_qlora_vla.ipynb`。
 - 已知全量基线并非全绿：安全修复开始前为253项测试、3项失败（两个配置契约仍期待
   `expert_scaling`，以及 package CLI 元数据不一致）。这些属于后续工程一致性修复，不能
   报告为当前回归通过。
@@ -45,12 +41,12 @@ Qwen2-VL QLoRA，不运行真实采集或训练**。
 
 ### 后续顺序
 
-1. 完成所有输出目录/路径逃逸修复并收口测试与文档。
-2. 修复 delta 标签语义、补数据集语义测试、废弃并重训旧 delta checkpoint。
-3. 调整红蓝块无碰撞采样、保存完整双积木状态，采集300条通过质量门禁的数据。
-4. 按 episode seed 和保存位姿确定性复现 VLA rollout。
-5. 实现成对反事实评估，生成可审计结果后再决定是否恢复70%结论。
-6. 补齐训练测试、依赖、CLI 元数据、notebook 输出和项目文档，最后继续 QLoRA。
+1. **当前：**修复 delta 标签语义、补数据集语义测试，并把旧 delta checkpoint 标记为
+   已废弃；代码与 CPU 测试完成前不启动重训。
+2. 调整红蓝块无碰撞采样、保存完整双积木状态，采集300条通过质量门禁的数据。
+3. 按 episode seed 和保存位姿确定性复现 VLA rollout。
+4. 实现成对反事实评估，生成可审计结果后再决定是否恢复70%结论。
+5. 补齐训练测试、依赖、CLI 元数据、notebook 输出和项目文档，最后继续 QLoRA。
 
 ## 2026-08-07 历史状态（以下不作为当前决策依据）
 

@@ -1591,3 +1591,26 @@ Stage 3 和相关组合回归。
 
 实验结论同步收紧：继续采用斜视图；旧 delta 0% 不能证明 delta 不可行；旧多任务成功率
 只能描述旧数据；70%语言跟随率在正式成对、确定性反事实评估前暂停引用。
+
+## 43. 输出目录安全阶段完成 (2026-08-09)
+
+恢复后完成了单次 Stage 3 Probe 的红测：旧实现会先连接 PyBullet，再复用目录并删除旧
+trace；现在输出路径在连接仿真前验证，非空旧目录拒绝复用。批量 Probe 通过受信的
+`outputs/probe_evaluations/` 根调用同一控制函数，不放宽到任意文件系统路径。
+
+随后完成训练、rollout、grounding diagnose/offline/ground-then-decide、反投影和校准
+CLI 的输出预校验，提交为 `ff7eaff`。共享输出模块支持“默认必须为子目录；只有明确调用
+时可接受受管根本身”，即使允许根本身也仍拒绝非空旧证据。
+
+最终验证证据：
+
+- 攻击输入、符号链接逃逸、旧证据恢复和原子发布回归：187/187通过。
+- 当前批次涉及的共享路径、训练、rollout、Probe 和 VLM 组合测试：87/87通过。
+- 完整 `unittest discover` 共303项：300项通过，只有修复前已有的3项失败；分别是
+  `sim_config.yaml` 已切到 `expert_multi_v1` 而两个旧测试仍期待 `expert_scaling_v1`，
+  以及已安装 distribution 的 console scripts 与仓库元数据不一致。
+- `compileall -q src tests` 与 `git diff --check` 通过。
+- 没有运行真实数据采集、GPU 训练或付费 API。
+
+至此目录删除、覆盖和路径逃逸阶段收口。下一步严格先修 delta 标签生成与数据集语义
+测试；旧 delta checkpoint 只做废弃标记，等实现与 CPU 验证完成后才安排重训。
