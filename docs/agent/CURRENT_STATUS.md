@@ -5,8 +5,8 @@
 ## 当前阶段
 
 目录安全、delta 代码语义修复和 delta v2 checkpoint 重训已经完成；双积木 v2 的代码、
-schema 与质量门禁也已完成，真实10条 pilot 已通过，当前处于**追加290条 scale 采集前门禁**。在数据重采集、
-确定性 rollout 和成对反事实评估完成前，
+schema 与质量门禁也已完成，真实300条数据通过 scale gate。当前进入**确定性 VLA rollout
+与成对反事实评估**。在成对反事实评估完成前，
 **不继续 Qwen2-VL QLoRA**。
 
 ### 2026-08-09 目录安全完成点
@@ -48,10 +48,9 @@ schema 与质量门禁也已完成，真实10条 pilot 已通过，当前处于*
    9.626452（epoch 30）。两个 checkpoint 均保存 v2 语义、split 哈希和完整 tokenizer。
    新 best checkpoint 的50条 rollout 为0/50，平均/中位最终距离0.9454/0.9665m；旧 v1
    产物继续保留但废弃。
-2. **当前：**无碰撞同分布采样、完整双积木状态和 v2 evaluator 已实现。真实 pilot 为
-   10/10 success、红蓝5/5、330帧，所有完整性错误为0；最小轴向间距0.120001m，最大
-   XY漂移0.0000424m，`active_gate=pilot`、`passed=true`。下一步只追加290条。
-3. 按 episode seed 和保存位姿确定性复现 VLA rollout。
+2. **已完成：**`expert_multi_v2` 为300/300 success、红蓝150/150、9,826帧/图片；所有
+   完整性错误为0，间距和漂移门禁通过，`active_gate=scale`、`passed=true`。
+3. **当前：**基于 v2 数据重训，并按 episode seed 和保存位姿确定性复现 VLA rollout。
 4. 实现成对反事实评估，生成可审计结果后再决定是否恢复70%结论。
 5. 补齐训练测试、依赖、CLI 元数据、notebook 输出和项目文档，最后继续 QLoRA。
 

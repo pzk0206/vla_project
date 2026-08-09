@@ -1712,3 +1712,21 @@ episode 0–9（seeds 1000–1009）全部成功，红蓝任务5/5，共330帧�
 错误均为0。初始积木最小轴向间距 min/mean/median/max 为
 0.120001/0.214267/0.234666/0.304340m；逐帧XY漂移最大值为0.000042354m，远低于0.005m
 上限。下一步只在该 manifest 与10条摘要哈希复核通过后追加 episode 10–299。
+
+## 50. expert_multi_v2 300条 Scale 数据 (2026-08-09)
+
+pilot 报告、episode 0–9、seeds 1000–1009、目标规模300和共用 pair sampling 全部复核后，
+只追加 episode 10–299。最终300个唯一 episode 对应300个唯一 seeds 1000–1299，全部成功；
+红蓝任务严格150/150，共9,826个唯一帧键和9,826张 JPEG。
+
+scale gate 为 `passed=true`，14类 schema、动作、图片、重复键、seed、帧数、终止、完整
+scene state、目标一致性、重叠、漂移和孤儿图片计数全部为0。积木最小轴向间距
+min/mean/median/max 为0.120001/0.210862/0.201659/0.395737m；XY漂移最大值
+0.000043126m。最终距离 min/mean/median/max 为
+0.028316/0.029411/0.029407/0.029999m，每条帧数29/32.753/33/36。
+
+关键 SHA-256：manifest `9efb39d407dcafa255747f18690ed9d47d98836e7d4c7bc7e4a3e9643bce128a`，
+trajectory `8645e8bc935c2c64431b6ebe7c6ca48b096f7aabea06365fbb9b6c88c0d999cc`，
+summary `bde8007a58b922a3aa0b86c8a0a9ee7aa9517ab2b328d5d71ec94ee75e543d26`，
+quality report `e387d1997c4ffa99969ff27463884a6406367c1040d9874030df513ada4cb8d5`。
+该结果只证明数据契约与专家控制通过，不提前声明模型识别红蓝。
