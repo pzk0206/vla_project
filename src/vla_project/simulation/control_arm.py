@@ -49,6 +49,7 @@ MANIFEST_COMPATIBILITY_FIELDS = (
     "pair_sampling",
     "tasks",
     "second_block",
+    "hover_height",
 )
 
 
@@ -116,6 +117,7 @@ def build_dataset_manifest(config):
         "pair_sampling": task.get("pair_sampling"),
         "tasks": task.get("tasks"),
         "second_block": task.get("second_block"),
+        "hover_height": task.get("hover_height"),
     }
 
 

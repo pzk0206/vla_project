@@ -413,5 +413,210 @@ class EvaluateDatasetTests(unittest.TestCase):
                 self.assertTrue(gate["failed_checks"])
 
 
+class ExpertMultiV2Tests(unittest.TestCase):
+    def scene(self, target="red", red=None, blue=None, ee=None):
+        return {
+            "target_block": target,
+            "blocks": {
+                "red": {
+                    "position": red or [-0.15, 0.40, 0.05],
+                    "orientation": [0.0, 0.0, 0.0, 1.0],
+                },
+                "blue": {
+                    "position": blue or [0.15, 0.40, 0.05],
+                    "orientation": [0.0, 0.0, 0.0, 1.0],
+                },
+            },
+            "robot": {
+                "joint_positions": [0.0] * 7,
+                "joint_velocities": [0.0] * 7,
+                "ee_position": ee or [0.0, 0.0, 1.261],
+            },
+            "camera_eye": [1.05, 0.4, 1.65],
+        }
+
+    def manifest(self):
+        return {
+            "schema_version": "expert_multi_v2",
+            "action_dim": 9,
+            "random_seed": 1000,
+            "pilot_num_episodes": 2,
+            "target_num_episodes": 300,
+            "image_width": 224,
+            "image_height": 224,
+            "jsonl_name": "trajectory_expert.jsonl",
+            "summary_jsonl_name": "episode_summary.jsonl",
+            "pair_sampling": {
+                "min_axis_separation_xy": 0.12,
+                "max_episode_drift_xy": 0.005,
+            },
+            "tasks": [
+                {"instruction": "悬停在红色积木上方", "target_block": "red"},
+                {"instruction": "悬停在蓝色积木上方", "target_block": "blue"},
+            ],
+        }
+
+    def frame(self, episode_idx, target):
+        block = [-0.15, 0.40, 0.05] if target == "red" else [0.15, 0.40, 0.05]
+        instruction = f"悬停在{'红' if target == 'red' else '蓝'}色积木上方"
+        return {
+            "schema_version": "expert_multi_v2",
+            "episode_idx": episode_idx,
+            "step_idx": 0,
+            "random_seed": 1000 + episode_idx,
+            "image_path": f"ep_{episode_idx}_step_0.jpg",
+            "instruction": instruction,
+            "action": [0.0] * 7 + [1.0, 1],
+            "camera_eye": [1.05, 0.4, 1.65],
+            "block_pos": block,
+            "target_pos": [block[0], block[1], 0.20],
+            "ee_pos": [block[0], block[1], 0.19],
+            "distance_to_target": 0.01,
+            "termination_reason": "success",
+            "scene_state": self.scene(target=target),
+        }
+
+    def summary(self, episode_idx, target):
+        frame = self.frame(episode_idx, target)
+        state = frame["scene_state"]
+        return {
+            "schema_version": "expert_multi_v2",
+            "episode_idx": episode_idx,
+            "random_seed": 1000 + episode_idx,
+            "initial_ee_pos": [0.0, 0.0, 1.261],
+            "initial_block_pos": frame["block_pos"],
+            "num_steps": 1,
+            "num_frames": 1,
+            "final_distance": 0.01,
+            "termination_reason": "success",
+            "camera_eye": [1.05, 0.4, 1.65],
+            "final_block_pos": frame["block_pos"],
+            "final_target_pos": frame["target_pos"],
+            "final_ee_pos": frame["ee_pos"],
+            "task_instruction": frame["instruction"],
+            "target_block": target,
+            "initial_scene_state": state,
+            "final_scene_state": state,
+        }
+
+    def make_dataset(self, root, frames=None, summaries=None):
+        frames = frames or [self.frame(0, "red"), self.frame(1, "blue")]
+        summaries = summaries or [self.summary(0, "red"), self.summary(1, "blue")]
+        (root / "dataset_manifest.json").write_text(
+            json.dumps(self.manifest(), ensure_ascii=False), encoding="utf-8"
+        )
+        (root / "trajectory_expert.jsonl").write_text(
+            "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in frames),
+            encoding="utf-8",
+        )
+        (root / "episode_summary.jsonl").write_text(
+            "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in summaries),
+            encoding="utf-8",
+        )
+        for row in frames:
+            cv2.imwrite(
+                str(root / row["image_path"]),
+                np.zeros((224, 224, 3), dtype=np.uint8),
+            )
+
+    def test_valid_v2_dataset_reports_scene_metrics_and_balanced_pilot(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            self.make_dataset(root)
+            report = evaluate_dataset(root)
+
+        self.assertTrue(report["passed"])
+        self.assertEqual(report["task_counts"], {"red": 1, "blue": 1})
+        self.assertEqual(report["scene_state_error_count"], 0)
+        self.assertEqual(report["target_consistency_error_count"], 0)
+        self.assertEqual(report["block_overlap_error_count"], 0)
+        self.assertEqual(report["block_drift_error_count"], 0)
+        self.assertGreaterEqual(report["pair_min_axis_separation_stats"]["min"], 0.12)
+        self.assertLessEqual(report["block_xy_drift_stats"]["max"], 0.005)
+
+    def test_v2_scan_counts_scene_target_overlap_and_drift_errors(self):
+        frames = [self.frame(0, "red"), self.frame(1, "blue")]
+        summaries = [self.summary(0, "red"), self.summary(1, "blue")]
+        frames[0]["scene_state"]["blocks"].pop("blue")
+        frames[1]["instruction"] = "悬停在红色积木上方"
+        summaries[0]["initial_scene_state"]["blocks"]["blue"]["position"] = [-0.10, 0.40, 0.05]
+        summaries[1]["final_scene_state"] = self.scene(
+            target="blue", blue=[0.16, 0.40, 0.05]
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            self.make_dataset(root, frames, summaries)
+            report = evaluate_dataset(root)
+
+        self.assertFalse(report["passed"])
+        self.assertGreater(report["scene_state_error_count"], 0)
+        self.assertGreater(report["target_consistency_error_count"], 0)
+        self.assertGreater(report["block_overlap_error_count"], 0)
+        self.assertGreater(report["block_drift_error_count"], 0)
+
+    def test_v2_scene_rejects_nonfinite_pose_bad_quaternion_and_joint_shape(self):
+        corruptions = {
+            "nonfinite_position": lambda state: state["blocks"]["red"].update(
+                {"position": [float("nan"), 0.40, 0.05]}
+            ),
+            "nonunit_quaternion": lambda state: state["blocks"]["red"].update(
+                {"orientation": [0.0, 0.0, 0.0, 2.0]}
+            ),
+            "joint_shape": lambda state: state["robot"].update(
+                {"joint_positions": [0.0] * 6}
+            ),
+        }
+        for name, corrupt in corruptions.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                frames = [self.frame(0, "red"), self.frame(1, "blue")]
+                corrupt(frames[0]["scene_state"])
+                self.make_dataset(root, frames=frames)
+
+                report = evaluate_dataset(root)
+
+                self.assertGreater(report["scene_state_error_count"], 0)
+                self.assertFalse(report["passed"])
+
+    def gate_report(self, episodes, red, blue):
+        report = {
+            "num_episodes": episodes,
+            "success_count": episodes,
+            "valid_episode_count": episodes,
+            "success_rate": 1.0,
+            "task_counts": {"red": red, "blue": blue},
+            "block_position": {
+                "x_bin_counts": [60] * 5,
+                "y_bin_counts": [60] * 5,
+            },
+        }
+        for field in (
+            "schema_error_count", "action_dim_error_count", "missing_image_count",
+            "unreadable_image_count", "image_size_mismatch_count", "orphan_image_count",
+            "duplicate_step_key_count", "seed_error_count", "frame_count_mismatch_count",
+            "terminal_flag_error_count", "scene_state_error_count",
+            "target_consistency_error_count", "block_overlap_error_count",
+            "block_drift_error_count",
+        ):
+            report[field] = 0
+        return report
+
+    def test_v2_gates_require_exact_task_balance(self):
+        pilot_manifest = {**self.manifest(), "pilot_num_episodes": 10}
+        self.assertTrue(
+            evaluate_pilot_gate(self.gate_report(10, 5, 5), pilot_manifest)["passed"]
+        )
+        self.assertFalse(
+            evaluate_pilot_gate(self.gate_report(10, 6, 4), pilot_manifest)["passed"]
+        )
+        self.assertTrue(
+            evaluate_scale_gate(self.gate_report(300, 150, 150), self.manifest())["passed"]
+        )
+        self.assertFalse(
+            evaluate_scale_gate(self.gate_report(300, 151, 149), self.manifest())["passed"]
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

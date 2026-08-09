@@ -343,6 +343,7 @@ class DatasetRunContractTests(unittest.TestCase):
         )
         config["task"].update(
             {
+                "hover_height": 0.15,
                 "pair_sampling": {
                     "x_range": [-0.2, 0.2],
                     "y_range": [0.38, 0.5],
@@ -497,6 +498,7 @@ class DatasetRunContractTests(unittest.TestCase):
         self.assertEqual(manifest["pair_sampling"]["min_axis_separation_xy"], 0.12)
         self.assertEqual(manifest["tasks"][1]["target_block"], "blue")
         self.assertTrue(manifest["second_block"]["enabled"])
+        self.assertEqual(manifest["hover_height"], 0.15)
 
     def test_append_rejects_changed_pair_sampling_contract(self):
         config = self.make_multi_config()
