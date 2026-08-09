@@ -13,6 +13,7 @@ import cv2
 import numpy as np
 import pybullet as p
 
+from vla_project.output_paths import resolve_managed_output, validate_run_name
 from vla_project.vlm.collect_vlm_eval_samples import (
     build_balanced_ee_positions,
     reset_robot_to_target,
@@ -94,10 +95,22 @@ def _write_json(path, payload):
     )
 
 
-def _make_run_dir(output_root, run_name=None):
+def _make_run_dir(output_root, run_name=None, project_root_override=None):
     """创建不可覆盖的筛选运行目录。"""
-    name = run_name or datetime.now().strftime("run_%Y%m%d_%H%M%S")
-    path = Path(output_root) / name
+    name = validate_run_name(
+        run_name or datetime.now().strftime("run_%Y%m%d_%H%M%S")
+    )
+    managed_root = resolve_managed_output(
+        output_root,
+        allowed_root="outputs/vlm_evaluations",
+        project_root_override=project_root_override,
+        require_child=False,
+    )
+    path = resolve_managed_output(
+        managed_root / name,
+        allowed_root="outputs/vlm_evaluations",
+        project_root_override=project_root_override,
+    )
     path.mkdir(parents=True, exist_ok=False)
     return path
 
@@ -224,10 +237,14 @@ def run_candidate(config, seed, direction, candidate_dir):
     }
 
 
-def run_screening(config, run_name=None):
+def run_screening(config, run_name=None, project_root_override=None):
     """评估完整候选笛卡尔积并写确定性选择摘要。"""
     screening = config["grounding_smoke"]["screening"]
-    run_dir = _make_run_dir(screening["output_dir"], run_name)
+    run_dir = _make_run_dir(
+        screening["output_dir"],
+        run_name,
+        project_root_override=project_root_override,
+    )
     trace_path = run_dir / "candidate_trace.jsonl"
     candidates = []
 

@@ -7,11 +7,45 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from vla_project.simulation.evaluate_probe import (
     aggregate_probe_summaries,
     cleanup_success_images,
+    make_run_dir,
 )
+
+
+class RunDirectoryTests(unittest.TestCase):
+    def test_rejects_unsafe_run_names_before_creating_directories(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            output_root = root / "outputs/probe_evaluations"
+            for run_name in ("../escape", "a/b", "/tmp/escape"):
+                with self.subTest(run_name=run_name), patch.object(
+                    Path, "mkdir"
+                ) as mkdir:
+                    with self.assertRaises(ValueError):
+                        make_run_dir(
+                            output_root,
+                            run_name,
+                            project_root_override=root,
+                        )
+                    mkdir.assert_not_called()
+
+    def test_creates_safe_run_below_managed_root(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            output_root = root / "outputs/probe_evaluations"
+
+            created = make_run_dir(
+                output_root,
+                "run_fixed",
+                project_root_override=root,
+            )
+
+            self.assertEqual(created, output_root / "run_fixed")
+            self.assertTrue(created.is_dir())
 
 
 class AggregateTests(unittest.TestCase):

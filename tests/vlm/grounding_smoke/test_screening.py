@@ -10,6 +10,7 @@ import numpy as np
 
 import vla_project.vlm.grounding_smoke.screening
 from vla_project.vlm.grounding_smoke.screening import (
+    _make_run_dir,
     classify_candidate,
     run_candidate,
     run_screening,
@@ -21,6 +22,38 @@ SETTINGS = {
     "clear_visibility_threshold": 0.75,
     "max_pose_error": 0.005,
 }
+
+
+class RunDirectoryTests(unittest.TestCase):
+    def test_rejects_unsafe_run_names_before_creating_directories(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            output_root = root / "outputs/vlm_evaluations/screening"
+            for run_name in ("../escape", "a/b", "/tmp/escape"):
+                with self.subTest(run_name=run_name), patch.object(
+                    Path, "mkdir"
+                ) as mkdir:
+                    with self.assertRaises(ValueError):
+                        _make_run_dir(
+                            output_root,
+                            run_name,
+                            project_root_override=root,
+                        )
+                    mkdir.assert_not_called()
+
+    def test_creates_safe_run_below_managed_root(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            output_root = root / "outputs/vlm_evaluations/screening"
+
+            created = _make_run_dir(
+                output_root,
+                "run_fixed",
+                project_root_override=root,
+            )
+
+            self.assertEqual(created, output_root / "run_fixed")
+            self.assertTrue(created.is_dir())
 
 
 def valid_observation():
@@ -151,7 +184,10 @@ def screening_config(output_dir):
             "visibility_reference_pixels": 378,
             "clear_visibility_threshold": 0.75,
             "screening": {
-                "output_dir": str(output_dir),
+                "output_dir": str(
+                    Path(output_dir)
+                    / "outputs/vlm_evaluations/grounding_smoke_screening"
+                ),
                 "seed_range": [55, 100],
                 "directions": ["left", "right", "front"],
                 "max_pose_error": 0.005,
@@ -271,7 +307,11 @@ class ScreeningRunnerTests(unittest.TestCase):
                 "vla_project.vlm.grounding_smoke.screening.run_candidate",
                 side_effect=fake_candidate,
             ) as candidate:
-                run_dir, summary = run_screening(config, run_name="run_test")
+                run_dir, summary = run_screening(
+                    config,
+                    run_name="run_test",
+                    project_root_override=temp_dir,
+                )
 
             trace_rows = [
                 json.loads(line)
@@ -283,7 +323,11 @@ class ScreeningRunnerTests(unittest.TestCase):
                 (run_dir / "screening_summary.json").read_text(encoding="utf-8")
             )
             with self.assertRaises(FileExistsError):
-                run_screening(config, run_name="run_test")
+                run_screening(
+                    config,
+                    run_name="run_test",
+                    project_root_override=temp_dir,
+                )
 
         self.assertEqual(candidate.call_count, 138)
         self.assertEqual(len(trace_rows), 138)

@@ -80,7 +80,9 @@ def batch_config(temp_dir):
         },
         "grounding_smoke": {
             **BASE_CONFIG,
-            "output_dir": temp_dir,
+            "output_dir": str(
+                Path(temp_dir) / "outputs/vlm_evaluations/grounding_smoke"
+            ),
             "calibration_path": str(calibration_path),
             "expected_calibration_samples": 15,
             "expected_calibration_sample_ids": [
@@ -962,10 +964,36 @@ class SmokeBatchContractTests(unittest.TestCase):
 
     def test_run_directory_never_overwrites(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            created = make_run_dir(temp_dir, "run_fixed")
+            root = Path(temp_dir)
+            output_root = root / "outputs/vlm_evaluations/grounding_smoke"
+            created = make_run_dir(
+                output_root,
+                "run_fixed",
+                project_root_override=root,
+            )
             self.assertTrue(created.is_dir())
             with self.assertRaises(FileExistsError):
-                make_run_dir(temp_dir, "run_fixed")
+                make_run_dir(
+                    output_root,
+                    "run_fixed",
+                    project_root_override=root,
+                )
+
+    def test_rejects_unsafe_run_names_before_creating_directories(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            output_root = root / "outputs/vlm_evaluations/grounding_smoke"
+            for run_name in ("../escape", "a/b", "/tmp/escape"):
+                with self.subTest(run_name=run_name), patch.object(
+                    Path, "mkdir"
+                ) as mkdir:
+                    with self.assertRaises(ValueError):
+                        make_run_dir(
+                            output_root,
+                            run_name,
+                            project_root_override=root,
+                        )
+                    mkdir.assert_not_called()
 
     def test_visibility_decodes_pybullet_object_id(self):
         block_id = 7
@@ -1026,12 +1054,19 @@ class SmokeBatchContractTests(unittest.TestCase):
                 ) as api,
             ):
                 with self.assertRaises(SmokePreflightError):
-                    run_smoke_batch(config, run_name="run_rejected")
+                    run_smoke_batch(
+                        config,
+                        run_name="run_rejected",
+                        project_root_override=temp_dir,
+                    )
 
             self.assertEqual(preflight.call_count, 3)
             loop.assert_not_called()
             api.assert_not_called()
-            run_dir = Path(temp_dir) / "run_rejected"
+            run_dir = (
+                Path(temp_dir)
+                / "outputs/vlm_evaluations/grounding_smoke/run_rejected"
+            )
             payload = json.loads(
                 (run_dir / "smoke_preflight.json").read_text(
                     encoding="utf-8"
@@ -1062,6 +1097,7 @@ class SmokeBatchContractTests(unittest.TestCase):
                 run_dir, summary = run_smoke_preflight(
                     config,
                     run_name="run_preflight_only",
+                    project_root_override=temp_dir,
                 )
 
             payload = json.loads(
@@ -1108,6 +1144,10 @@ class SmokeBatchContractTests(unittest.TestCase):
                     "vla_project.vlm.grounding_smoke.runner.call_openai_compatible_api",
                     side_effect=AssertionError("API entered"),
                 ),
+                patch(
+                    "vla_project.output_paths.project_root",
+                    return_value=Path(temp_dir),
+                ),
             ):
                 main([
                     "--preflight-only",
@@ -1115,7 +1155,10 @@ class SmokeBatchContractTests(unittest.TestCase):
                     "run_cli_preflight",
                 ])
 
-            run_dir = Path(temp_dir) / "run_cli_preflight"
+            run_dir = (
+                Path(temp_dir)
+                / "outputs/vlm_evaluations/grounding_smoke/run_cli_preflight"
+            )
             payload = json.loads(
                 (run_dir / "smoke_preflight.json").read_text(
                     encoding="utf-8"
@@ -1185,7 +1228,11 @@ class SmokeBatchContractTests(unittest.TestCase):
                 patch("vla_project.vlm.grounding_smoke.runner.call_openai_compatible_api") as api,
                 patch("vla_project.vlm.grounding_smoke.runner.p.disconnect") as disconnect,
             ):
-                batch_dir, summary = run_smoke_batch(config, run_name="run_test")
+                batch_dir, summary = run_smoke_batch(
+                    config,
+                    run_name="run_test",
+                    project_root_override=temp_dir,
+                )
 
             self.assertEqual(preflight.call_count, 3)
             self.assertEqual(loop.call_count, 3)

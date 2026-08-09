@@ -16,6 +16,7 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
+from vla_project.output_paths import resolve_managed_output, validate_run_name
 from vla_project.simulation.control_arm import CONFIG_PATH, load_config
 from vla_project.simulation.stage3_probe import run_probe_episode
 
@@ -87,7 +88,32 @@ def make_error_summary(episode_idx, random_seed, trace_path, exc):
     }
 
 
-def run_batch(config, num_episodes=None, run_name=None):
+def make_run_dir(output_root, run_name=None, project_root_override=None):
+    """在 probe 评估根下创建不可覆盖的单段运行目录。"""
+    name = validate_run_name(
+        run_name or datetime.now().strftime("run_%Y%m%d_%H%M%S")
+    )
+    managed_root = resolve_managed_output(
+        output_root,
+        allowed_root="outputs/probe_evaluations",
+        project_root_override=project_root_override,
+        require_child=False,
+    )
+    path = resolve_managed_output(
+        managed_root / name,
+        allowed_root="outputs/probe_evaluations",
+        project_root_override=project_root_override,
+    )
+    path.mkdir(parents=True, exist_ok=False)
+    return path
+
+
+def run_batch(
+    config,
+    num_episodes=None,
+    run_name=None,
+    project_root_override=None,
+):
     """运行一批 heuristic probe，并返回批次目录与汇总字典。
 
     Args:
@@ -107,9 +133,11 @@ def run_batch(config, num_episodes=None, run_name=None):
     evaluation = config["probe_evaluation"]
     count = num_episodes if num_episodes is not None else evaluation["num_episodes"]
     # 每次正式运行使用独立时间戳目录，避免覆盖上一次实验结果。
-    name = run_name or datetime.now().strftime("run_%Y%m%d_%H%M%S")
-    batch_dir = Path(evaluation["output_dir"]) / name
-    batch_dir.mkdir(parents=True, exist_ok=False)
+    batch_dir = make_run_dir(
+        evaluation["output_dir"],
+        run_name,
+        project_root_override=project_root_override,
+    )
     summary_path = batch_dir / "episode_summary.jsonl"
     summaries = []
 

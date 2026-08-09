@@ -15,6 +15,7 @@ import cv2
 import numpy as np
 import pybullet as p
 
+from vla_project.output_paths import resolve_managed_output, validate_run_name
 from vla_project.simulation.camera_geometry import compute_camera_matrices
 from vla_project.vlm.collect_vlm_eval_samples import (
     build_balanced_ee_positions,
@@ -576,10 +577,22 @@ def build_smoke_cases(smoke_config):
     ]
 
 
-def make_run_dir(output_root, run_name=None):
+def make_run_dir(output_root, run_name=None, project_root_override=None):
     """创建全新运行目录，拒绝覆盖或续写旧 API 回复。"""
-    name = run_name or datetime.now().strftime("run_%Y%m%d_%H%M%S")
-    path = Path(output_root) / name
+    name = validate_run_name(
+        run_name or datetime.now().strftime("run_%Y%m%d_%H%M%S")
+    )
+    managed_root = resolve_managed_output(
+        output_root,
+        allowed_root="outputs/vlm_evaluations",
+        project_root_override=project_root_override,
+        require_child=False,
+    )
+    path = resolve_managed_output(
+        managed_root / name,
+        allowed_root="outputs/vlm_evaluations",
+        project_root_override=project_root_override,
+    )
     path.mkdir(parents=True, exist_ok=False)
     return path
 
@@ -790,11 +803,19 @@ def _build_episode_dependencies(
     )
 
 
-def run_smoke_preflight(config, run_name=None):
+def run_smoke_preflight(
+    config,
+    run_name=None,
+    project_root_override=None,
+):
     """只运行三个固定案例的无 API 起点预检。"""
     smoke_config = config["grounding_smoke"]
     cases = build_smoke_cases(smoke_config)
-    batch_dir = make_run_dir(smoke_config["output_dir"], run_name)
+    batch_dir = make_run_dir(
+        smoke_config["output_dir"],
+        run_name,
+        project_root_override=project_root_override,
+    )
     preflight_rows = [
         preflight_smoke_case(config, smoke_config, case)
         for case in cases
@@ -822,11 +843,15 @@ def run_smoke_preflight(config, run_name=None):
     return batch_dir, preflight_summary
 
 
-def run_smoke_batch(config, run_name=None):
+def run_smoke_batch(config, run_name=None, project_root_override=None):
     """运行固定三个真实 PyBullet/Qwen case，并保存批次证据。"""
     smoke_config = config["grounding_smoke"]
     cases = build_smoke_cases(smoke_config)
-    batch_dir, _ = run_smoke_preflight(config, run_name=run_name)
+    batch_dir, _ = run_smoke_preflight(
+        config,
+        run_name=run_name,
+        project_root_override=project_root_override,
+    )
     calibration = load_frozen_calibration(
         smoke_config["calibration_path"],
         smoke_config["expected_calibration_sample_ids"],
