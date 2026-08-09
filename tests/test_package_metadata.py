@@ -2,41 +2,21 @@
 
 import importlib
 import importlib.metadata
+from pathlib import Path
 import unittest
 
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10 development environment
+    from setuptools._vendor import tomli as tomllib
 
-EXPECTED_SCRIPTS = {
-    "vla-collect": "vla_project.simulation.control_arm:main",
-    "vla-audit-action-tokenization": (
-        "vla_project.simulation.audit_action_tokenization:main"
-    ),
-    "vla-audit-dataset-visibility": (
-        "vla_project.simulation.audit_dataset_visibility:main"
-    ),
-    "vla-render-expert-dataset-view": (
-        "vla_project.simulation.render_expert_dataset_view:main"
-    ),
-    "vla-evaluate-dataset": "vla_project.simulation.evaluate_dataset:main",
-    "vla-probe": "vla_project.simulation.stage3_probe:main",
-    "vla-evaluate-probe": "vla_project.simulation.evaluate_probe:main",
-    "vla-collect-vlm-samples": "vla_project.vlm.collect_vlm_eval_samples:main",
-    "vla-evaluate-vlm-decisions": "vla_project.vlm.evaluate_vlm_decisions:main",
-    "vla-diagnose-grounding": "vla_project.vlm.diagnose_vlm_grounding:main",
-    "vla-ground-then-decide": "vla_project.vlm.evaluate_ground_then_decide:main",
-    "vla-evaluate-backprojection": (
-        "vla_project.vlm.evaluate_grounding_backprojection:main"
-    ),
-    "vla-validate-grounding-calibration": (
-        "vla_project.vlm.validate_grounding_calibration:main"
-    ),
-    "vla-migrate-generated-outputs": (
-        "vla_project.tools.migrate_generated_outputs:main"
-    ),
-    "vla-run-grounding-smoke": "vla_project.vlm.grounding_smoke.runner:main",
-    "vla-screen-grounding-smoke": (
-        "vla_project.vlm.grounding_smoke.screening:main"
-    ),
-}
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def declared_scripts() -> dict[str, str]:
+    with (PROJECT_ROOT / "pyproject.toml").open("rb") as handle:
+        return tomllib.load(handle)["project"]["scripts"]
 
 
 class PackageLayoutTests(unittest.TestCase):
@@ -51,6 +31,17 @@ class PackageLayoutTests(unittest.TestCase):
             with self.subTest(module_name=module_name):
                 self.assertIsNotNone(importlib.import_module(module_name))
 
+    def test_training_runtime_dependencies_are_declared(self):
+        requirements = {
+            line.split("#", maxsplit=1)[0].strip().lower().split(">=", maxsplit=1)[0]
+            for line in (PROJECT_ROOT / "requirements.txt").read_text(
+                encoding="utf-8"
+            ).splitlines()
+            if line.split("#", maxsplit=1)[0].strip()
+        }
+        self.assertIn("pillow", requirements)
+        self.assertIn("sentence-transformers", requirements)
+
 
 class ConsoleScriptTests(unittest.TestCase):
     def test_installed_distribution_exposes_exact_console_scripts(self):
@@ -60,14 +51,25 @@ class ConsoleScriptTests(unittest.TestCase):
             for entry_point in distribution.entry_points
             if entry_point.group == "console_scripts"
         }
-        self.assertEqual(actual_scripts, EXPECTED_SCRIPTS)
+        self.assertEqual(actual_scripts, declared_scripts())
 
     def test_console_script_targets_are_importable_main_functions(self):
-        for script_name, target in EXPECTED_SCRIPTS.items():
+        for script_name, target in declared_scripts().items():
             module_name, function_name = target.split(":", maxsplit=1)
             with self.subTest(script_name=script_name):
                 module = importlib.import_module(module_name)
                 self.assertTrue(callable(getattr(module, function_name)))
+
+    def test_v2_pipeline_commands_are_declared(self):
+        scripts = declared_scripts()
+        self.assertEqual(
+            scripts["vla-evaluate-vla-counterfactual"],
+            "vla_project.training.vla_counterfactual:main",
+        )
+        self.assertEqual(
+            scripts["vla-split-episodes"],
+            "vla_project.simulation.split_episodes:main",
+        )
 
 
 if __name__ == "__main__":

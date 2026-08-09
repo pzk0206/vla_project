@@ -166,7 +166,7 @@ vla_project/
 | 文件 | 作用 | 什么时候修改 |
 | --- | --- | --- |
 | `.gitignore` | 指定不提交的缓存、生成输出和本机配置 | 新增可再生成或仅本机使用的文件类型时 |
-| `pyproject.toml` | 定义 `vla-project` 包、`src/` 布局和 16 个 `vla-*` 命令 | 增加包元数据或命令入口时 |
+| `pyproject.toml` | 定义 `vla-project` 包、`src/` 布局和全部 `vla-*` 命令 | 增加包元数据或命令入口时 |
 | `README.md` | 给使用者说明项目目标、安装方法、运行命令和当前阶段 | 使用方式或阶段结论变化时 |
 | `requirements.txt` | 记录 PyBullet、OpenCV、NumPy 等第三方依赖 | 正式代码新增或移除外部依赖时 |
 | `sim_config.yaml` | 保存仿真、相机、采集、probe、VLM 和输出目录参数 | 调整实验变量时，优先改这里而非写死在代码中 |

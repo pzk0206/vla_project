@@ -12,11 +12,13 @@
 
 ## 当前阶段
 
-当前主线已经完成单任务 `expert_v1` 的300条规模化采集、质量门禁、逐帧可见性重放审计、
-action tokenization 只读审计，以及同一批轨迹的固定垂直俯视视觉派生。当前正在构建斜视
-双积木 `expert_multi_v2`：红蓝位置同分布并保持最小轴向间距，每帧保存两块积木、机器人、
-末端与相机状态，先采10条 pilot，通过门禁后才追加到300条。旧 `expert_multi_v1` 缺少
-完整双积木位姿，不能用于控制位置混杂的正式红蓝反事实结论。
+当前主线已经完成斜视双积木 `expert_multi_v2` 的300条规模化采集、质量门禁、episode 级
+分层划分、VLA 重训，以及50对按 seed 和保存位姿确定性复现的正式反事实评估。数据为
+300/300 success、红蓝150/150；50对反事实全部有效，但成对指令跟随为0/50，红/蓝分支
+成功率分别为11/50和12/50。文本审计进一步确认当前 `all-MiniLM-L6-v2` 把两句中文指令
+编码成完全相同的 token 和 embedding，因此当前模型不能识别这组中文红蓝指令，旧70%
+结论不恢复。这不等于视觉模型普遍不能分辨颜色；下一阶段需换用能区分中文的语言编码器
+并重新训练，随后再进入 Qwen2-VL QLoRA。
 
 真实可见性审计同时给出了重要限制：原斜视图 clear/partial/severe 为
 95.81%/4.15%/0.04%，垂直俯视图则为70.99%/4.82%/24.19%，且300个终止帧全部 severe。
@@ -135,6 +137,7 @@ pip install -e .
 | `vla-audit-dataset-visibility` | 确定性重放专家数据并审计红块逐帧可见率 |
 | `vla-evaluate-dataset` | 扫描专家数据并生成 `dataset_quality_report.json` |
 | `vla-render-expert-dataset-view` | 从冻结轨迹生成固定垂直俯视视觉派生集 |
+| `vla-split-episodes` | 按目标颜色和位姿分层生成 episode 级训练/验证划分 |
 | `vla-probe` | 运行 Stage 3 单次闭环 |
 | `vla-evaluate-probe` | 批量评估 heuristic 闭环 |
 | `vla-collect-vlm-samples` | 生成固定 VLM 离线评估样本 |
@@ -146,6 +149,11 @@ pip install -e .
 | `vla-migrate-generated-outputs` | 迁移和检查历史生成输出 |
 | `vla-run-grounding-smoke` | 运行需单独批准的真实 grounding 闭环 smoke |
 | `vla-screen-grounding-smoke` | 无 API 筛选动态 smoke 候选轨迹 |
+| `vla-train-bc` | 训练单任务 BC 动作表示基线 |
+| `vla-rollout` | 评估单任务 BC checkpoint 的闭环表现 |
+| `vla-train` | 在审计数据与冻结 split 上训练多任务 VLA |
+| `vla-evaluate-vla-counterfactual` | 确定性运行红/蓝成对反事实评估并生成审计摘要 |
+| `vla-convert-qwen` | 把冻结数据转换为 Qwen2-VL 微调格式 |
 
 ## 采集数据
 

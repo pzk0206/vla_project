@@ -1730,3 +1730,41 @@ trajectory `8645e8bc935c2c64431b6ebe7c6ca48b096f7aabea06365fbb9b6c88c0d999cc`，
 summary `bde8007a58b922a3aa0b86c8a0a9ee7aa9517ab2b328d5d71ec94ee75e543d26`，
 quality report `e387d1997c4ffa99969ff27463884a6406367c1040d9874030df513ada4cb8d5`。
 该结果只证明数据契约与专家控制通过，不提前声明模型识别红蓝。
+
+## 51. expert_multi_v2 分层划分与 VLA 重训 (2026-08-09)
+
+对300条通过 scale gate 的 episode 按目标颜色和初始双块位姿分层，固定 seed 42，得到
+250个 train 和50个 val episode；train 红蓝125/125，val 红蓝25/25，无 episode 重叠，
+覆盖全部300条。`episode_split.json` SHA-256 为
+`9de95d76a0a0e419512fd2124d3ad0a0a6a339518b39148687d194b7d2ffd227`，并绑定 manifest、
+trajectory 和 summary 的来源哈希。
+
+10条 overfit 运行完成200 epochs，最终训练损失0.000581，说明训练链路可以拟合小样本。
+第一次 full 运行在用户暂停时保留为不完整证据，没有伪装为成功；随后在新目录完整重跑。
+正式 full rerun 使用CUDA完成50 epochs，最佳验证损失0.064903（epoch 27），最终训练/
+验证损失0.000834/0.077995。最佳 checkpoint SHA-256 为
+`f057f4e6b63becf182aff8314705d4704b688f3d2a5808e9e8e22a063989da0f`，并保存数据 manifest
+与 split 哈希。损失只能证明训练完成，红蓝识别仍由闭环反事实单独判断。
+
+## 52. 确定性成对反事实与中文指令编码审计 (2026-08-09)
+
+正式 evaluator 对50个 val episode 各运行两条分支：保持 episode seed、红蓝保存位姿、
+机器人关节/速度和相机不变，只替换中文目标指令。50对全部有效、0对因系统错误排除，
+场景恢复的最大位置和姿态误差均为0。重复正式运行的 `per_branch.jsonl` 与
+`per_pair.jsonl` 字节哈希完全一致，证明结果可确定性复现。
+
+正式结果：成对指令跟随0/50，Wilson 95%上界0.07135；偏好切换0/50；红色指令成功
+11/50，蓝色指令成功12/50。50/50对结束时最近积木相同，且每对首个预测关节目标的L2
+差均为0。结果不是“表现较弱但可能懂语言”，而是没有观察到指令引起的目标切换。
+
+进一步审计文本输入后定位到直接原因：`all-MiniLM-L6-v2` 对“悬停在红色积木上方”和
+“悬停在蓝色积木上方”生成完全相同的 input IDs；两个 embedding 逐元素相等，L2=0、
+cosine=1、SHA-256均为
+`a42ef5e5f4c4f0bc8c368ac0c14dfed9ccae8e46b3cdf3eeb276fda70f587ccf`。因此现有 VLA 在
+融合前已经丢失红蓝语言差异，数学上无法依据这两句输入选择不同目标。
+
+可审计摘要位于
+`outputs/rollout/vla_regression_full_rerun_v2_paired_with_text_audit_v2/summary.json`。当前
+结论是“现有 MiniLM 中文指令链路不能识别红蓝”，旧70%不恢复；不能外推成“图像中
+看不出颜色”或“支持中文的 Qwen2-VL 也不能识别”。下一实验保持斜视图与成对协议，先
+换用能产生不同红蓝表示的语言编码器并重训。
