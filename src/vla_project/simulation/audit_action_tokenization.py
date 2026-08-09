@@ -11,6 +11,11 @@ import tempfile
 
 import numpy as np
 
+from vla_project.output_paths import (
+    resolve_managed_output,
+    staged_output_directory,
+)
+
 
 SCHEMA_VERSION = "action_tokenization_audit_v1"
 ALLOWED_VISIBILITY_GROUPS = {"clear", "partial", "severe"}
@@ -523,13 +528,27 @@ def _write_failure(dataset_dir, exc):
     temp_path.replace(failure_path)
 
 
-def _publish_success(output_dir, frame_rows, summary):
-    output_dir = Path(output_dir)
-    output_dir.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(dir=output_dir.parent) as temp_dir:
-        temp_root = Path(temp_dir)
-        staging = temp_root / output_dir.name
-        staging.mkdir()
+def _resolve_audit_output(dataset_dir, output_dir):
+    dataset_dir = Path(dataset_dir).resolve()
+    requested = (
+        output_dir
+        if output_dir is not None
+        else dataset_dir / "action_tokenization_audit_v1"
+    )
+    return resolve_managed_output(
+        requested,
+        allowed_root=dataset_dir,
+        project_root_override=dataset_dir.parent,
+    )
+
+
+def _publish_success(dataset_dir, output_dir, frame_rows, summary):
+    dataset_dir = Path(dataset_dir).resolve()
+    with staged_output_directory(
+        output_dir,
+        allowed_root=dataset_dir,
+        project_root_override=dataset_dir.parent,
+    ) as staging:
         frame_path = staging / "frame_action_analysis.jsonl"
         with frame_path.open("w", encoding="utf-8") as handle:
             for row in frame_rows:
@@ -541,16 +560,6 @@ def _publish_success(output_dir, frame_rows, summary):
         if json.loads(summary_path.read_text(encoding="utf-8")) != summary:
             raise RuntimeError("staged_summary_mismatch")
 
-        backup = temp_root / "previous_success"
-        if output_dir.exists():
-            output_dir.replace(backup)
-        try:
-            staging.replace(output_dir)
-        except Exception:
-            if backup.exists() and not output_dir.exists():
-                backup.replace(output_dir)
-            raise
-
 
 def run_action_tokenization_audit(dataset_dir, output_dir=None, episode_ids=None):
     """运行全量只读动作审计并原子发布结果。
@@ -558,12 +567,8 @@ def run_action_tokenization_audit(dataset_dir, output_dir=None, episode_ids=None
     episode_ids: 可选，int 列表。提供时只用这些 episode 拟合分箱边界；
         其他 episode 的帧仍参与统计但分箱边界不由它们决定。
     """
-    dataset_dir = Path(dataset_dir)
-    output_dir = (
-        Path(output_dir)
-        if output_dir is not None
-        else dataset_dir / "action_tokenization_audit_v1"
-    )
+    dataset_dir = Path(dataset_dir).resolve()
+    output_dir = _resolve_audit_output(dataset_dir, output_dir)
     try:
         manifest, trajectories, visibility, inputs = load_audit_inputs(
             dataset_dir
@@ -617,7 +622,7 @@ def run_action_tokenization_audit(dataset_dir, output_dir=None, episode_ids=None
                     "验证集 episode 不参与边界拟合。"
                 ),
             }
-        _publish_success(output_dir, frame_rows, summary)
+        _publish_success(dataset_dir, output_dir, frame_rows, summary)
     except Exception as exc:
         _write_failure(dataset_dir, exc)
         raise

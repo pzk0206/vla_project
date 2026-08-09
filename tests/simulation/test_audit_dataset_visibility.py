@@ -385,6 +385,42 @@ def write_minimal_dataset_inputs(dataset_dir):
 
 
 class AuditRunnerTests(unittest.TestCase):
+    def test_rejects_output_equal_to_dataset_before_reading_inputs(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dataset_dir = Path(temp_dir) / "dataset"
+            dataset_dir.mkdir()
+            write_minimal_dataset_inputs(dataset_dir)
+            marker = dataset_dir / "dataset_manifest.json"
+            original = marker.read_text(encoding="utf-8")
+
+            with patch(
+                "vla_project.simulation.audit_dataset_visibility.load_audit_inputs",
+                side_effect=AssertionError("must validate output first"),
+            ):
+                with self.assertRaisesRegex(ValueError, "leaf directory"):
+                    run_visibility_audit(dataset_dir, dataset_dir)
+
+            self.assertEqual(marker.read_text(encoding="utf-8"), original)
+            self.assertFalse(
+                (dataset_dir / "visibility_audit_failure.json").exists()
+            )
+
+    def test_rejects_output_escape_before_reading_inputs(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dataset_dir = Path(temp_dir) / "dataset"
+            dataset_dir.mkdir()
+            write_minimal_dataset_inputs(dataset_dir)
+            escaped = dataset_dir / ".." / "escaped_visibility"
+
+            with patch(
+                "vla_project.simulation.audit_dataset_visibility.load_audit_inputs",
+                side_effect=AssertionError("must validate output first"),
+            ):
+                with self.assertRaisesRegex(ValueError, "parent traversal"):
+                    run_visibility_audit(dataset_dir, escaped)
+
+            self.assertFalse(escaped.resolve().exists())
+
     def test_failure_writes_only_failure_evidence(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             dataset_dir = Path(temp_dir) / "dataset"

@@ -1,5 +1,6 @@
 import copy
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -235,6 +236,43 @@ class DerivedRowTests(unittest.TestCase):
 
 
 class DatasetPathTests(unittest.TestCase):
+    def test_resolves_relative_paths_against_repo_root(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo_root = Path(temp_dir) / "repo"
+            source = repo_root / "outputs/dataset/expert_scaling_v1"
+            source.mkdir(parents=True)
+            expected_output = repo_root / "outputs/dataset/expert_topdown_v1"
+            elsewhere = Path(temp_dir) / "elsewhere"
+            elsewhere.mkdir()
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(elsewhere)
+                resolved_source, resolved_output = validate_dataset_paths(
+                    repo_root,
+                    "outputs/dataset/expert_scaling_v1",
+                    "outputs/dataset/expert_topdown_v1",
+                )
+            finally:
+                os.chdir(previous_cwd)
+
+        self.assertEqual(resolved_source, source.resolve())
+        self.assertEqual(resolved_output, expected_output.resolve())
+
+    def test_rejects_parent_traversal_components(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo_root = Path(temp_dir)
+            source = repo_root / "outputs/dataset/expert_scaling_v1"
+            source.mkdir(parents=True)
+
+            with self.assertRaises(DerivationValidationError) as caught:
+                validate_dataset_paths(
+                    repo_root,
+                    source,
+                    "outputs/dataset/intermediate/../expert_topdown_v1",
+                )
+
+        self.assertEqual(caught.exception.reason, "unsafe_dataset_path")
+
     def test_accepts_new_sibling_below_outputs_dataset(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             repo_root = Path(temp_dir)

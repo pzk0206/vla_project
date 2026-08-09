@@ -6,11 +6,14 @@ from datetime import datetime
 import json
 from pathlib import Path
 import statistics
-import tempfile
 
 import numpy as np
 import pybullet as p
 
+from vla_project.output_paths import (
+    resolve_managed_output,
+    staged_output_directory,
+)
 from vla_project.simulation.control_arm import (
     capture_rgb_and_segmentation,
 )
@@ -309,14 +312,24 @@ def write_json(path, payload):
     )
 
 
-def run_visibility_audit(dataset_dir, output_dir=None):
-    """逐 episode 重放并原子发布可信可见性标签。"""
-    dataset_dir = Path(dataset_dir)
-    output_dir = (
-        Path(output_dir)
+def _resolve_audit_output(dataset_dir, output_dir):
+    dataset_dir = Path(dataset_dir).resolve()
+    requested = (
+        output_dir
         if output_dir is not None
         else dataset_dir / "visibility_audit_v1"
     )
+    return resolve_managed_output(
+        requested,
+        allowed_root=dataset_dir,
+        project_root_override=dataset_dir.parent,
+    )
+
+
+def run_visibility_audit(dataset_dir, output_dir=None):
+    """逐 episode 重放并原子发布可信可见性标签。"""
+    dataset_dir = Path(dataset_dir).resolve()
+    output_dir = _resolve_audit_output(dataset_dir, output_dir)
     if output_dir.exists():
         raise FileExistsError(f"审计输出目录已存在: {output_dir}")
     try:
@@ -373,10 +386,11 @@ def run_visibility_audit(dataset_dir, output_dir=None):
         "replay_validation": {"passed": True},
         **summarize_visibility(all_rows),
     }
-    output_dir.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(dir=output_dir.parent) as temp_dir:
-        staging = Path(temp_dir) / output_dir.name
-        staging.mkdir()
+    with staged_output_directory(
+        output_dir,
+        allowed_root=dataset_dir,
+        project_root_override=dataset_dir.parent,
+    ) as staging:
         with (staging / "frame_visibility.jsonl").open(
             "w",
             encoding="utf-8",
@@ -387,7 +401,6 @@ def run_visibility_audit(dataset_dir, output_dir=None):
             staging / "visibility_audit_summary.json",
             summary,
         )
-        staging.replace(output_dir)
     return summary
 
 

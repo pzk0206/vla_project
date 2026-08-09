@@ -15,6 +15,7 @@ import cv2
 import numpy as np
 import yaml
 
+from vla_project.output_paths import resolve_managed_output
 from vla_project.simulation.control_arm import capture_rgb
 from vla_project.simulation.expert_dataset_replay import (
     load_replay_inputs,
@@ -54,16 +55,25 @@ def _is_within(path, parent):
 def validate_dataset_paths(repo_root, source_dataset, output_dir):
     """解析并隔离源、输出和允许的数据集根目录。"""
     repo_root = Path(repo_root).resolve()
-    data_root = (repo_root / "outputs/dataset").resolve()
-    source = Path(source_dataset).resolve()
-    output = Path(output_dir).resolve(strict=False)
+    try:
+        source = resolve_managed_output(
+            source_dataset,
+            allowed_root="outputs/dataset",
+            project_root_override=repo_root,
+        )
+        output = resolve_managed_output(
+            output_dir,
+            allowed_root="outputs/dataset",
+            project_root_override=repo_root,
+        )
+    except ValueError as exc:
+        raise DerivationValidationError(
+            "unsafe_dataset_path",
+            error=str(exc),
+        ) from exc
     if not source.is_dir():
         raise DerivationValidationError(
             "source_dataset_missing", source_dataset=str(source)
-        )
-    if not _is_within(output, data_root):
-        raise DerivationValidationError(
-            "output_outside_dataset_root", output_dir=str(output)
         )
     if source == output or _is_within(output, source) or _is_within(
         source, output

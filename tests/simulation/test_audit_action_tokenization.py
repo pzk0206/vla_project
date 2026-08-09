@@ -7,6 +7,7 @@ from pathlib import Path
 import tempfile
 import unittest
 import warnings
+from unittest.mock import patch
 
 from vla_project.simulation.audit_action_tokenization import (
     AuditValidationError,
@@ -538,6 +539,52 @@ class PublicationTests(unittest.TestCase):
             saved = json.loads(summary_path.read_text(encoding="utf-8"))
             self.assertEqual(saved, summary)
             self.assertEqual(len(saved["inputs"]["trajectory"]["sha256"]), 64)
+
+    def test_rejects_output_equal_to_dataset_before_reading_inputs(self):
+        module = importlib.import_module(
+            "vla_project.simulation.audit_action_tokenization"
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dataset_dir, _ = self.make_dataset(temp_dir)
+            marker = dataset_dir / "dataset_manifest.json"
+            original = marker.read_text(encoding="utf-8")
+
+            with patch.object(
+                module,
+                "load_audit_inputs",
+                side_effect=AssertionError("must validate output first"),
+            ):
+                with self.assertRaisesRegex(ValueError, "leaf directory"):
+                    module.run_action_tokenization_audit(
+                        dataset_dir,
+                        dataset_dir,
+                    )
+
+            self.assertEqual(marker.read_text(encoding="utf-8"), original)
+            self.assertFalse(
+                (dataset_dir / "action_tokenization_audit_failure.json").exists()
+            )
+
+    def test_rejects_output_escape_before_reading_inputs(self):
+        module = importlib.import_module(
+            "vla_project.simulation.audit_action_tokenization"
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dataset_dir, _ = self.make_dataset(temp_dir)
+            escaped = dataset_dir / ".." / "escaped_audit"
+
+            with patch.object(
+                module,
+                "load_audit_inputs",
+                side_effect=AssertionError("must validate output first"),
+            ):
+                with self.assertRaisesRegex(ValueError, "parent traversal"):
+                    module.run_action_tokenization_audit(
+                        dataset_dir,
+                        escaped,
+                    )
+
+            self.assertFalse(escaped.resolve().exists())
 
     def test_failure_preserves_previous_success_and_recovery_replaces_it(self):
         module = importlib.import_module(
