@@ -124,13 +124,14 @@ class BCDataset(Dataset):
         if self._is_classification:
             if tokenizer_audit_path is None:
                 raise ValueError("分类组需要 tokenizer_audit_path")
-            from .tokenizer_utils import load_quantile_edges
+            from .tokenizer_utils import load_quantile_tokenizer
 
             rep = "absolute_q" if not self._use_delta else "delta_q"
             num_bins = 32 if not self._use_delta else 64
-            self._edges = load_quantile_edges(
+            self.tokenizer = load_quantile_tokenizer(
                 tokenizer_audit_path, rep, num_bins
             )
+            self._edges = self.tokenizer["edges"]
             self.num_bins = num_bins
 
         # 回归组归一化参数

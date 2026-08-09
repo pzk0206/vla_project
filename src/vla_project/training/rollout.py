@@ -54,7 +54,7 @@ from vla_project.training.dataset import (
 from vla_project.training.model import BCModel
 from vla_project.training.tokenizer_utils import (
     decode_tokens_to_action,
-    load_quantile_edges,
+    load_quantile_tokenizer,
 )
 
 _DEFAULT_DATASET = "outputs/dataset/expert_scaling_v1"
@@ -167,7 +167,7 @@ def _compute_action_stats_for_checkpoint(dataset_dir, overfit_episodes):
     return compute_action_stats(train_rows)
 
 
-def _load_edges_for_checkpoint(dataset_dir, action_representation):
+def _load_tokenizer_for_checkpoint(dataset_dir, action_representation):
     """分类分支：从 audit_v2 加载 quantile edges；regression 返回 None。"""
     if action_representation == "regression":
         return None
@@ -181,7 +181,7 @@ def _load_edges_for_checkpoint(dataset_dir, action_representation):
     use_delta = action_representation == "delta_q_64"
     rep = "delta_q" if use_delta else "absolute_q"
     num_bins = 64 if use_delta else 32
-    return load_quantile_edges(str(audit_path), rep, num_bins)
+    return load_quantile_tokenizer(str(audit_path), rep, num_bins)
 
 
 def run_rollout_episode(
@@ -191,7 +191,7 @@ def run_rollout_episode(
     device,
     action_representation,
     action_stats,
-    edges_list,
+    action_tokenizer,
     max_steps=200,
     sim_steps_per_action=60,
     gui=False,
@@ -258,7 +258,10 @@ def run_rollout_episode(
             else:
                 token_ids = action_pred.argmax(dim=-1)[0].cpu().numpy()
                 decoded = np.asarray(
-                    decode_tokens_to_action(token_ids, edges_list),
+                    decode_tokens_to_action(
+                        token_ids,
+                        action_tokenizer["reconstruction_values"],
+                    ),
                     dtype=np.float32,
                 )
                 if action_representation == "delta_q_64":
@@ -352,13 +355,16 @@ def run_rollout_evaluation(
 
     # 与训练口径一致的预处理参数。
     action_stats = None
-    edges_list = None
+    action_tokenizer = None
     if action_representation == "regression":
         action_stats = _compute_action_stats_for_checkpoint(
             dataset_dir, overfit_episodes
         )
     else:
-        edges_list = _load_edges_for_checkpoint(dataset_dir, action_representation)
+        action_tokenizer = _load_tokenizer_for_checkpoint(
+            dataset_dir,
+            action_representation,
+        )
 
     config = load_config(config_path)
     _ensure_physics_world(config, gui)
@@ -404,7 +410,7 @@ def run_rollout_evaluation(
                         device=device,
                         action_representation=action_representation,
                         action_stats=action_stats,
-                        edges_list=edges_list,
+                        action_tokenizer=action_tokenizer,
                         max_steps=max_steps,
                         gui=gui,
                     )

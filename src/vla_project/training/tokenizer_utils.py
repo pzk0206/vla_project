@@ -8,27 +8,71 @@ from pathlib import Path
 import numpy as np
 
 
+def load_quantile_tokenizer(audit_path, representation, num_bins):
+    """从审计报告加载并严格验证量化边界与重建值。"""
+    with open(audit_path, encoding="utf-8") as fh:
+        report = json.load(fh)
+    candidates = report.get("candidates", [])
+    selected = next(
+        (
+            candidate
+            for candidate in candidates
+            if candidate.get("representation") == representation
+            and candidate.get("binning") == "quantile"
+            and candidate.get("num_bins") == num_bins
+        ),
+        None,
+    )
+    if selected is None:
+        raise ValueError(
+            f"在 {audit_path} 中找不到 {representation}/{num_bins} 等频边界"
+        )
+
+    per_joint = selected.get("per_joint")
+    if not isinstance(per_joint, list) or len(per_joint) != 7:
+        raise ValueError("invalid tokenizer: expected seven joints")
+    edges_list = []
+    reconstruction_values = []
+    for joint_index, joint in enumerate(per_joint):
+        edges = np.asarray(joint.get("edges"), dtype=np.float64)
+        reconstruction = np.asarray(
+            joint.get("reconstruction_values"),
+            dtype=np.float64,
+        )
+        if (
+            edges.ndim != 1
+            or reconstruction.ndim != 1
+            or edges.size != num_bins + 1
+            or reconstruction.size != num_bins
+            or not np.isfinite(edges).all()
+            or not np.isfinite(reconstruction).all()
+            or not np.all(np.diff(edges) > 0)
+        ):
+            raise ValueError(
+                f"invalid tokenizer for joint {joint_index}"
+            )
+        edges_list.append(edges.tolist())
+        reconstruction_values.append(reconstruction.tolist())
+    return {
+        "representation": representation,
+        "binning": "quantile",
+        "requested_num_bins": num_bins,
+        "edges": edges_list,
+        "reconstruction_values": reconstruction_values,
+    }
+
+
 def load_quantile_edges(audit_path, representation, num_bins):
-    """从审计报告中提取指定表示和箱数的等频分箱边界。
+    """兼容接口：返回严格验证后的等频分箱边界。
 
     Returns:
         list[list[float]]: 每个关节的分箱边界 (num_joints × (num_bins+1))
     """
-    with open(audit_path, encoding="utf-8") as fh:
-        report = json.load(fh)
-    candidates = report.get("candidates", [])
-    for cand in candidates:
-        if (
-            cand.get("representation") == representation
-            and cand.get("binning") == "quantile"
-            and cand.get("num_bins") == num_bins
-        ):
-            per_joint = cand["per_joint"]
-            edges = [joint["edges"] for joint in per_joint]
-            return edges
-    raise ValueError(
-        f"在 {audit_path} 中找不到 {representation}/{num_bins} 等频边界"
-    )
+    return load_quantile_tokenizer(
+        audit_path,
+        representation,
+        num_bins,
+    )["edges"]
 
 
 def encode_action_to_tokens(q_values, edges_list):
@@ -55,12 +99,12 @@ def encode_action_to_tokens(q_values, edges_list):
     return tokens
 
 
-def decode_tokens_to_action(tokens, edges_list):
-    """将离散 token ids 解码为连续关节角度（取箱内中位数）。
+def decode_tokens_to_action(tokens, reconstruction_values):
+    """使用审计冻结的逐箱重建值解码离散 token ids。
 
     Args:
         tokens: (7,) 或 (N, 7) int token ids
-        edges_list: list of 7 edge arrays
+        reconstruction_values: list of 7 reconstruction arrays
 
     Returns:
         (7,) 或 (N, 7) float 重建角度
@@ -69,26 +113,25 @@ def decode_tokens_to_action(tokens, edges_list):
     was_1d = tokens_arr.ndim == 1
     if was_1d:
         tokens_arr = tokens_arr[None, :]
+    if (
+        tokens_arr.ndim != 2
+        or tokens_arr.shape[1] != 7
+        or not np.issubdtype(tokens_arr.dtype, np.integer)
+    ):
+        raise ValueError("invalid token ids")
+    if not isinstance(reconstruction_values, list) or len(
+        reconstruction_values
+    ) != 7:
+        raise ValueError("invalid tokenizer reconstruction values")
     values = np.zeros(tokens_arr.shape, dtype=np.float64)
     for j in range(tokens_arr.shape[1]):
-        edges = np.asarray(edges_list[j])
-        # 从 audit 代码复用的重建逻辑：取箱内 median
-        num_bins = len(edges) - 1
-        # 构建 reconstruction_values
-        recon = _reconstruction_values_for_edges(edges, num_bins)
-        for i in range(tokens_arr.shape[0]):
-            tid = min(tokens_arr[i, j], len(edges) - 2)
-            values[i, j] = recon[tid]
+        recon = np.asarray(reconstruction_values[j], dtype=np.float64)
+        if recon.ndim != 1 or not np.isfinite(recon).all():
+            raise ValueError("invalid tokenizer reconstruction values")
+        joint_tokens = tokens_arr[:, j]
+        if np.any(joint_tokens < 0) or np.any(joint_tokens >= recon.size):
+            raise ValueError("token id out of range")
+        values[:, j] = recon[joint_tokens]
     if was_1d:
         return values[0]
     return values
-
-
-def _reconstruction_values_for_edges(edges, num_bins):
-    """为每箱计算重建值：取箱内中位数的近似值（简化版用箱中心点）。"""
-    recon = []
-    for b in range(num_bins):
-        lo = edges[b]
-        hi = edges[b + 1]
-        recon.append((lo + hi) / 2.0)
-    return recon

@@ -82,6 +82,14 @@ class BCDatasetDeltaTests(unittest.TestCase):
                 encoding="utf-8",
             )
             tokenizer_path = root / "audit.json"
+            edges = [
+                round(-1.0 + index / 32.0, 8)
+                for index in range(65)
+            ]
+            reconstruction_values = [
+                (edges[index] + edges[index + 1]) / 2.0
+                for index in range(64)
+            ]
             tokenizer_path.write_text(
                 json.dumps(
                     {
@@ -92,8 +100,10 @@ class BCDatasetDeltaTests(unittest.TestCase):
                                 "num_bins": 64,
                                 "per_joint": [
                                     {
-                                        "edges": [-1.0, 0.0, 1.0],
-                                        "reconstruction_values": [-0.2, 0.6],
+                                        "edges": edges,
+                                        "reconstruction_values": (
+                                            reconstruction_values
+                                        ),
                                     }
                                     for _ in range(7)
                                 ],
@@ -113,7 +123,7 @@ class BCDatasetDeltaTests(unittest.TestCase):
             _, tokens, auxiliary = actual[0]
 
         self.assertEqual(len(actual), 1)
-        self.assertEqual(tokens.tolist(), [0] * 7)
+        self.assertEqual(tokens.tolist(), [25] * 7)
         self.assertEqual(auxiliary.tolist(), [1.0, 0.0])
 
 

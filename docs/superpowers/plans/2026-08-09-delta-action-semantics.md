@@ -99,6 +99,7 @@ git commit -m "fix: generate true per-episode delta labels"
 **Files:**
 - Modify: `src/vla_project/training/tokenizer_utils.py`
 - Modify: `src/vla_project/training/dataset.py`
+- Modify: `src/vla_project/training/rollout.py`
 - Create: `tests/training/test_tokenizer_utils.py`
 
 **Interfaces:**
@@ -122,12 +123,16 @@ Expected: `load_quantile_tokenizer` 缺失或旧 decode 返回箱中心。
 
 `BCDataset` 分类分支保存 `self.tokenizer` 与 `self._edges`；训练可从数据集读取完全相同的资产写入 checkpoint。
 
+现有 rollout 的外部 audit 兼容加载也返回完整 tokenizer，并把
+`tokenizer["reconstruction_values"]` 传给 decode；Task 4 再把 delta 的资产来源收紧为
+checkpoint 内嵌 metadata。
+
 - [ ] **Step 4: 验证并提交**
 
 Run: `env PYTHONPATH=src conda run -n vla_env python -m unittest tests.training.test_tokenizer_utils tests.training.test_dataset -q`
 
 ```bash
-git add src/vla_project/training/tokenizer_utils.py src/vla_project/training/dataset.py tests/training/test_tokenizer_utils.py tests/training/test_dataset.py
+git add src/vla_project/training/tokenizer_utils.py src/vla_project/training/dataset.py src/vla_project/training/rollout.py tests/training/test_tokenizer_utils.py tests/training/test_dataset.py docs/superpowers/plans/2026-08-09-delta-action-semantics.md
 git commit -m "fix: decode action tokens with audited reconstructions"
 ```
 
