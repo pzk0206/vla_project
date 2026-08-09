@@ -12,7 +12,10 @@ def _make_text_encoder():
     """加载 all-MiniLM-L6-v2，返回 (encoder, embedding_dim)。"""
     from sentence_transformers import SentenceTransformer
 
-    encoder = SentenceTransformer("all-MiniLM-L6-v2")
+    encoder = SentenceTransformer(
+        "all-MiniLM-L6-v2",
+        local_files_only=True,
+    )
     return encoder, encoder.get_sentence_embedding_dimension()  # 384
 
 
