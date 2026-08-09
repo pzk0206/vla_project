@@ -1635,3 +1635,37 @@ tokenizer 红测进一步证明旧 decode 对边界 `[0,1,3]` 返回箱中心 `[
 旧 overfit/full checkpoint 与0% rollout 不改写，作为 Bug 证据保留。下一步才运行全新
 `bc_delta_q_64_overfit_10_v2` 和 `bc_delta_q_64_full_v2` 重训；在新 rollout 之前不评价
 delta 表示优劣。
+
+## 45. Delta v2 重训启动门禁 (2026-08-09)
+
+重训输入继续使用冻结的斜视数据 `outputs/dataset/expert_scaling_v1/`；未运行任何数据
+采集命令。`episode_split.json` 的 SHA-256 为
+`783ff936a80f568ca51f65219d2cce1fbfdc1bd95214135454f051b38b90a610`，动作审计来自
+`action_tokenization_audit_v2/action_tokenization_audit.json`，边界只由250个 train
+episode 拟合。只读预检确认 tokenizer 为7个关节、每关节64箱，前10个训练 episode
+生成321个同 episode 相邻保存帧 delta 样本。
+
+计划依次运行：
+
+- overfit：`delta_q_64`、10 episodes、200 epochs、batch size 16、learning rate
+  `1e-4`，新目录 `outputs/training/bc_delta_q_64_overfit_10_v2/`；
+- full：`delta_q_64`、250 train episodes、50 epochs、batch size 32、learning rate
+  `1e-4`，新目录 `outputs/training/bc_delta_q_64_full_v2/`。
+
+启动前两个目标目录均不存在，GPU 为 NVIDIA GeForce GTX 1650 Ti（4096 MiB）。训练失败
+时保留失败证据，不覆盖或复用非空目录；旧 v1 产物保持不变。
+
+## 46. Delta v2 重训结果 (2026-08-09)
+
+两个 GPU 作业均在新目录完成，使用 CUDA 且没有 OOM、NaN 或目录复用：
+
+- overfit v2：321个 train delta 样本、1602个 val delta 样本，200 epochs，最终训练
+  损失从首轮29.4597降至0.516125，最佳验证损失24.525437（epoch 39），耗时1467.6秒；
+- full v2：7992个 train delta 样本、1602个 val delta 样本，50 epochs，最佳验证损失
+  9.626452（epoch 30），最终训练/验证损失0.700583/11.391186，耗时2911.8秒。
+
+两个目录的 `checkpoint_best.pt` 和 `checkpoint_last.pt` 均核验通过：动作语义为
+`same_episode_saved_target_delta_v2`，训练 split SHA-256 与启动门禁一致，tokenizer 含7组
+边界和7×64个审计重建值。overfit 证明正确 delta 标签可学习；full 的训练/验证损失只
+证明优化过程完成，不能替代新 checkpoint 的闭环 rollout 成功率，当前仍不评价 delta
+是否优于 regression 或 absolute。

@@ -4,8 +4,8 @@
 
 ## 当前阶段
 
-目录安全和 delta 代码语义修复已经完成，当前进入 **delta v2 checkpoint 重训**。
-在 delta 重训、数据重采集、确定性 rollout 和成对反事实评估完成前，
+目录安全、delta 代码语义修复和 delta v2 checkpoint 重训已经完成，当前进入
+**双积木 v2 数据修复与重新采集**。在数据重采集、确定性 rollout 和成对反事实评估完成前，
 **不继续 Qwen2-VL QLoRA**。
 
 ### 2026-08-09 目录安全完成点
@@ -33,7 +33,8 @@
 
 - 后续正式采集与训练继续采用斜视图；俯视图遮挡率更高，只保留为对照派生数据。
 - `delta_q_64 = 0%` 不能支持“delta 表示不可行”：旧 delta 标签/执行语义有缺陷；代码
-  已修复，旧 checkpoint 已废弃，等待 v2 重训。
+  已修复，旧 checkpoint 已废弃。v2 已完成重训，但在新 checkpoint rollout 前仍不能
+  给出 delta 闭环性能结论。
 - 多任务 VLA 的24.5%任务成功率可以作为旧设置的观察结果；“70%语言跟随率/反事实切换”
   尚无正式成对、确定性、可审计反事实证据，暂不作为成立结论。
 - `expert_multi_v1` 的红蓝块采样与场景状态不满足新门禁；其结果只说明旧场景配置，不能
@@ -41,11 +42,11 @@
 
 ### 后续顺序
 
-1. **当前：**在新目录重训 `bc_delta_q_64_overfit_10_v2` 与
-   `bc_delta_q_64_full_v2`。旧 `bc_delta_q_64_*_v1` 和
-   `outputs/rollout/bc_delta_q_64_full_v1/` 保留但已废弃，原因固定为
-   `absolute_labels_encoded_as_delta`。
-2. 调整红蓝块无碰撞采样、保存完整双积木状态，采集300条通过质量门禁的数据。
+1. **已完成：**在新目录重训 `bc_delta_q_64_overfit_10_v2` 与
+   `bc_delta_q_64_full_v2`。overfit 最终训练损失为0.516125；full 最佳验证损失为
+   9.626452（epoch 30）。两个 checkpoint 均保存 v2 语义、split 哈希和完整 tokenizer。
+   这些是训练证据，不等于 rollout 成功率。旧 v1 产物继续保留但废弃。
+2. **当前：**调整红蓝块无碰撞采样、保存完整双积木状态，采集300条通过质量门禁的数据。
 3. 按 episode seed 和保存位姿确定性复现 VLA rollout。
 4. 实现成对反事实评估，生成可审计结果后再决定是否恢复70%结论。
 5. 补齐训练测试、依赖、CLI 元数据、notebook 输出和项目文档，最后继续 QLoRA。
