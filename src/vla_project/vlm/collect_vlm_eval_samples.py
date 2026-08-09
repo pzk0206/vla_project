@@ -17,6 +17,11 @@ import cv2
 import numpy as np
 import pybullet as p
 
+from vla_project.output_paths import (
+    project_root as managed_project_root,
+    resolve_managed_output,
+    staged_output_directory,
+)
 from vla_project.simulation.camera_geometry import compute_camera_matrices
 from vla_project.simulation.control_arm import (
     CONFIG_PATH,
@@ -184,17 +189,23 @@ REQUIRED_SAMPLE_FIELDS = {
 }
 
 
-def validate_samples(samples, project_root="."):
+def validate_samples(samples, project_root=".", image_root_override=None):
     """校验样本字段、方向、图片可读性和 ID 唯一性。
 
     Args:
         samples: 由样本字典组成的可迭代对象。
         project_root: ``image_path`` 相对路径所基于的项目根目录。
+        image_root_override: staging 发布前用于查找真实图片的目录；记录路径不变。
 
     Raises:
         ValueError: 任意样本违反最小数据契约时立即抛出，并指出问题字段。
     """
     root = Path(project_root)
+    image_root = (
+        Path(image_root_override)
+        if image_root_override is not None
+        else None
+    )
     seen_sample_ids = set()
 
     for index, sample in enumerate(samples):
@@ -216,7 +227,11 @@ def validate_samples(samples, project_root="."):
         seen_sample_ids.add(sample_id)
 
         # 文件存在仍可能是空文件或损坏文件，所以必须让 OpenCV 实际解码一次。
-        image_path = root / sample["image_path"]
+        image_path = (
+            image_root / Path(sample["image_path"]).name
+            if image_root is not None
+            else root / sample["image_path"]
+        )
         if not image_path.is_file() or cv2.imread(str(image_path)) is None:
             raise ValueError(f"样本 {index} 的 image_path 不可读取: {image_path}")
 
@@ -428,154 +443,188 @@ def read_jsonl(path):
         return [json.loads(line) for line in jsonl_file if line.strip()]
 
 
-def collect_vlm_eval_samples(config):
+def collect_vlm_eval_samples(config, project_root_override=None):
     """运行固定种子的 heuristic probe 并写出离线视觉方向样本。"""
     if config["probe"]["mode"].lower() != "heuristic":
         raise ValueError("离线标准标签只能在 probe.mode: heuristic 下收集")
 
     evaluation = config["vlm_evaluation"]
-    output_dir = Path(evaluation["sample_output_dir"])
-    images_dir = output_dir / "images"
-    # 该目录只包含可重新生成的评估样本。每次清理可避免旧图片和新 manifest 混用。
-    if output_dir.exists():
-        shutil.rmtree(output_dir)
-    images_dir.mkdir(parents=True)
+    root = (
+        Path(project_root_override).resolve()
+        if project_root_override is not None
+        else managed_project_root()
+    )
+    output_dir = resolve_managed_output(
+        evaluation["sample_output_dir"],
+        allowed_root="outputs/vlm_samples",
+        project_root_override=root,
+    )
 
-    # 使用独立俯视相机并强制保存图片，不修改 baseline 的原始配置字典。
-    sampling_config = build_sampling_config(config)
-    camera_config = sampling_config["camera"]
+    with staged_output_directory(
+        output_dir,
+        allowed_root="outputs/vlm_samples",
+        project_root_override=root,
+    ) as staging_dir:
+        images_dir = staging_dir / "images"
+        images_dir.mkdir()
+        final_images_dir = output_dir / "images"
 
-    base_seed = config["probe_evaluation"]["random_seed"]
-    instruction = config["dataset"]["instruction"]
-    samples = []
-    diagnostics = []
+        # 使用独立评估相机并强制保存图片，不修改 baseline 配置字典。
+        sampling_config = build_sampling_config(config)
+        camera_config = sampling_config["camera"]
 
-    # 均衡模式主动构造相对位置；分层模式额外覆盖远、中、近三档距离。
-    if evaluation.get("sample_strategy") in {
-        "balanced_poses",
-        "stratified_balanced_poses",
-    }:
-        if evaluation["sample_strategy"] == "stratified_balanced_poses":
-            cases = build_stratified_balanced_cases(
-                evaluation["balanced_pose_offsets_xy"]
-            )
-            seeds = validate_stratified_seeds(evaluation["stratified_seeds"])
+        base_seed = config["probe_evaluation"]["random_seed"]
+        instruction = config["dataset"]["instruction"]
+        samples = []
+        diagnostics = []
+
+        # 均衡模式主动构造相对位置；分层模式额外覆盖远、中、近三档距离。
+        if evaluation.get("sample_strategy") in {
+            "balanced_poses",
+            "stratified_balanced_poses",
+        }:
+            if evaluation["sample_strategy"] == "stratified_balanced_poses":
+                cases = build_stratified_balanced_cases(
+                    evaluation["balanced_pose_offsets_xy"]
+                )
+                seeds = validate_stratified_seeds(
+                    evaluation["stratified_seeds"]
+                )
+            else:
+                cases = [
+                    {
+                        "offset_xy": evaluation["balanced_pose_offset_xy"],
+                        "offset_tag": None,
+                        "direction": direction,
+                    }
+                    for direction in BALANCED_DIRECTION_ORDER
+                ]
+                seeds = [
+                    base_seed + episode_idx
+                    for episode_idx in range(
+                        evaluation["offline_num_episodes"]
+                    )
+                ]
+
+            for seed in seeds:
+                for case_index, case in enumerate(cases):
+                    direction = case["direction"]
+                    if case["offset_tag"]:
+                        sample_id = (
+                            f"seed_{seed}_{case['offset_tag']}_{direction}"
+                        )
+                    else:
+                        sample_id = f"seed_{seed}_{direction}"
+                    filename = f"{sample_id}.jpg"
+                    staging_image_path = images_dir / filename
+                    final_image_path = final_images_dir / filename
+                    captured = capture_balanced_pose_sample(
+                        sampling_config,
+                        direction,
+                        seed,
+                        staging_image_path,
+                        offset_xy=case["offset_xy"],
+                    )
+                    camera_eye = captured["camera_eye"]
+                    samples.append(
+                        {
+                            "sample_id": sample_id,
+                            "image_path": final_image_path.relative_to(
+                                root
+                            ).as_posix(),
+                            "instruction": instruction,
+                            "expected_direction": direction,
+                            "offset_xy": case["offset_xy"],
+                            "random_seed": seed,
+                            "control_step": case_index,
+                            "camera_eye": list(camera_eye),
+                        }
+                    )
+                    diagnostics.append(
+                        build_sample_diagnostic(
+                            sample_id,
+                            captured["block_pos"],
+                            camera_eye,
+                            camera_config,
+                            visibility_metrics={
+                                "block_visible_pixels": captured[
+                                    "block_visible_pixels"
+                                ],
+                                "block_reference_pixels": captured[
+                                    "block_reference_pixels"
+                                ],
+                                "block_visibility_ratio": captured[
+                                    "block_visibility_ratio"
+                                ],
+                            },
+                        )
+                    )
+
         else:
-            cases = [
-                {
-                    "offset_xy": evaluation["balanced_pose_offset_xy"],
-                    "offset_tag": None,
-                    "direction": direction,
-                }
-                for direction in BALANCED_DIRECTION_ORDER
-            ]
-            seeds = [
-                base_seed + episode_idx
-                for episode_idx in range(evaluation["offline_num_episodes"])
-            ]
-
-        for seed in seeds:
-            for case_index, case in enumerate(cases):
-                direction = case["direction"]
-                if case["offset_tag"]:
-                    sample_id = f"seed_{seed}_{case['offset_tag']}_{direction}"
-                else:
-                    sample_id = f"seed_{seed}_{direction}"
-                relative_image_path = images_dir / f"{sample_id}.jpg"
-                captured = capture_balanced_pose_sample(
-                    sampling_config,
-                    direction,
-                    seed,
-                    relative_image_path,
-                    offset_xy=case["offset_xy"],
-                )
-                camera_eye = captured["camera_eye"]
-                samples.append(
-                    {
-                        "sample_id": sample_id,
-                        "image_path": relative_image_path.as_posix(),
-                        "instruction": instruction,
-                        "expected_direction": direction,
-                        "offset_xy": case["offset_xy"],
-                        "random_seed": seed,
-                        "control_step": case_index,
-                        "camera_eye": list(camera_eye),
-                    }
-                )
-                diagnostics.append(
-                    build_sample_diagnostic(
-                        sample_id,
-                        captured["block_pos"],
-                        camera_eye,
-                        camera_config,
-                        visibility_metrics={
-                            "block_visible_pixels": captured[
-                                "block_visible_pixels"
-                            ],
-                            "block_reference_pixels": captured[
-                                "block_reference_pixels"
-                            ],
-                            "block_visibility_ratio": captured[
-                                "block_visibility_ratio"
-                            ],
-                        },
+            # 原始逐步图片只用于挑选，放在临时目录中并在结束后自动清理。
+            with tempfile.TemporaryDirectory(
+                prefix="vlm_eval_probe_"
+            ) as temp_dir:
+                temp_root = Path(temp_dir)
+                for episode_idx in range(
+                    evaluation["offline_num_episodes"]
+                ):
+                    seed = base_seed + episode_idx
+                    episode_dir = temp_root / f"episode_{episode_idx:03d}"
+                    summary = run_probe_episode(
+                        sampling_config,
+                        episode_idx,
+                        episode_dir,
+                        random_seed=seed,
                     )
-                )
-
-        validate_samples(samples, Path.cwd())
-        manifest_path, _ = write_sample_files(output_dir, samples, diagnostics)
-        return manifest_path, samples
-
-    # 原始逐步图片只用于挑选，放在临时目录中并在结束后自动清理。
-    with tempfile.TemporaryDirectory(prefix="vlm_eval_probe_") as temp_dir:
-        temp_root = Path(temp_dir)
-        for episode_idx in range(evaluation["offline_num_episodes"]):
-            seed = base_seed + episode_idx
-            episode_dir = temp_root / f"episode_{episode_idx:03d}"
-            summary = run_probe_episode(
-                sampling_config,
-                episode_idx,
-                episode_dir,
-                random_seed=seed,
-            )
-            trace_rows = read_jsonl(summary["trace_path"])
-            selected_rows = select_evenly_spaced_rows(
-                trace_rows,
-                evaluation["max_samples_per_episode"],
-            )
-
-            for row in selected_rows:
-                control_step = row["control_step"]
-                sample_id = f"seed_{seed}_step_{control_step:03d}"
-                relative_image_path = images_dir / f"{sample_id}.jpg"
-                shutil.copy2(row["image_path"], relative_image_path)
-
-                # block_pos/ee_pos 等仿真真值不进入评估样本，防止后续误发给 VLM。
-                samples.append(
-                    {
-                        "sample_id": sample_id,
-                        "image_path": relative_image_path.as_posix(),
-                        "instruction": instruction,
-                        "expected_direction": row["direction"],
-                        "random_seed": seed,
-                        "control_step": control_step,
-                        "camera_eye": row["camera_eye"],
-                    }
-                )
-                diagnostics.append(
-                    build_sample_diagnostic(
-                        sample_id,
-                        row["block_pos"],
-                        row["camera_eye"],
-                        camera_config,
+                    trace_rows = read_jsonl(summary["trace_path"])
+                    selected_rows = select_evenly_spaced_rows(
+                        trace_rows,
+                        evaluation["max_samples_per_episode"],
                     )
-                )
 
-    # 先用同一套契约校验全部样本，通过后才写最终 manifest。
-    validate_samples(samples, Path.cwd())
-    manifest_path, _ = write_sample_files(output_dir, samples, diagnostics)
+                    for row in selected_rows:
+                        control_step = row["control_step"]
+                        sample_id = (
+                            f"seed_{seed}_step_{control_step:03d}"
+                        )
+                        filename = f"{sample_id}.jpg"
+                        staging_image_path = images_dir / filename
+                        final_image_path = final_images_dir / filename
+                        shutil.copy2(row["image_path"], staging_image_path)
 
-    return manifest_path, samples
+                        # 仿真真值只进入 diagnostics，不进入可发送样本。
+                        samples.append(
+                            {
+                                "sample_id": sample_id,
+                                "image_path": final_image_path.relative_to(
+                                    root
+                                ).as_posix(),
+                                "instruction": instruction,
+                                "expected_direction": row["direction"],
+                                "random_seed": seed,
+                                "control_step": control_step,
+                                "camera_eye": row["camera_eye"],
+                            }
+                        )
+                        diagnostics.append(
+                            build_sample_diagnostic(
+                                sample_id,
+                                row["block_pos"],
+                                row["camera_eye"],
+                                camera_config,
+                            )
+                        )
+
+        # staging 内图片通过真实解码后，才允许发布到最终目录。
+        validate_samples(
+            samples,
+            root,
+            image_root_override=images_dir,
+        )
+        write_sample_files(staging_dir, samples, diagnostics)
+
+    return output_dir / "samples.jsonl", samples
 
 
 def main():

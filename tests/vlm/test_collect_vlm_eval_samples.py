@@ -155,12 +155,14 @@ class SampleDiagnosticsTests(unittest.TestCase):
         self, build_config, capture_sample, _validate_samples
     ):
         with tempfile.TemporaryDirectory() as temp_dir:
+            project_root = Path(temp_dir)
+            output_dir = project_root / "outputs/vlm_samples/diagnostics_run"
             config = {
                 "probe": {"mode": "heuristic"},
                 "probe_evaluation": {"random_seed": 42},
                 "dataset": {"instruction": "悬停在红色积木上方"},
                 "vlm_evaluation": {
-                    "sample_output_dir": temp_dir,
+                    "sample_output_dir": "outputs/vlm_samples/diagnostics_run",
                     "sample_strategy": "stratified_balanced_poses",
                     "balanced_pose_offsets_xy": [0.2],
                     "stratified_num_seeds": 5,
@@ -177,8 +179,11 @@ class SampleDiagnosticsTests(unittest.TestCase):
                 "block_visibility_ratio": 0.75,
             }
 
-            manifest_path, samples = collect_vlm_eval_samples(config)
-            diagnostics_path = Path(temp_dir) / "diagnostics.jsonl"
+            manifest_path, samples = collect_vlm_eval_samples(
+                config,
+                project_root_override=project_root,
+            )
+            diagnostics_path = output_dir / "diagnostics.jsonl"
 
             diagnostics = [
                 json.loads(line)
@@ -282,6 +287,142 @@ class ValidateVlmEvalSamplesTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "sample_id"):
             validate_samples([first, duplicate], self.project_root)
+
+    def test_image_root_override_checks_staged_image_without_changing_record(self):
+        sample = self.make_valid_sample()
+        staged_images = self.project_root / "staging" / "images"
+        staged_images.mkdir(parents=True)
+        image = np.zeros((16, 16, 3), dtype=np.uint8)
+        staged_path = staged_images / Path(sample["image_path"]).name
+        self.assertTrue(cv2.imwrite(str(staged_path), image))
+        (self.project_root / sample["image_path"]).unlink()
+
+        validate_samples(
+            [sample],
+            self.project_root,
+            image_root_override=staged_images,
+        )
+
+        self.assertEqual(
+            sample["image_path"],
+            "vlm_eval_samples/images/seed_42_step_000.jpg",
+        )
+
+
+class AtomicSampleCollectionTests(unittest.TestCase):
+    """样本生成只能在全部校验成功后替换旧证据。"""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.project_root = Path(self.temp_dir.name)
+        self.output_dir = (
+            self.project_root / "outputs/vlm_samples/atomic_run"
+        )
+        self.camera_config = {
+            "workspace_center": [0.0, 0.4, 0.0],
+            "up_vector": [0.0, 1.0, 0.0],
+            "image_width": 16,
+            "image_height": 16,
+            "fov": 45,
+            "near_val": 0.1,
+            "far_val": 100.0,
+        }
+        self.config = {
+            "probe": {"mode": "heuristic"},
+            "probe_evaluation": {"random_seed": 42},
+            "dataset": {"instruction": "悬停在红色积木上方"},
+            "vlm_evaluation": {
+                "sample_output_dir": "outputs/vlm_samples/atomic_run",
+                "sample_strategy": "stratified_balanced_poses",
+                "balanced_pose_offsets_xy": [0.2],
+                "stratified_num_seeds": 1,
+                "stratified_seeds": [47],
+            },
+            "camera": self.camera_config,
+        }
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def capture_real_jpeg(self, _config, _direction, _seed, image_path, **_kwargs):
+        image = np.zeros((16, 16, 3), dtype=np.uint8)
+        self.assertTrue(cv2.imwrite(str(image_path), image))
+        return {
+            "camera_eye": [0.0, 0.4, 3.0],
+            "block_pos": [0.01, 0.44, 0.05],
+            "block_visible_pixels": 75,
+            "block_reference_pixels": 100,
+            "block_visibility_ratio": 0.75,
+        }
+
+    @patch("vla_project.vlm.collect_vlm_eval_samples.capture_balanced_pose_sample")
+    @patch("vla_project.vlm.collect_vlm_eval_samples.build_sampling_config")
+    def test_generation_failure_preserves_existing_output(
+        self,
+        build_config,
+        capture_sample,
+    ):
+        self.output_dir.mkdir(parents=True)
+        marker = self.output_dir / "old.json"
+        marker.write_text("old", encoding="utf-8")
+        build_config.return_value = self.config
+        capture_sample.side_effect = RuntimeError("generation failed")
+
+        with self.assertRaisesRegex(RuntimeError, "generation failed"):
+            collect_vlm_eval_samples(
+                self.config,
+                project_root_override=self.project_root,
+            )
+
+        self.assertEqual(marker.read_text(encoding="utf-8"), "old")
+
+    @patch(
+        "vla_project.vlm.collect_vlm_eval_samples.build_sampling_config",
+        side_effect=AssertionError("path validation must happen first"),
+    )
+    def test_path_escape_is_rejected_before_sampling_setup(self, _build_config):
+        source_marker = self.project_root / "src" / "marker.txt"
+        source_marker.parent.mkdir()
+        source_marker.write_text("source", encoding="utf-8")
+        self.config["vlm_evaluation"]["sample_output_dir"] = (
+            "outputs/vlm_samples/../../src"
+        )
+
+        with self.assertRaisesRegex(ValueError, "parent traversal"):
+            collect_vlm_eval_samples(
+                self.config,
+                project_root_override=self.project_root,
+            )
+
+        self.assertEqual(source_marker.read_text(encoding="utf-8"), "source")
+
+    @patch("vla_project.vlm.collect_vlm_eval_samples.capture_balanced_pose_sample")
+    @patch("vla_project.vlm.collect_vlm_eval_samples.build_sampling_config")
+    def test_success_replaces_old_output_after_real_image_validation(
+        self,
+        build_config,
+        capture_sample,
+    ):
+        self.output_dir.mkdir(parents=True)
+        marker = self.output_dir / "old.json"
+        marker.write_text("old", encoding="utf-8")
+        build_config.return_value = self.config
+        capture_sample.side_effect = self.capture_real_jpeg
+
+        manifest_path, samples = collect_vlm_eval_samples(
+            self.config,
+            project_root_override=self.project_root,
+        )
+
+        self.assertEqual(manifest_path, self.output_dir / "samples.jsonl")
+        self.assertEqual(len(samples), 4)
+        self.assertFalse(marker.exists())
+        self.assertTrue((self.output_dir / "diagnostics.jsonl").is_file())
+        for sample in samples:
+            self.assertFalse(Path(sample["image_path"]).is_absolute())
+            self.assertTrue(
+                (self.project_root / sample["image_path"]).is_file()
+            )
 
 
 class SelectEvenlySpacedRowsTests(unittest.TestCase):
