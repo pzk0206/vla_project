@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 import time
@@ -85,7 +86,14 @@ def _run_epoch(model, dataloader, optimizer, device, is_train, loss_fn):
     return total_loss / max(total_samples, 1)
 
 
-def _save_checkpoint(model, optimizer, epoch, path, metadata=None):
+def _save_checkpoint(
+    model,
+    optimizer,
+    epoch,
+    path,
+    common_metadata=None,
+    epoch_metrics=None,
+):
     """保存 checkpoint。"""
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     state = {
@@ -94,6 +102,8 @@ def _save_checkpoint(model, optimizer, epoch, path, metadata=None):
         "optimizer_state_dict": optimizer.state_dict(),
         "action_representation": model.action_representation,
     }
+    metadata = dict(common_metadata or {})
+    metadata.update(epoch_metrics or {})
     if metadata:
         state["metadata"] = metadata
     torch.save(state, path)
@@ -127,6 +137,70 @@ def _load_all_rows(dataset_dir):
     return rows
 
 
+def _default_training_output(action_representation, overfit_episodes):
+    if action_representation == "delta_q_64":
+        scope = (
+            f"overfit_{overfit_episodes}"
+            if overfit_episodes is not None
+            else "full"
+        )
+        return Path(_DEFAULT_OUTPUT) / f"bc_delta_q_64_{scope}_v2"
+    tag = (
+        f"bc_{action_representation}"
+        + (f"_overfit_{overfit_episodes}" if overfit_episodes else "")
+        + "_v1"
+    )
+    return Path(_DEFAULT_OUTPUT) / tag
+
+
+def _validate_training_output_version(action_representation, output_dir):
+    output_dir = Path(output_dir)
+    if (
+        action_representation == "delta_q_64"
+        and not output_dir.name.endswith("_v2")
+    ):
+        raise ValueError("delta checkpoint output directory must end with v2")
+    return output_dir
+
+
+def _training_split_sha256(split_path):
+    return hashlib.sha256(Path(split_path).read_bytes()).hexdigest()
+
+
+def _build_checkpoint_metadata(
+    action_representation,
+    split_sha256,
+    tokenizer=None,
+    action_stats=None,
+):
+    if (
+        not isinstance(split_sha256, str)
+        or len(split_sha256) != 64
+        or any(char not in "0123456789abcdef" for char in split_sha256)
+    ):
+        raise ValueError("invalid training split sha256")
+    metadata = {
+        "action_semantics": (
+            "same_episode_saved_target_delta_v2"
+            if action_representation == "delta_q_64"
+            else "absolute_joint_target_v1"
+        ),
+        "training_split_sha256": split_sha256,
+    }
+    if action_representation == "regression":
+        if action_stats is None:
+            raise ValueError("regression checkpoint requires action stats")
+        metadata["action_stats"] = {
+            "mean": [float(value) for value in action_stats[0]],
+            "std": [float(value) for value in action_stats[1]],
+        }
+    else:
+        if not isinstance(tokenizer, dict):
+            raise ValueError("classification checkpoint requires tokenizer")
+        metadata["tokenizer"] = tokenizer
+    return metadata
+
+
 def run_training(
     dataset_dir=_DEFAULT_DATASET,
     output_dir=None,
@@ -139,12 +213,14 @@ def run_training(
 ):
     """执行 BC 训练，返回输出目录和训练摘要。"""
     if output_dir is None:
-        tag = (
-            f"bc_{action_representation}"
-            + (f"_overfit_{overfit_episodes}" if overfit_episodes else "")
-            + "_v1"
+        output_dir = _default_training_output(
+            action_representation,
+            overfit_episodes,
         )
-        output_dir = Path(_DEFAULT_OUTPUT) / tag
+    output_dir = _validate_training_output_version(
+        action_representation,
+        output_dir,
+    )
     output_dir = resolve_new_output_directory(
         output_dir,
         allowed_root="outputs/training",
@@ -212,6 +288,19 @@ def run_training(
         ),
         action_stats=action_stats,
     )
+    split_sha256 = _training_split_sha256(split_path)
+    common_metadata = _build_checkpoint_metadata(
+        action_representation,
+        split_sha256,
+        tokenizer=(
+            train_dataset.tokenizer
+            if action_representation != "regression"
+            else None
+        ),
+        action_stats=(
+            action_stats if action_representation == "regression" else None
+        ),
+    )
 
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
@@ -259,6 +348,8 @@ def run_training(
         "device": str(device),
         "train_samples": len(train_dataset),
         "val_samples": len(val_dataset),
+        "action_semantics": common_metadata["action_semantics"],
+        "training_split_sha256": split_sha256,
     }
     (output_dir / "config.yaml").write_text(
         yaml.dump(config, allow_unicode=True), encoding="utf-8"
@@ -289,7 +380,11 @@ def run_training(
                 optimizer,
                 epoch,
                 output_dir / "checkpoint_best.pt",
-                metadata={"val_loss": val_loss, "train_loss": train_loss},
+                common_metadata=common_metadata,
+                epoch_metrics={
+                    "val_loss": val_loss,
+                    "train_loss": train_loss,
+                },
             )
 
         if epoch % 5 == 0 or epoch == 1 or epoch == epochs:
@@ -306,7 +401,8 @@ def run_training(
         optimizer,
         epochs,
         output_dir / "checkpoint_last.pt",
-        metadata={"val_loss": val_loss, "train_loss": train_loss},
+        common_metadata=common_metadata,
+        epoch_metrics={"val_loss": val_loss, "train_loss": train_loss},
     )
 
     # 保存 loss 曲线
@@ -323,6 +419,8 @@ def run_training(
         "final_val_loss": round(val_losses[-1]["loss"], 6),
         "elapsed_seconds": round(elapsed, 1),
         "device": str(device),
+        "action_semantics": common_metadata["action_semantics"],
+        "training_split_sha256": split_sha256,
     }
     (output_dir / "summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2) + "\n",
