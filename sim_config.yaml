@@ -44,13 +44,13 @@ robot:
 
 # 5. 数据集采集配置：
 dataset:
-  output_dir: "outputs/dataset/expert_multi_v1"  # 新版专家数据独立写入版本化子目录。
-  task_selection: "random"                      # 每条轨迹随机选择悬停红块或蓝块。
+  output_dir: "outputs/dataset/expert_multi_v2"  # 双积木完整场景数据写入全新版本目录。
+  task_selection: "balanced_alternating"         # 按 seed/index 确定性平衡红蓝任务。
   jsonl_name: "trajectory_expert.jsonl"  # 训练标签文件，一行对应一张图片。
   summary_jsonl_name: "episode_summary.jsonl"  # 每条轨迹的诊断摘要，一行对应一个 episode。
-  schema_version: "expert_v1"        # 单帧、摘要和 manifest 共用的 schema 版本。
-  clean_before_run: false            # 保留已验收的10条 pilot，以追加模式扩展数据集。
-  num_episodes: 290                  # 从 episode 10 追加到299，最终总计300条。
+  schema_version: "expert_multi_v2"  # 保存完整双积木、机器人和相机场景状态。
+  clean_before_run: false            # 先采10条 pilot，门禁通过后只追加剩余290条。
+  num_episodes: 300                  # 计划总规模；CLI 可只覆盖单次 pilot/追加数量。
   pilot_num_episodes: 10             # pilot 质量门禁要求的 episode 数。
   target_num_episodes: 300           # pilot 通过后的正式数据规模目标。
   random_seed: 1000                  # episode seed = random_seed + episode_idx。
@@ -76,6 +76,16 @@ task:
   initial_settle_steps: 30           # 积木加载后先让物理稳定一小段时间，避免未落稳就开始录制。
   stuck_window_steps: 120            # 最近多少个 step 用来判断机械臂是否卡住。
   stuck_min_improvement: 0.0005      # 在窗口期内如果总改善小于该值，就认为基本没有继续靠近目标。
+
+  pair_sampling:
+    enabled: true
+    x_range: [-0.2, 0.2]
+    y_range: [0.38, 0.5]
+    z: 0.1
+    min_axis_separation_xy: 0.12
+    max_attempts: 100
+    max_settle_drift_xy: 0.005
+    max_episode_drift_xy: 0.005
 
   second_block:
     enabled: true

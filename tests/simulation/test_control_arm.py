@@ -81,6 +81,90 @@ class CaptureRgbCameraMatrixTests(unittest.TestCase):
         self.assertEqual(image.shape, (2, 2, 3))
 
 
+class BlockPairSamplingTests(unittest.TestCase):
+    """阻止双积木重叠和随机任务失衡重新进入采集。"""
+
+    def make_task_config(self):
+        return {
+            "pair_sampling": {
+                "x_range": [-0.2, 0.2],
+                "y_range": [0.38, 0.5],
+                "z": 0.1,
+                "min_axis_separation_xy": 0.12,
+                "max_attempts": 2,
+            }
+        }
+
+    def test_rejects_overlapping_draw_before_returning_separated_pair(self):
+        class SequenceRng:
+            def __init__(self):
+                self.values = iter(
+                    [
+                        0.00, 0.40, 0.05, 0.45,
+                        -0.20, 0.40, 0.20, 0.40,
+                    ]
+                )
+
+            def uniform(self, _low, _high):
+                return next(self.values)
+
+        positions = control_arm.sample_block_pair_positions(
+            self.make_task_config(),
+            rng=SequenceRng(),
+        )
+
+        self.assertEqual(positions["red"], [-0.2, 0.4, 0.1])
+        self.assertEqual(positions["blue"], [0.2, 0.4, 0.1])
+
+    def test_impossible_pair_range_fails_after_finite_attempts(self):
+        class MidpointRng:
+            def uniform(self, low, high):
+                return (low + high) / 2.0
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "unable to sample non-overlapping block pair",
+        ):
+            control_arm.sample_block_pair_positions(
+                self.make_task_config(),
+                rng=MidpointRng(),
+            )
+
+    def test_balanced_task_schedule_is_reproducible_and_exact(self):
+        config = {
+            "dataset": {
+                "instruction": "悬停在红色积木上方",
+                "random_seed": 1000,
+                "task_selection": "balanced_alternating",
+            },
+            "task": {
+                "tasks": [
+                    {
+                        "instruction": "悬停在红色积木上方",
+                        "target_block": "red",
+                    },
+                    {
+                        "instruction": "悬停在蓝色积木上方",
+                        "target_block": "blue",
+                    },
+                ]
+            },
+        }
+
+        first = [control_arm.select_task(config, i) for i in range(300)]
+        second = [control_arm.select_task(config, i) for i in range(300)]
+
+        self.assertEqual(first, second)
+        self.assertEqual(
+            sum(target == "red" for _, target in first),
+            150,
+        )
+        self.assertEqual(
+            sum(target == "blue" for _, target in first),
+            150,
+        )
+
+
 class CalculateTargetJointsTests(unittest.TestCase):
     """确保 IK 使用真实关节限位和当前姿态，避免再次撞关节上限。"""
 

@@ -131,7 +131,7 @@ class ConfigContractTests(unittest.TestCase):
         """所有生成图片和实验记录必须进入统一 outputs 根目录。"""
         self.assertEqual(
             self.config["dataset"]["output_dir"],
-            "outputs/dataset/expert_scaling_v1",
+            "outputs/dataset/expert_multi_v2",
         )
         self.assertEqual(self.config["probe"]["output_dir"], "outputs/probe")
         self.assertEqual(
@@ -157,22 +157,32 @@ class ConfigContractTests(unittest.TestCase):
             )
         )
 
-    def test_expert_dataset_scaling_config_is_frozen(self):
-        """规模化采集必须安全追加，同时保持数据契约与独立复位。"""
+    def test_expert_multi_v2_collection_config_is_frozen(self):
+        """双积木 v2 必须使用斜视、联合采样和可追加的300条计划。"""
         dataset = self.config["dataset"]
+        task = self.config["task"]
+        pair = task["pair_sampling"]
 
         self.assertEqual(
             dataset["output_dir"],
-            "outputs/dataset/expert_scaling_v1",
+            "outputs/dataset/expert_multi_v2",
         )
-        self.assertEqual(dataset["schema_version"], "expert_v1")
+        self.assertEqual(dataset["schema_version"], "expert_multi_v2")
+        self.assertEqual(dataset["task_selection"], "balanced_alternating")
         self.assertEqual(dataset["random_seed"], 1000)
         self.assertTrue(dataset["reset_robot_each_episode"])
         self.assertEqual(dataset["home_joint_positions"], [0.0] * 7)
         self.assertFalse(dataset["clean_before_run"])
-        self.assertEqual(dataset["num_episodes"], 290)
+        self.assertEqual(dataset["num_episodes"], 300)
         self.assertEqual(dataset["pilot_num_episodes"], 10)
         self.assertEqual(dataset["target_num_episodes"], 300)
+        self.assertEqual(pair["x_range"], [-0.2, 0.2])
+        self.assertEqual(pair["y_range"], [0.38, 0.5])
+        self.assertEqual(pair["min_axis_separation_xy"], 0.12)
+        self.assertEqual(pair["max_attempts"], 100)
+        self.assertEqual(pair["max_settle_drift_xy"], 0.005)
+        self.assertEqual(pair["max_episode_drift_xy"], 0.005)
+        self.assertEqual(self.config["camera"]["eye_offset_base"], [1.05, 0.0, 1.65])
 
     def test_probe_evaluation_config_is_valid(self):
         """批量评估必须有正数次数、非空目录和可复现的整数种子。"""

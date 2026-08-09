@@ -251,6 +251,35 @@ def sample_block_position(task_config):
     ]
 
 
+def _pair_is_separated(red_position, blue_position, minimum):
+    """至少一个水平轴完全分开时，两个方块的 AABB 才不会重叠。"""
+    return (
+        abs(red_position[0] - blue_position[0]) >= minimum
+        or abs(red_position[1] - blue_position[1]) >= minimum
+    )
+
+
+def sample_block_pair_positions(task_config, rng=random):
+    """从相同分布联合采样一对不重叠的红蓝积木位置。"""
+    pair_cfg = task_config["pair_sampling"]
+    minimum = float(pair_cfg["min_axis_separation_xy"])
+    max_attempts = int(pair_cfg["max_attempts"])
+    for _ in range(max_attempts):
+        red_position = [
+            rng.uniform(*pair_cfg["x_range"]),
+            rng.uniform(*pair_cfg["y_range"]),
+            pair_cfg["z"],
+        ]
+        blue_position = [
+            rng.uniform(*pair_cfg["x_range"]),
+            rng.uniform(*pair_cfg["y_range"]),
+            pair_cfg["z"],
+        ]
+        if _pair_is_separated(red_position, blue_position, minimum):
+            return {"red": red_position, "blue": blue_position}
+    raise ValueError("unable to sample non-overlapping block pair")
+
+
 def load_block(task_config):
     """加载任务积木并设置视觉颜色。
 
@@ -289,7 +318,7 @@ def load_second_block(task_cfg):
     return block_id
 
 
-def select_task(config):
+def select_task(config, episode_idx=None):
     """按配置选择本 episode 的任务指令和目标积木颜色。
 
     新配置使用 task.tasks 列表随机挑选“悬停红块 / 悬停蓝块”之一；
@@ -300,6 +329,14 @@ def select_task(config):
     dataset_cfg = config["dataset"]
     tasks = task_cfg.get("tasks")
     if tasks:
+        if (
+            dataset_cfg.get("task_selection") == "balanced_alternating"
+            and episode_idx is not None
+        ):
+            selected = tasks[
+                (dataset_cfg["random_seed"] + episode_idx) % len(tasks)
+            ]
+            return selected["instruction"], selected["target_block"]
         selected = random.choice(tasks)
         return selected["instruction"], selected["target_block"]
     return dataset_cfg.get("instruction", "悬停在红色积木上方"), "red"
