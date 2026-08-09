@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import random
 import sys
 from datetime import datetime, timezone
@@ -21,7 +22,8 @@ _VAL_COUNT = 50
 _NUM_X_BINS = 5
 _NUM_Y_BINS = 5
 _SPLIT_SEED = 42
-_SCHEMA_VERSION = "episode_split_v1"
+_V1_SCHEMA_VERSION = "episode_split_v1"
+_V2_SCHEMA_VERSION = "episode_split_v2"
 
 
 def _compute_quantile_edges(values, num_bins):
@@ -64,7 +66,7 @@ def _read_episode_summaries(episode_summary_path):
     return rows
 
 
-def _stratified_split(rows):
+def _stratified_split_v1(rows):
     """按 initial_block_pos X/Y 五箱分层，做 250/50 划分。"""
     xs = [r["initial_block_pos"][0] for r in rows]
     ys = [r["initial_block_pos"][1] for r in rows]
@@ -134,6 +136,129 @@ def _stratified_split(rows):
     }
 
 
+def _validated_v2_target_position(row):
+    target_block = row.get("target_block")
+    if target_block not in {"red", "blue"}:
+        raise ValueError(
+            f"episode {row.get('episode_idx')} target_block 非法: {target_block!r}"
+        )
+    scene_state = row.get("initial_scene_state")
+    try:
+        scene_target = scene_state["target_block"]
+        position = scene_state["blocks"][target_block]["position"]
+    except (KeyError, TypeError) as exc:
+        raise ValueError(
+            f"episode {row.get('episode_idx')} 缺少目标块 initial_scene_state"
+        ) from exc
+    if scene_target != target_block:
+        raise ValueError(
+            f"episode {row.get('episode_idx')} target_block 与 scene state 不一致"
+        )
+    if (
+        not isinstance(position, list)
+        or len(position) != 3
+        or not all(isinstance(value, (int, float)) and math.isfinite(value) for value in position)
+    ):
+        raise ValueError(
+            f"episode {row.get('episode_idx')} 目标块位置非法"
+        )
+    initial_block_pos = row.get("initial_block_pos")
+    if (
+        not isinstance(initial_block_pos, list)
+        or len(initial_block_pos) != 3
+        or max(abs(float(a) - float(b)) for a, b in zip(position, initial_block_pos))
+        > 1e-6
+    ):
+        raise ValueError(
+            f"episode {row.get('episode_idx')} initial_block_pos 与目标 scene state 不一致"
+        )
+    return [float(value) for value in position]
+
+
+def _split_v2_task_group(rows, val_count, rng):
+    positions = {
+        row["episode_idx"]: _validated_v2_target_position(row) for row in rows
+    }
+    xs = [position[0] for position in positions.values()]
+    ys = [position[1] for position in positions.values()]
+    x_edges = _compute_quantile_edges(xs, _NUM_X_BINS)
+    y_edges = _compute_quantile_edges(ys, _NUM_Y_BINS)
+    cells = {}
+    for episode_idx, position in positions.items():
+        key = (_assign_bin(position[0], x_edges), _assign_bin(position[1], y_edges))
+        cells.setdefault(key, []).append(episode_idx)
+
+    train = []
+    val = []
+    for cell_key in sorted(cells):
+        shuffled = list(cells[cell_key])
+        rng.shuffle(shuffled)
+        n_val = max(1, int(round(len(shuffled) * (1 - _TRAIN_RATIO))))
+        n_val = min(n_val, len(shuffled) - 1) if len(shuffled) > 1 else 0
+        val.extend(shuffled[:n_val])
+        train.extend(shuffled[n_val:])
+
+    while len(val) < val_count:
+        rng.shuffle(train)
+        val.append(train.pop())
+    while len(val) > val_count:
+        rng.shuffle(val)
+        train.append(val.pop())
+
+    for split_name, episode_ids in (("train", train), ("val", val)):
+        x_covered = len({_assign_bin(positions[index][0], x_edges) for index in episode_ids})
+        y_covered = len({_assign_bin(positions[index][1], y_edges) for index in episode_ids})
+        if x_covered < _NUM_X_BINS or y_covered < _NUM_Y_BINS:
+            raise ValueError(
+                f"{split_name} 目标位置分箱覆盖不足: X={x_covered}/5 Y={y_covered}/5"
+            )
+    return train, val, x_edges, y_edges
+
+
+def _stratified_split_v2(rows):
+    task_rows = {"red": [], "blue": []}
+    for row in rows:
+        if row.get("schema_version") != "expert_multi_v2":
+            raise ValueError("expert_multi_v2 划分包含其他 schema")
+        target_block = row.get("target_block")
+        if target_block not in task_rows:
+            raise ValueError(f"非法 target_block: {target_block!r}")
+        task_rows[target_block].append(row)
+    if {color: len(items) for color, items in task_rows.items()} != {
+        "red": 150,
+        "blue": 150,
+    }:
+        raise ValueError("expert_multi_v2 必须严格包含 red=150、blue=150")
+
+    rng = random.Random(_SPLIT_SEED)
+    train = []
+    val = []
+    per_task_edges = {}
+    for color in ("red", "blue"):
+        color_train, color_val, x_edges, y_edges = _split_v2_task_group(
+            task_rows[color], 25, rng
+        )
+        train.extend(color_train)
+        val.extend(color_val)
+        per_task_edges[color] = {
+            "x_edges": x_edges,
+            "y_edges": y_edges,
+        }
+    train.sort()
+    val.sort()
+    if len(train) != _TRAIN_COUNT or len(val) != _VAL_COUNT:
+        raise AssertionError(f"v2 split size invalid: train={len(train)} val={len(val)}")
+    if set(train) & set(val) or set(train) | set(val) != set(range(300)):
+        raise AssertionError("v2 train/val 未严格分离并覆盖全部 episode")
+    return {"train": train, "val": val, "per_task_edges": per_task_edges}
+
+
+def _stratified_split(rows):
+    if rows and rows[0].get("schema_version") == "expert_multi_v2":
+        return _stratified_split_v2(rows)
+    return _stratified_split_v1(rows)
+
+
 def _file_fingerprint(path):
     """文件的 SHA-256 指纹。"""
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -148,9 +273,49 @@ def run_split(dataset_dir):
 
     rows = _read_episode_summaries(summary_path)
     result = _stratified_split(rows)
+    is_multi_v2 = rows[0].get("schema_version") == "expert_multi_v2"
+    manifest_path = dataset_dir / "dataset_manifest.json"
+    if is_multi_v2 and not manifest_path.is_file():
+        raise FileNotFoundError(f"找不到数据 manifest: {manifest_path}")
+
+    if is_multi_v2:
+        by_id = {row["episode_idx"]: row for row in rows}
+        task_counts = {
+            split_name: {
+                color: sum(
+                    by_id[index]["target_block"] == color
+                    for index in result[split_name]
+                )
+                for color in ("red", "blue")
+            }
+            for split_name in ("train", "val")
+        }
+        stratification = {
+            "method": "target_block_then_quantile_5_bin_xy",
+            "fields": [
+                "target_block",
+                "initial_scene_state.blocks[target_block].position.x/y",
+            ],
+            "per_task_edges": {
+                color: {
+                    axis: [round(edge, 6) for edge in edges]
+                    for axis, edges in result["per_task_edges"][color].items()
+                }
+                for color in ("red", "blue")
+            },
+        }
+    else:
+        task_counts = None
+        stratification = {
+            "method": "quantile_5_bin",
+            "fields": ["initial_block_pos.x", "initial_block_pos.y"],
+            "x_edges": [round(e, 6) for e in result["x_edges"]],
+            "y_edges": [round(e, 6) for e in result["y_edges"]],
+        }
 
     split_doc = {
-        "schema_version": _SCHEMA_VERSION,
+        "schema_version": _V2_SCHEMA_VERSION if is_multi_v2 else _V1_SCHEMA_VERSION,
+        "generator_version": "split_episodes_v2" if is_multi_v2 else "split_episodes_v1",
         "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "dataset_dir": str(dataset_dir),
         "split_seed": _SPLIT_SEED,
@@ -158,17 +323,18 @@ def run_split(dataset_dir):
         "val_count": len(result["val"]),
         "train": result["train"],
         "val": result["val"],
-        "stratification": {
-            "method": "quantile_5_bin",
-            "fields": ["initial_block_pos.x", "initial_block_pos.y"],
-            "x_edges": [round(e, 6) for e in result["x_edges"]],
-            "y_edges": [round(e, 6) for e in result["y_edges"]],
-        },
+        "stratification": stratification,
         "provenance": {
             "source": str(summary_path),
             "source_sha256": _file_fingerprint(summary_path),
         },
     }
+    if is_multi_v2:
+        split_doc["task_counts"] = task_counts
+        split_doc["provenance"]["manifest"] = str(manifest_path)
+        split_doc["provenance"]["manifest_sha256"] = _file_fingerprint(
+            manifest_path
+        )
 
     output_path = dataset_dir / "episode_split.json"
     output_path.write_text(
@@ -177,10 +343,23 @@ def run_split(dataset_dir):
     )
 
     # 打印摘要
-    train_xs = [rows[i]["initial_block_pos"][0] for i in result["train"]]
-    train_ys = [rows[i]["initial_block_pos"][1] for i in result["train"]]
-    val_xs = [rows[i]["initial_block_pos"][0] for i in result["val"]]
-    val_ys = [rows[i]["initial_block_pos"][1] for i in result["val"]]
+    by_id = {row["episode_idx"]: row for row in rows}
+    train_positions = [
+        _validated_v2_target_position(by_id[index])
+        if is_multi_v2
+        else by_id[index]["initial_block_pos"]
+        for index in result["train"]
+    ]
+    val_positions = [
+        _validated_v2_target_position(by_id[index])
+        if is_multi_v2
+        else by_id[index]["initial_block_pos"]
+        for index in result["val"]
+    ]
+    train_xs = [position[0] for position in train_positions]
+    train_ys = [position[1] for position in train_positions]
+    val_xs = [position[0] for position in val_positions]
+    val_ys = [position[1] for position in val_positions]
 
     print(
         f"Episode 划分完成：train={len(result['train'])}，val={len(result['val'])}，"
