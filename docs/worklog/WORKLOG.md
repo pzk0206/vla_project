@@ -1614,3 +1614,24 @@ CLI 的输出预校验，提交为 `ff7eaff`。共享输出模块支持“默认
 
 至此目录删除、覆盖和路径逃逸阶段收口。下一步严格先修 delta 标签生成与数据集语义
 测试；旧 delta checkpoint 只做废弃标记，等实现与 CPU 验证完成后才安排重训。
+
+## 44. Delta 标签与 Checkpoint 语义修复 (2026-08-09)
+
+红测用两个乱序、交错 episode 证明旧 `BCDataset` 的实际行为：它只删首帧，却继续把
+第二帧绝对目标0.6编码成 token 1；正确的相邻 delta -0.2 应编码成 token 0。修复后数据
+先按 `(episode_idx, step_idx)` 排序，不跨 episode 做差，并拒绝重复 key、非9维动作和
+非有限关节目标。
+
+tokenizer 红测进一步证明旧 decode 对边界 `[0,1,3]` 返回箱中心 `[0.5,2.0]`，而审计
+冻结重建值是 `[0.1,2.8]`。现在训练数据集、checkpoint 和 rollout 使用同一份 edges 与
+`reconstruction_values`；真实 train-only audit v2 的只读检查为7个关节、每关节65条
+边界和64条有限重建值。
+
+新 delta checkpoint 语义为 `same_episode_saved_target_delta_v2`，保存训练 split SHA-256
+和完整 tokenizer，新目录强制 `_v2`。旧 v1 checkpoint 在模型构造前以
+`invalid_reason=absolute_labels_encoded_as_delta` 拒绝。定向 delta 测试20/20、training
+测试25/25通过；完整323项仍只有3个既有失败，编译和格式检查通过。
+
+旧 overfit/full checkpoint 与0% rollout 不改写，作为 Bug 证据保留。下一步才运行全新
+`bc_delta_q_64_overfit_10_v2` 和 `bc_delta_q_64_full_v2` 重训；在新 rollout 之前不评价
+delta 表示优劣。

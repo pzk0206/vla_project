@@ -1050,3 +1050,44 @@ RED 测试分别稳定复现了：数据集根/外部路径被清理、VLM 生�
 完整测试共303项，300项通过；仅保留修复前已经存在的两个配置契约失败和一个已安装
 console-script 元数据失败，没有新增失败。`compileall -q src tests` 与
 `git diff --check` 均通过。真实采集、GPU 训练、旧 checkpoint 删除和付费 API 均未执行。
+
+## BUG-013：Delta 数据集删除首帧但仍编码绝对关节目标
+
+- 状态：代码已修复，旧 checkpoint 已废弃，等待 v2 重训
+- 发现日期：2026-08-09
+- 影响模块：`training/dataset.py`、`tokenizer_utils.py`、`train.py`、`rollout.py`
+- Invalid reason：`absolute_labels_encoded_as_delta`
+
+### 旧证据与根因
+
+以下 artifact 保持原样，不删除、不移动、不改写：
+
+- `outputs/training/bc_delta_q_64_overfit_10_v1/`：200 epoch，旧摘要
+  `best_val_loss=2.866959`。
+- `outputs/training/bc_delta_q_64_full_v1/`：50 epoch，旧摘要
+  `best_val_loss=0.742331`。
+- `outputs/rollout/bc_delta_q_64_full_v1/`：50条 episode，0/50成功，平均最终距离
+  0.6833508985m，平均112.66步。
+
+旧 `BCDataset` 确实排除了每个 episode 的首帧，但 `__getitem__` 随后仍执行
+`q_target = action[:7]`，把绝对关节目标交给 `delta_q_64` 边界编码。rollout 后来虽改为
+`current_q + decoded`，模型训练目标和运行时解释仍不一致。因此0%结果是标签管线故障，
+不是 delta 表示能力证据。
+
+第二个独立问题是旧 tokenizer 解码声称使用箱内中位数，实际根据 edges 临时计算箱中心；
+这与 action audit 保存的 `reconstruction_values` 不一致。
+
+### 修复与验证
+
+- delta 行按 `(episode_idx, step_idx)` 排序，只对同 episode 相邻保存帧计算
+  `absolute_q[t] - absolute_q[t-1]`；首帧无标签，重复 key 和非法动作拒绝。
+- tokenizer 同时冻结7个关节的 edges 与审计 `reconstruction_values`，解码不再计算箱
+  中心，越界 token 和不完整资产拒绝。
+- delta 新输出必须以 `_v2` 结尾；checkpoint 保存
+  `same_episode_saved_target_delta_v2`、训练 split SHA-256 与完整 tokenizer。
+- rollout 加载旧 delta checkpoint 时在 `BCModel` 构造前拒绝并报告固定 invalid reason；
+  v2 执行严格为 `current_q + decoded_delta`。
+
+delta 语义定向测试20/20、全部 training 测试25/25通过。完整测试共323项，仅保留此前
+已有的两个配置契约和一个安装元数据失败，没有新增失败；`compileall` 与
+`git diff --check` 通过。此时尚未运行 v2 GPU 重训，因此不能产生新的 delta 效果结论。
