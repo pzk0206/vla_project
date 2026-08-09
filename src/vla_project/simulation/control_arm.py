@@ -1023,7 +1023,7 @@ def run_episode(
                 p.removeBody(block_id)
 
 
-def main(argv=None):
+def main(argv=None, *, config_path=CONFIG_PATH, project_root_override=None):
     """主入口：按顺序完成配置读取、仿真初始化、批量采集和断开连接。"""
     parser = argparse.ArgumentParser(description="采集专家 VLA 数据")
     parser.add_argument(
@@ -1035,11 +1035,12 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.num_episodes is not None and args.num_episodes <= 0:
         parser.error("--num-episodes must be positive")
-    config = load_config(CONFIG_PATH)
+    config = load_config(config_path)
     connect_physics(config["connection_mode"])
     dataset_dir, jsonl_path, summary_jsonl_path = prepare_dataset(
         config["dataset"],
         full_config=config,
+        project_root_override=project_root_override,
     )
     _, robot_id = setup_world(config)
 

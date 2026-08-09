@@ -522,6 +522,46 @@ class DatasetRunContractTests(unittest.TestCase):
 class CollectionCliTests(unittest.TestCase):
     """保护 pilot/scale 只覆盖单次运行数量，不改变计划契约。"""
 
+    def test_programmatic_overrides_select_config_and_project_root(self):
+        config = {
+            "connection_mode": "DIRECT",
+            "dataset": {
+                "schema_version": "expert_multi_v2",
+                "random_seed": 1000,
+                "num_episodes": 300,
+            },
+        }
+        with tempfile.TemporaryDirectory() as temp_dir, patch(
+            "vla_project.simulation.control_arm.load_config",
+            return_value=config,
+        ) as load_config, patch(
+            "vla_project.simulation.control_arm.connect_physics"
+        ), patch(
+            "vla_project.simulation.control_arm.prepare_dataset",
+            return_value=(temp_dir, "trajectory.jsonl", "summary.jsonl"),
+        ) as prepare_dataset, patch(
+            "vla_project.simulation.control_arm.setup_world",
+            return_value=(1, 3),
+        ), patch(
+            "vla_project.simulation.control_arm.next_episode_index",
+            return_value=0,
+        ), patch(
+            "vla_project.simulation.control_arm.run_episode"
+        ), patch(
+            "vla_project.simulation.control_arm.p.disconnect"
+        ):
+            control_arm.main(
+                ["--num-episodes", "1"],
+                config_path="/worktree/sim_config.yaml",
+                project_root_override="/main/project",
+            )
+
+        load_config.assert_called_once_with("/worktree/sim_config.yaml")
+        self.assertEqual(
+            prepare_dataset.call_args.kwargs["project_root_override"],
+            "/main/project",
+        )
+
     def test_num_episode_override_runs_only_pilot_range(self):
         config = {
             "connection_mode": "DIRECT",
