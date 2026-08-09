@@ -121,6 +121,7 @@ screening、runner 等多个协作组件时，才适合建立 `vlm/grounding_smo
 ```text
 vla_project/
 ├── src/vla_project/                 # 正式 Python 包
+│   ├── output_paths.py              # 跨领域安全输出路径与原子目录发布
 │   ├── simulation/                  # 仿真、相机、采集和闭环控制
 │   ├── vlm/                         # VLM 样本、grounding、反投影和校准
 │   └── tools/                       # 仓库维护工具
@@ -171,6 +172,10 @@ vla_project/
 | `sim_config.yaml` | 保存仿真、相机、采集、probe、VLM 和输出目录参数 | 调整实验变量时，优先改这里而非写死在代码中 |
 
 ## 正式源码 `src/vla_project/`
+
+| 文件 | 职责 |
+| --- | --- |
+| `output_paths.py` | 统一限制项目管理输出根、拒绝路径逃逸和不安全运行名，并提供失败可恢复的原子目录发布 |
 
 ### `simulation/`：仿真与控制
 
@@ -225,6 +230,7 @@ src/vla_project/tools/x.py       -> tests/tools/test_x.py
 
 - `tests/test_config_contract.py`：保护 `sim_config.yaml` 的跨模块配置约束和统一输出路径。
 - `tests/test_package_metadata.py`：保护 `src/` 包结构和 16 个控制台命令入口。
+- `tests/test_output_paths.py`：保护跨领域输出路径、运行名和原子发布恢复契约。
 - `tests/simulation/test_evaluate_dataset.py`：保护专家数据质量扫描和 pilot 门禁。
 - `tests/simulation/test_audit_dataset_visibility.py`：保护确定性重放、可见率和原子输出。
 - `tests/simulation/test_audit_action_tokenization.py`：保护动作/可见性对齐、统计、分箱推荐和原子输出。

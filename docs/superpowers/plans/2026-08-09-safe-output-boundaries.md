@@ -85,7 +85,7 @@ def test_rejects_symlink_parent_that_resolves_outside_root(self):
 
 - [ ] **Step 2: 运行测试并确认 RED**
 
-Run: `conda run -n vla_env python -m unittest tests.test_output_paths.ResolveManagedOutputTests -v`
+Run: `env PYTHONPATH=src conda run -n vla_env python -m unittest tests.test_output_paths.ResolveManagedOutputTests -v`
 
 Expected: `ModuleNotFoundError: No module named 'vla_project.output_paths'`。
 
@@ -129,7 +129,7 @@ def resolve_managed_output(
 
 - [ ] **Step 4: 运行路径测试并确认 GREEN**
 
-Run: `conda run -n vla_env python -m unittest tests.test_output_paths.ResolveManagedOutputTests -v`
+Run: `env PYTHONPATH=src conda run -n vla_env python -m unittest tests.test_output_paths.ResolveManagedOutputTests -v`
 
 Expected: 全部通过。
 
@@ -145,7 +145,7 @@ def test_run_name_rejects_directory_components(self):
             validate_run_name(value)
 ```
 
-Run: `conda run -n vla_env python -m unittest tests.test_output_paths.ValidateRunNameTests -v`
+Run: `env PYTHONPATH=src conda run -n vla_env python -m unittest tests.test_output_paths.ValidateRunNameTests -v`
 
 Expected: import 或符号缺失失败。
 
@@ -162,7 +162,7 @@ def validate_run_name(run_name):
     return run_name
 ```
 
-Run: `conda run -n vla_env python -m unittest tests.test_output_paths.ValidateRunNameTests -v`
+Run: `env PYTHONPATH=src conda run -n vla_env python -m unittest tests.test_output_paths.ValidateRunNameTests -v`
 
 Expected: 全部通过。
 
@@ -200,7 +200,7 @@ def test_failed_publish_restores_previous_directory(self):
     self.assertEqual((destination / "old.txt").read_text(encoding="utf-8"), "old")
 ```
 
-Run: `conda run -n vla_env python -m unittest tests.test_output_paths.AtomicPublishTests -v`
+Run: `env PYTHONPATH=src conda run -n vla_env python -m unittest tests.test_output_paths.AtomicPublishTests -v`
 
 Expected: 符号缺失失败。
 
@@ -240,7 +240,7 @@ def staged_output_directory(
 
 - [ ] **Step 9: 运行模块测试、编译并更新结构文档**
 
-Run: `conda run -n vla_env python -m unittest tests.test_output_paths -v`
+Run: `env PYTHONPATH=src conda run -n vla_env python -m unittest tests.test_output_paths -v`
 
 Run: `env PYTHONPYCACHEPREFIX=/tmp/vla_safe_paths_pycache conda run -n vla_env python -m compileall -q src/vla_project/output_paths.py tests/test_output_paths.py`
 
@@ -294,7 +294,7 @@ def test_clean_before_run_refuses_nonempty_version_directory(self):
 
 - [ ] **Step 2: 运行测试并确认 RED**
 
-Run: `conda run -n vla_env python -m unittest tests.simulation.test_control_arm.DatasetPreparationTests -v`
+Run: `env PYTHONPATH=src conda run -n vla_env python -m unittest tests.simulation.test_control_arm.DatasetPreparationTests -v`
 
 Expected: traversal 测试未抛异常，或函数不接受 `project_root_override`；非空目录被删除。
 
@@ -309,7 +309,7 @@ Expected: traversal 测试未抛异常，或函数不接受 `project_root_overri
 
 - [ ] **Step 4: 定向与回归验证**
 
-Run: `conda run -n vla_env python -m unittest tests.simulation.test_control_arm -v`
+Run: `env PYTHONPATH=src conda run -n vla_env python -m unittest tests.simulation.test_control_arm -v`
 
 Expected: 全部通过。
 
@@ -352,7 +352,7 @@ def test_generation_failure_preserves_existing_output(self):
 
 - [ ] **Step 2: 运行测试并确认 RED**
 
-Run: `conda run -n vla_env python -m unittest tests.vlm.test_collect_vlm_eval_samples -v`
+Run: `env PYTHONPATH=src conda run -n vla_env python -m unittest tests.vlm.test_collect_vlm_eval_samples -v`
 
 Expected: 旧输出在捕获异常前已被 `rmtree` 删除，或新参数不存在。
 
@@ -368,7 +368,7 @@ Expected: 旧输出在捕获异常前已被 `rmtree` 删除，或新参数不存
 
 - [ ] **Step 4: 验证并提交**
 
-Run: `conda run -n vla_env python -m unittest tests.vlm.test_collect_vlm_eval_samples -v`
+Run: `env PYTHONPATH=src conda run -n vla_env python -m unittest tests.vlm.test_collect_vlm_eval_samples -v`
 
 Expected: 全部通过。
 
@@ -409,7 +409,7 @@ def test_action_audit_rejects_output_equal_to_dataset(self):
 
 - [ ] **Step 2: 运行测试并确认 RED**
 
-Run: `conda run -n vla_env python -m unittest tests.simulation.test_audit_action_tokenization tests.simulation.test_audit_dataset_visibility tests.simulation.test_render_expert_dataset_view -v`
+Run: `env PYTHONPATH=src conda run -n vla_env python -m unittest tests.simulation.test_audit_action_tokenization tests.simulation.test_audit_dataset_visibility tests.simulation.test_render_expert_dataset_view -v`
 
 Expected: 至少路径逃逸测试失败。
 
@@ -424,7 +424,7 @@ Expected: 至少路径逃逸测试失败。
 
 - [ ] **Step 4: 验证并提交**
 
-Run: `conda run -n vla_env python -m unittest tests.simulation.test_audit_action_tokenization tests.simulation.test_audit_dataset_visibility tests.simulation.test_render_expert_dataset_view -v`
+Run: `env PYTHONPATH=src conda run -n vla_env python -m unittest tests.simulation.test_audit_action_tokenization tests.simulation.test_audit_dataset_visibility tests.simulation.test_render_expert_dataset_view -v`
 
 Expected: 全部通过。
 
@@ -456,7 +456,7 @@ git commit -m "fix: constrain dataset audit output publication"
 
 - [ ] **Step 2: 运行测试并确认 RED**
 
-Run: `conda run -n vla_env python -m unittest tests.simulation.test_evaluate_probe tests.vlm.grounding_smoke.test_runner tests.vlm.grounding_smoke.test_screening -v`
+Run: `env PYTHONPATH=src conda run -n vla_env python -m unittest tests.simulation.test_evaluate_probe tests.vlm.grounding_smoke.test_runner tests.vlm.grounding_smoke.test_screening -v`
 
 Expected: 非法 run name 当前会拼接并逃逸，测试失败。
 
@@ -474,7 +474,7 @@ grounding_smoke.screening  -> outputs/vlm_evaluations/
 
 - [ ] **Step 4: 验证并提交**
 
-Run: `conda run -n vla_env python -m unittest tests.simulation.test_evaluate_probe tests.vlm.grounding_smoke.test_runner tests.vlm.grounding_smoke.test_screening -v`
+Run: `env PYTHONPATH=src conda run -n vla_env python -m unittest tests.simulation.test_evaluate_probe tests.vlm.grounding_smoke.test_runner tests.vlm.grounding_smoke.test_screening -v`
 
 Expected: 全部通过。
 
@@ -515,7 +515,7 @@ git commit -m "fix: reject run name path traversal"
 现有 VLM 测试中给每个编排入口增加根外输出和含 `/` 的配置运行名用例，断言 API client、
 图片写入和 PyBullet 未调用。
 
-Run: `conda run -n vla_env python -m unittest tests.training.test_output_boundaries tests.vlm.test_diagnose_vlm_grounding tests.vlm.test_evaluate_vlm_decisions tests.vlm.test_evaluate_ground_then_decide tests.vlm.test_evaluate_grounding_backprojection tests.vlm.test_validate_grounding_calibration -v`
+Run: `env PYTHONPATH=src conda run -n vla_env python -m unittest tests.training.test_output_boundaries tests.vlm.test_diagnose_vlm_grounding tests.vlm.test_evaluate_vlm_decisions tests.vlm.test_evaluate_ground_then_decide tests.vlm.test_evaluate_grounding_backprojection tests.vlm.test_validate_grounding_calibration -v`
 
 Expected: 路径在重依赖之后才使用或被允许，测试失败。
 
@@ -535,7 +535,7 @@ BC/VLA rollout                  -> outputs/rollout/（兼容读取旧 outputs/ro
 
 - [ ] **Step 3: 运行全部相关测试并确认 GREEN**
 
-Run: `conda run -n vla_env python -m unittest tests.training.test_output_boundaries tests.simulation.test_stage3_probe tests.vlm.test_diagnose_vlm_grounding tests.vlm.test_evaluate_vlm_decisions tests.vlm.test_evaluate_ground_then_decide tests.vlm.test_evaluate_grounding_backprojection tests.vlm.test_validate_grounding_calibration -v`
+Run: `env PYTHONPATH=src conda run -n vla_env python -m unittest tests.training.test_output_boundaries tests.simulation.test_stage3_probe tests.vlm.test_diagnose_vlm_grounding tests.vlm.test_evaluate_vlm_decisions tests.vlm.test_evaluate_ground_then_decide tests.vlm.test_evaluate_grounding_backprojection tests.vlm.test_validate_grounding_calibration -v`
 
 Expected: 全部通过，且测试不调用真实模型/API。
 
@@ -561,13 +561,13 @@ git commit -m "fix: constrain configurable experiment outputs"
 
 - [ ] **Step 1: 运行攻击输入回归集合**
 
-Run: `conda run -n vla_env python -m unittest tests.test_output_paths tests.simulation.test_control_arm tests.vlm.test_collect_vlm_eval_samples tests.simulation.test_audit_action_tokenization tests.simulation.test_audit_dataset_visibility tests.simulation.test_render_expert_dataset_view tests.simulation.test_evaluate_probe tests.vlm.grounding_smoke.test_runner tests.vlm.grounding_smoke.test_screening tests.training.test_output_boundaries -v`
+Run: `env PYTHONPATH=src conda run -n vla_env python -m unittest tests.test_output_paths tests.simulation.test_control_arm tests.vlm.test_collect_vlm_eval_samples tests.simulation.test_audit_action_tokenization tests.simulation.test_audit_dataset_visibility tests.simulation.test_render_expert_dataset_view tests.simulation.test_evaluate_probe tests.vlm.grounding_smoke.test_runner tests.vlm.grounding_smoke.test_screening tests.training.test_output_boundaries -v`
 
 Expected: 全部通过。
 
 - [ ] **Step 2: 运行完整验证**
 
-Run: `conda run -n vla_env python -m unittest discover -q`
+Run: `env PYTHONPATH=src conda run -n vla_env python -m unittest discover -q`
 
 Expected at this阶段: 不新增失败；基线已有的两个 config contract 和一个 package metadata
 失败仍准确记录，留到工程一致性阶段修复。
