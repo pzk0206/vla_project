@@ -1,10 +1,58 @@
 # 当前项目状态
 
-**最后核对日期：** 2026-08-07
+**最后核对日期：** 2026-08-09
 
 ## 当前阶段
 
-BC + 多任务 VLA 实验完成。**启动方案 B：Qwen2-VL-2B QLoRA 微调。**
+正在隔离分支 `fix/vla-data-integrity` 按顺序修复数据与实验完整性问题；在安全修复、
+delta 标签、数据重采集、确定性 rollout 和成对反事实评估完成前，**不继续
+Qwen2-VL QLoRA，不运行真实采集或训练**。
+
+### 2026-08-09 暂停恢复点
+
+- 工作树：`/home/pzk/vla_project/.worktrees/vla-data-integrity`
+- 已完成提交：
+  - `4919042`：统一管理输出路径与可回滚原子发布。
+  - `f1b8f01`：专家数据集拒绝路径逃逸及非空目录清理/覆盖。
+  - `6915498`：VLM 样本 staging 校验后原子发布。
+  - `a4fd0d0`：动作审计、可见性审计和派生数据输出边界。
+  - `9540e2b`：Probe 与 grounding smoke 运行名路径逃逸。
+- 已验证证据：上述阶段分别通过18、23、23、60、56项定向/组合测试；未调用真实采集、
+  GPU 训练或付费 API。
+- 当前未提交工作：训练/rollout 四入口的输出预校验、三个可续跑 VLM 评估入口、
+  grounding backprojection/calibration 编排入口及相应测试。现有定向结果为训练边界
+  5/5、三类 VLM 17/17、backprojection/calibration 18/18 通过。
+- 精确续做点：`tests/simulation/test_stage3_probe.py` 已加入
+  `OutputBoundaryTests.test_rejects_output_escape_before_connecting_physics`，旧实现因
+  `run_probe_episode()` 尚无 `project_root_override` 参数而红灯。刚才尝试修改
+  `stage3_probe.py` 和 `evaluate_probe.py` 的补丁未应用成功；恢复时应先重新实施这两个
+  文件的最小修复，再运行 `tests.simulation.test_stage3_probe`。
+- 工作树内还有未提交修改，恢复前先运行 `git status --short`；不要丢弃它们，也不要触碰
+  主工作树中用户修改的 `notebooks/qwen2_vl_qlora_vla.ipynb`。
+- 已知全量基线并非全绿：安全修复开始前为253项测试、3项失败（两个配置契约仍期待
+  `expert_scaling`，以及 package CLI 元数据不一致）。这些属于后续工程一致性修复，不能
+  报告为当前回归通过。
+
+### 当前实验结论边界
+
+- 后续正式采集与训练继续采用斜视图；俯视图遮挡率更高，只保留为对照派生数据。
+- `delta_q_64 = 0%` 不能支持“delta 表示不可行”：现有 delta 标签/执行语义有缺陷，旧
+  delta checkpoint 必须废弃并在修复后重训。
+- 多任务 VLA 的24.5%任务成功率可以作为旧设置的观察结果；“70%语言跟随率/反事实切换”
+  尚无正式成对、确定性、可审计反事实证据，暂不作为成立结论。
+- `expert_multi_v1` 的红蓝块采样与场景状态不满足新门禁；其结果只说明旧场景配置，不能
+  外推为已控制积木位置混杂。后续使用新版本目录采集300条通过门禁的数据。
+
+### 后续顺序
+
+1. 完成所有输出目录/路径逃逸修复并收口测试与文档。
+2. 修复 delta 标签语义、补数据集语义测试、废弃并重训旧 delta checkpoint。
+3. 调整红蓝块无碰撞采样、保存完整双积木状态，采集300条通过质量门禁的数据。
+4. 按 episode seed 和保存位姿确定性复现 VLA rollout。
+5. 实现成对反事实评估，生成可审计结果后再决定是否恢复70%结论。
+6. 补齐训练测试、依赖、CLI 元数据、notebook 输出和项目文档，最后继续 QLoRA。
+
+## 2026-08-07 历史状态（以下不作为当前决策依据）
 
 ### 已完成
 

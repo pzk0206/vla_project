@@ -1562,3 +1562,32 @@ Luna 无法派发，Bash 被封。代码路径清晰——按 design doc 机械�
 ### 下一步
 
 Classifier 恢复 → 派 Luna 实现 VLA 模型 → overfit → 全量 → rollout 按指令评估。
+
+## 42. 数据与实验完整性恢复暂停点 (2026-08-09)
+
+本轮先停止继续 QLoRA，按“输出安全 → delta 语义 → 新数据 → 确定性 rollout → 成对
+反事实 → 工程补齐”的顺序恢复实验可信度。工作在隔离分支
+`fix/vla-data-integrity` 和 worktree `.worktrees/vla-data-integrity` 中进行，主工作树的
+用户 notebook 修改未触碰。
+
+已经提交五个实现检查点：共享安全路径/原子发布、专家数据不可覆盖、VLM 样本安全发布、
+审计与派生数据边界、Probe/smoke 运行名边界。对应最近组合测试为60项和56项全绿，整个
+过程没有运行真实采集、GPU 训练或付费 API。
+
+暂停时未提交的代码已经完成以下定向验证：
+
+- BC/VLA 训练及 BC/VLA rollout：危险输出在模型和数据加载前拒绝，5/5通过；训练非空
+  运行目录拒绝复用。
+- grounding diagnose/offline/ground-then-decide：运行名和输出根先验证，同时保留付费结果
+  断点续跑，17/17通过。
+- backprojection/calibration：新增先验证输出再读取输入的编排函数，18/18通过。
+
+当前唯一正在进行的红灯是单次 Stage 3 probe 输出边界测试：测试已经写入
+`tests/simulation/test_stage3_probe.py`，旧函数因为缺少 `project_root_override` 参数而
+失败。生产补丁尚未成功应用，因此恢复时不要重写测试；应先在
+`stage3_probe.run_probe_episode()` 最前面验证 `outputs/probe/` 下的新空目录，并让
+`evaluate_probe.run_batch()` 以受信的 `outputs/probe_evaluations/` 根调用它，然后跑完整
+Stage 3 和相关组合回归。
+
+实验结论同步收紧：继续采用斜视图；旧 delta 0% 不能证明 delta 不可行；旧多任务成功率
+只能描述旧数据；70%语言跟随率在正式成对、确定性反事实评估前暂停引用。
