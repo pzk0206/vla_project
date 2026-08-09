@@ -651,6 +651,129 @@ class SettledBlockPairTests(unittest.TestCase):
         )
 
 
+class MultiV2EpisodeTests(unittest.TestCase):
+    """保护联合采样结果真正进入 episode 和最终 JSONL。"""
+
+    def test_blue_episode_writes_both_blocks_and_target_projection(self):
+        config = {
+            "enable_time_sleep": False,
+            "simulation_hz": 240,
+            "robot": {"controlled_joints": 7, "ee_link_index": 6},
+            "dataset": {
+                "schema_version": "expert_multi_v2",
+                "random_seed": 1000,
+                "task_selection": "balanced_alternating",
+                "reset_robot_each_episode": True,
+                "home_joint_positions": [0.0] * 7,
+                "max_steps_per_episode": 1,
+                "capture_interval_steps": 24,
+                "default_gripper_state": 1.0,
+                "instruction": "悬停在红色积木上方",
+            },
+            "task": {
+                "block_urdf_path": "cube.urdf",
+                "block_global_scaling": 0.1,
+                "block_color_rgba": [1, 0, 0, 1],
+                "initial_settle_steps": 0,
+                "hover_height": 0.15,
+                "success_distance": 0.03,
+                "stuck_window_steps": 120,
+                "stuck_min_improvement": 0.0005,
+                "force_terminal_after_step": 0,
+                "pair_sampling": {
+                    "min_axis_separation_xy": 0.12,
+                    "max_settle_drift_xy": 0.005,
+                },
+                "second_block": {
+                    "enabled": True,
+                    "color_rgba": [0, 0, 1, 1],
+                    "global_scaling": 0.1,
+                },
+                "tasks": [
+                    {"instruction": "悬停在红色积木上方", "target_block": "red"},
+                    {"instruction": "悬停在蓝色积木上方", "target_block": "blue"},
+                ],
+            },
+            "camera": {},
+        }
+        positions = {
+            "red": [-0.15, 0.40, 0.10],
+            "blue": [0.15, 0.40, 0.10],
+        }
+        initial_state = {
+            "target_block": "blue",
+            "blocks": {
+                "red": {"position": [-0.15, 0.40, 0.05], "orientation": [0, 0, 0, 1]},
+                "blue": {"position": [0.15, 0.40, 0.05], "orientation": [0, 0, 0, 1]},
+            },
+            "robot": {
+                "joint_positions": [0.0] * 7,
+                "joint_velocities": [0.0] * 7,
+                "ee_position": [0.0, 0.0, 1.261],
+            },
+            "camera_eye": [1.05, 0.4, 1.65],
+        }
+        frame_state = json.loads(json.dumps(initial_state))
+        frame_state["robot"]["ee_position"] = [0.15, 0.40, 0.20]
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch(
+            "vla_project.simulation.control_arm.reset_robot_to_home"
+        ), patch(
+            "vla_project.simulation.control_arm.get_link_position",
+            return_value=[0.0, 0.0, 1.261],
+        ), patch(
+            "vla_project.simulation.control_arm.sample_block_pair_positions",
+            return_value=positions,
+        ), patch(
+            "vla_project.simulation.control_arm.load_block_at_position",
+            side_effect=[9, 10],
+        ), patch(
+            "vla_project.simulation.control_arm.settle_object"
+        ), patch(
+            "vla_project.simulation.control_arm.sample_camera_eye",
+            return_value=[1.05, 0.4, 1.65],
+        ), patch(
+            "vla_project.simulation.control_arm.capture_scene_state",
+            side_effect=[initial_state, frame_state],
+        ), patch(
+            "vla_project.simulation.control_arm.calculate_target_joints",
+            return_value=[0.0] * 7,
+        ), patch(
+            "vla_project.simulation.control_arm.apply_joint_targets"
+        ), patch(
+            "vla_project.simulation.control_arm.capture_rgb",
+            return_value=np.zeros((2, 2, 3), dtype=np.uint8),
+        ), patch(
+            "vla_project.simulation.control_arm.cv2.imwrite",
+            return_value=True,
+        ), patch(
+            "vla_project.simulation.control_arm.p.stepSimulation"
+        ), patch(
+            "vla_project.simulation.control_arm.p.removeBody"
+        ):
+            trajectory = Path(temp_dir) / "trajectory.jsonl"
+            summary = Path(temp_dir) / "summary.jsonl"
+            control_arm.run_episode(
+                episode_idx=1,
+                robot_id=3,
+                config=config,
+                dataset_dir=temp_dir,
+                jsonl_path=trajectory,
+                summary_jsonl_path=summary,
+                random_seed=1001,
+            )
+
+            frame = json.loads(trajectory.read_text(encoding="utf-8"))
+            episode = json.loads(summary.read_text(encoding="utf-8"))
+
+        self.assertEqual(frame["block_pos"], [0.15, 0.40, 0.05])
+        self.assertEqual(frame["target_pos"], [0.15, 0.40, 0.20])
+        self.assertEqual(frame["scene_state"], frame_state)
+        self.assertEqual(episode["initial_block_pos"], [0.15, 0.40, 0.05])
+        self.assertEqual(episode["initial_scene_state"], initial_state)
+        self.assertEqual(episode["final_scene_state"], frame_state)
+
+
 class EpisodeReproducibilityTests(unittest.TestCase):
     """保护独立复位、确定性 seed 和 expert_v1 写入契约。"""
 

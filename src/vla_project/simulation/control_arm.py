@@ -800,17 +800,36 @@ def run_episode(
         robot_cfg["ee_link_index"],
     )
 
-    # 每条轨迹随机挑选一个任务（悬停红块 / 悬停蓝块），
-    # 并同时加载红色积木和（若启用）蓝色积木。
-    instruction, target_block = select_task(config)
-    red_block_id = load_block(task_cfg)
-    blue_block_id = (
-        load_second_block(task_cfg)
-        if task_cfg.get("second_block", {}).get("enabled")
-        else None
+    is_multi_v2 = dataset_cfg["schema_version"] == "expert_multi_v2"
+    instruction, target_block = select_task(
+        config,
+        episode_idx if is_multi_v2 else None,
     )
+    sampled_positions = None
+    if is_multi_v2:
+        sampled_positions = sample_block_pair_positions(task_cfg)
+        red_block_id = load_block_at_position(
+            task_cfg,
+            sampled_positions["red"],
+            task_cfg["block_color_rgba"],
+            task_cfg["block_global_scaling"],
+        )
+        second_cfg = task_cfg["second_block"]
+        blue_block_id = load_block_at_position(
+            task_cfg,
+            sampled_positions["blue"],
+            second_cfg["color_rgba"],
+            second_cfg.get("global_scaling", task_cfg["block_global_scaling"]),
+        )
+    else:
+        red_block_id = load_block(task_cfg)
+        blue_block_id = (
+            load_second_block(task_cfg)
+            if task_cfg.get("second_block", {}).get("enabled")
+            else None
+        )
+    block_ids = {"red": red_block_id, "blue": blue_block_id}
     settle_object(config, task_cfg["initial_settle_steps"])
-    initial_block_pos = get_object_position(red_block_id)
     target_block_id = (
         blue_block_id
         if target_block == "blue" and blue_block_id is not None
@@ -819,6 +838,27 @@ def run_episode(
 
     # 同一个 episode 内固定相机，有利于形成稳定的时序视觉输入。
     camera_eye = sample_camera_eye(camera_cfg)
+    initial_scene_state = None
+    current_scene_state = None
+    if is_multi_v2:
+        initial_scene_state = capture_scene_state(
+            robot_id,
+            robot_cfg,
+            block_ids,
+            camera_eye,
+            target_block,
+        )
+        _validate_settled_pair(
+            sampled_positions,
+            initial_scene_state,
+            task_cfg["pair_sampling"],
+        )
+        current_scene_state = initial_scene_state
+        initial_block_pos = list(
+            initial_scene_state["blocks"][target_block]["position"]
+        )
+    else:
+        initial_block_pos = get_object_position(red_block_id)
     recent_distances = []
     saved_frame_count = 0
     termination_reason = "running"
@@ -834,7 +874,16 @@ def run_episode(
     try:
         for step_idx in range(dataset_cfg["max_steps_per_episode"]):
             # 阶段 A：根据当前积木位置，计算“悬停点”。
-            target_pos = get_hover_target(target_block_id, task_cfg["hover_height"])
+            if is_multi_v2:
+                target_pos = list(
+                    current_scene_state["blocks"][target_block]["position"]
+                )
+                target_pos[2] += task_cfg["hover_height"]
+            else:
+                target_pos = get_hover_target(
+                    target_block_id,
+                    task_cfg["hover_height"],
+                )
 
             # 阶段 B：把悬停点转换成机械臂 7 个关节的目标角度。
             target_joint_angles = calculate_target_joints(robot_id, robot_cfg, target_pos)
@@ -848,9 +897,24 @@ def run_episode(
                 time.sleep(1.0 / config["simulation_hz"])
 
             # 阶段 E：读取末端位置，计算它离悬停目标还差多远。
-            ee_pos = get_link_position(robot_id, robot_cfg["ee_link_index"])
+            if is_multi_v2:
+                current_scene_state = capture_scene_state(
+                    robot_id,
+                    robot_cfg,
+                    block_ids,
+                    camera_eye,
+                    target_block,
+                )
+                block_pos = list(
+                    current_scene_state["blocks"][target_block]["position"]
+                )
+                target_pos = list(block_pos)
+                target_pos[2] += task_cfg["hover_height"]
+                ee_pos = list(current_scene_state["robot"]["ee_position"])
+            else:
+                ee_pos = get_link_position(robot_id, robot_cfg["ee_link_index"])
+                block_pos = get_object_position(target_block_id)
             distance_to_target = euclidean_distance(ee_pos, target_pos)
-            block_pos = get_object_position(target_block_id)
             final_distance = distance_to_target
             final_block_pos = block_pos
             final_target_pos = target_pos
@@ -913,6 +977,7 @@ def run_episode(
                     ee_pos=ee_pos,
                     distance_to_target=distance_to_target,
                     termination_reason=termination_reason,
+                    scene_state=current_scene_state,
                 )
                 print(f"📝 [ALIGN] 已追加数据: {image_path}")
 
@@ -937,6 +1002,8 @@ def run_episode(
             final_ee_pos=final_ee_pos,
             task_instruction=instruction,
             target_block=target_block,
+            initial_scene_state=initial_scene_state,
+            final_scene_state=current_scene_state,
         )
     finally:
         # 无论 episode 正常结束还是中途报错，都尽量清理当前两个积木。
