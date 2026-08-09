@@ -1,3 +1,4 @@
+import argparse
 import json
 import math
 import os
@@ -44,6 +45,10 @@ MANIFEST_COMPATIBILITY_FIELDS = (
     "image_height",
     "jsonl_name",
     "summary_jsonl_name",
+    "task_selection",
+    "pair_sampling",
+    "tasks",
+    "second_block",
 )
 
 
@@ -107,6 +112,10 @@ def build_dataset_manifest(config):
         "target_num_episodes": dataset["target_num_episodes"],
         "jsonl_name": dataset["jsonl_name"],
         "summary_jsonl_name": dataset["summary_jsonl_name"],
+        "task_selection": dataset.get("task_selection"),
+        "pair_sampling": task.get("pair_sampling"),
+        "tasks": task.get("tasks"),
+        "second_block": task.get("second_block"),
     }
 
 
@@ -1012,8 +1021,18 @@ def run_episode(
                 p.removeBody(block_id)
 
 
-def main():
+def main(argv=None):
     """主入口：按顺序完成配置读取、仿真初始化、批量采集和断开连接。"""
+    parser = argparse.ArgumentParser(description="采集专家 VLA 数据")
+    parser.add_argument(
+        "--num-episodes",
+        type=int,
+        default=None,
+        help="只覆盖本次运行的 episode 数，不修改 manifest 计划规模",
+    )
+    args = parser.parse_args(argv)
+    if args.num_episodes is not None and args.num_episodes <= 0:
+        parser.error("--num-episodes must be positive")
     config = load_config(CONFIG_PATH)
     connect_physics(config["connection_mode"])
     dataset_dir, jsonl_path, summary_jsonl_path = prepare_dataset(
@@ -1023,7 +1042,12 @@ def main():
     _, robot_id = setup_world(config)
 
     start_episode_idx = next_episode_index(summary_jsonl_path)
-    end_episode_idx = start_episode_idx + config["dataset"]["num_episodes"]
+    run_episode_count = (
+        args.num_episodes
+        if args.num_episodes is not None
+        else config["dataset"]["num_episodes"]
+    )
+    end_episode_idx = start_episode_idx + run_episode_count
     for episode_idx in range(start_episode_idx, end_episode_idx):
         random_seed = config["dataset"]["random_seed"] + episode_idx
         try:

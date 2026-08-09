@@ -332,6 +332,39 @@ class DatasetRunContractTests(unittest.TestCase):
             },
         }
 
+    def make_multi_config(self, clean_before_run=False):
+        config = self.make_config(clean_before_run)
+        config["dataset"].update(
+            {
+                "output_dir": "outputs/dataset/expert_multi_v2",
+                "schema_version": "expert_multi_v2",
+                "task_selection": "balanced_alternating",
+            }
+        )
+        config["task"].update(
+            {
+                "pair_sampling": {
+                    "x_range": [-0.2, 0.2],
+                    "y_range": [0.38, 0.5],
+                    "z": 0.1,
+                    "min_axis_separation_xy": 0.12,
+                    "max_attempts": 100,
+                    "max_settle_drift_xy": 0.005,
+                    "max_episode_drift_xy": 0.005,
+                },
+                "second_block": {
+                    "enabled": True,
+                    "color_rgba": [0, 0, 1, 1],
+                    "global_scaling": 0.1,
+                },
+                "tasks": [
+                    {"instruction": "悬停在红色积木上方", "target_block": "red"},
+                    {"instruction": "悬停在蓝色积木上方", "target_block": "blue"},
+                ],
+            }
+        )
+        return config
+
     def test_rejects_dataset_root_as_clean_target(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             with self.assertRaises(ValueError):
@@ -456,6 +489,105 @@ class DatasetRunContractTests(unittest.TestCase):
                     full_config=incompatible,
                     project_root_override=temp_dir,
                 )
+
+    def test_multi_v2_manifest_freezes_scene_sampling_contract(self):
+        manifest = control_arm.build_dataset_manifest(self.make_multi_config())
+
+        self.assertEqual(manifest["task_selection"], "balanced_alternating")
+        self.assertEqual(manifest["pair_sampling"]["min_axis_separation_xy"], 0.12)
+        self.assertEqual(manifest["tasks"][1]["target_block"], "blue")
+        self.assertTrue(manifest["second_block"]["enabled"])
+
+    def test_append_rejects_changed_pair_sampling_contract(self):
+        config = self.make_multi_config()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            control_arm.prepare_dataset(
+                config["dataset"],
+                full_config=config,
+                project_root_override=temp_dir,
+            )
+            incompatible = self.make_multi_config()
+            incompatible["task"]["pair_sampling"]["min_axis_separation_xy"] = 0.10
+
+            with self.assertRaisesRegex(ValueError, "pair_sampling"):
+                control_arm.prepare_dataset(
+                    incompatible["dataset"],
+                    full_config=incompatible,
+                    project_root_override=temp_dir,
+                )
+
+
+class CollectionCliTests(unittest.TestCase):
+    """保护 pilot/scale 只覆盖单次运行数量，不改变计划契约。"""
+
+    def test_num_episode_override_runs_only_pilot_range(self):
+        config = {
+            "connection_mode": "DIRECT",
+            "dataset": {
+                "schema_version": "expert_multi_v2",
+                "random_seed": 1000,
+                "num_episodes": 300,
+            },
+        }
+        with tempfile.TemporaryDirectory() as temp_dir, patch(
+            "vla_project.simulation.control_arm.load_config",
+            return_value=config,
+        ), patch(
+            "vla_project.simulation.control_arm.connect_physics"
+        ), patch(
+            "vla_project.simulation.control_arm.prepare_dataset",
+            return_value=(temp_dir, "trajectory.jsonl", "summary.jsonl"),
+        ), patch(
+            "vla_project.simulation.control_arm.setup_world",
+            return_value=(1, 3),
+        ), patch(
+            "vla_project.simulation.control_arm.next_episode_index",
+            return_value=0,
+        ), patch(
+            "vla_project.simulation.control_arm.run_episode"
+        ) as run_episode, patch(
+            "vla_project.simulation.control_arm.p.disconnect"
+        ):
+            control_arm.main(["--num-episodes", "10"])
+
+        self.assertEqual(run_episode.call_count, 10)
+        self.assertEqual(run_episode.call_args_list[0].kwargs["episode_idx"], 0)
+        self.assertEqual(run_episode.call_args_list[-1].kwargs["episode_idx"], 9)
+        self.assertEqual(config["dataset"]["num_episodes"], 300)
+
+    def test_append_override_continues_from_episode_ten_to_299(self):
+        config = {
+            "connection_mode": "DIRECT",
+            "dataset": {
+                "schema_version": "expert_multi_v2",
+                "random_seed": 1000,
+                "num_episodes": 300,
+            },
+        }
+        with patch(
+            "vla_project.simulation.control_arm.load_config",
+            return_value=config,
+        ), patch(
+            "vla_project.simulation.control_arm.connect_physics"
+        ), patch(
+            "vla_project.simulation.control_arm.prepare_dataset",
+            return_value=("dataset", "trajectory.jsonl", "summary.jsonl"),
+        ), patch(
+            "vla_project.simulation.control_arm.setup_world",
+            return_value=(1, 3),
+        ), patch(
+            "vla_project.simulation.control_arm.next_episode_index",
+            return_value=10,
+        ), patch(
+            "vla_project.simulation.control_arm.run_episode"
+        ) as run_episode, patch(
+            "vla_project.simulation.control_arm.p.disconnect"
+        ):
+            control_arm.main(["--num-episodes", "290"])
+
+        self.assertEqual(run_episode.call_count, 290)
+        self.assertEqual(run_episode.call_args_list[0].kwargs["episode_idx"], 10)
+        self.assertEqual(run_episode.call_args_list[-1].kwargs["episode_idx"], 299)
 
 
 class SceneStateTests(unittest.TestCase):
@@ -994,7 +1126,7 @@ class EpisodeReproducibilityTests(unittest.TestCase):
             ) as run_episode, patch(
                 "vla_project.simulation.control_arm.p.disconnect"
             ):
-                control_arm.main()
+                control_arm.main([])
 
             rows = [
                 json.loads(line)
