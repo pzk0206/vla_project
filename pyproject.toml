@@ -28,6 +28,7 @@ vla-screen-grounding-smoke = "vla_project.vlm.grounding_smoke.screening:main"
 vla-train-bc = "vla_project.training.train:main"
 vla-rollout = "vla_project.training.rollout:main"
 vla-train = "vla_project.training.vla_train:main"
+vla-evaluate-vla-counterfactual = "vla_project.training.vla_counterfactual:main"
 vla-convert-qwen = "vla_project.training.convert_to_qwen_format:main"
 
 [tool.setuptools.packages.find]

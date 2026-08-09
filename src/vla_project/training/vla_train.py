@@ -242,12 +242,12 @@ def run_training(
     """执行 VLA 训练，返回输出目录和训练摘要。"""
     if output_dir is None:
         output_dir = _default_training_output(overfit_episodes)
-    output_dir = _validate_training_output_version(output_dir)
     output_dir = resolve_new_output_directory(
         output_dir,
         allowed_root="outputs/training",
         project_root_override=project_root_override,
     )
+    output_dir = _validate_training_output_version(output_dir)
 
     from .dataset import VLADataset, compute_action_stats
     from .vla_model import VLAModel
