@@ -41,6 +41,41 @@ def _load_trajectory_rows(trajectory_path, episode_set):
     return rows
 
 
+def _validated_q_target(row, key):
+    action = row.get("action")
+    if not isinstance(action, list) or len(action) != 9:
+        raise ValueError(f"invalid joint target for trajectory key: {key}")
+    q_target = np.asarray(action[:7], dtype=np.float64)
+    if q_target.shape != (7,) or not np.isfinite(q_target).all():
+        raise ValueError(f"invalid joint target for trajectory key: {key}")
+    return q_target
+
+
+def _build_delta_rows(rows):
+    """按 episode/step 排序，并构造同 episode 相邻绝对目标之差。"""
+    ordered = sorted(
+        rows,
+        key=lambda row: (row["episode_idx"], row["step_idx"]),
+    )
+    previous = {}
+    seen = set()
+    result = []
+    for row in ordered:
+        key = (row["episode_idx"], row["step_idx"])
+        if key in seen:
+            raise ValueError(f"duplicate trajectory key: {key}")
+        seen.add(key)
+        q_target = _validated_q_target(row, key)
+        prior = previous.get(row["episode_idx"])
+        previous[row["episode_idx"]] = q_target
+        if prior is None:
+            continue
+        derived = dict(row)
+        derived["_delta_q"] = (q_target - prior).tolist()
+        result.append(derived)
+    return result
+
+
 class BCDataset(Dataset):
     """行为克隆数据集。
 
@@ -81,17 +116,9 @@ class BCDataset(Dataset):
         trajectory_path = dataset_dir / "trajectory_expert.jsonl"
         self.rows = _load_trajectory_rows(trajectory_path, episode_set)
 
-        # 对于 delta_q，排除每 episode 的首帧（无前帧可做差分）
+        # delta_q 只使用同一 episode 相邻保存帧的绝对关节目标之差。
         if self._use_delta:
-            first_per_ep = {}
-            filtered = []
-            for r in self.rows:
-                ep = r["episode_idx"]
-                if ep not in first_per_ep:
-                    first_per_ep[ep] = r["step_idx"]
-                if r["step_idx"] != first_per_ep[ep]:
-                    filtered.append(r)
-            self.rows = filtered
+            self.rows = _build_delta_rows(self.rows)
 
         # 加载 tokenizer 边界（分类组）
         if self._is_classification:
@@ -131,7 +158,11 @@ class BCDataset(Dataset):
 
         # 目标
         action = np.asarray(row["action"], dtype=np.float32)
-        q_target = action[:7].copy()
+        q_target = (
+            np.asarray(row["_delta_q"], dtype=np.float32)
+            if self._use_delta
+            else action[:7].copy()
+        )
         gripper = np.float32(action[7])
         terminate = np.float32(action[8])
 
