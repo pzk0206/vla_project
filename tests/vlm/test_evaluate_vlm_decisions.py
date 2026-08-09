@@ -18,6 +18,26 @@ from vla_project.vlm.evaluate_vlm_decisions import (
 )
 
 
+class OutputBoundaryTests(unittest.TestCase):
+    def test_rejects_unsafe_run_name_before_reading_samples(self):
+        with tempfile.TemporaryDirectory() as temp_dir, patch(
+            "vla_project.vlm.evaluate_vlm_decisions.read_jsonl"
+        ) as read:
+            config = {
+                "vlm_evaluation": {
+                    "sample_output_dir": "outputs/vlm_samples/samples",
+                    "run_output_dir": "outputs/vlm_evaluations",
+                    "offline_run_name": "a/b",
+                }
+            }
+            with self.assertRaisesRegex(ValueError, "one directory component"):
+                evaluate_offline(
+                    config,
+                    project_root_override=temp_dir,
+                )
+            read.assert_not_called()
+
+
 class BuildOfflinePromptTests(unittest.TestCase):
     """保证 prompt 只使用任务指令，不泄露仿真真值和标准答案。"""
 
@@ -132,7 +152,7 @@ class OfflineResumeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             sample_dir = root / "samples"
-            run_root = root / "runs"
+            run_root = root / "outputs/vlm_evaluations"
             image_path = sample_dir / "images" / "sample.jpg"
             image_path.parent.mkdir(parents=True)
             self.assertTrue(
@@ -165,8 +185,16 @@ class OfflineResumeTests(unittest.TestCase):
                 "vla_project.vlm.evaluate_vlm_decisions.call_openai_compatible_api",
                 return_value=("screen_right", "screen_right"),
             ) as api_mock:
-                first_run_dir, first_summary = evaluate_offline(config, limit=1)
-                second_run_dir, second_summary = evaluate_offline(config, limit=1)
+                first_run_dir, first_summary = evaluate_offline(
+                    config,
+                    limit=1,
+                    project_root_override=root,
+                )
+                second_run_dir, second_summary = evaluate_offline(
+                    config,
+                    limit=1,
+                    project_root_override=root,
+                )
 
             self.assertEqual(api_mock.call_count, 1)
             self.assertEqual(first_run_dir, second_run_dir)

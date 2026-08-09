@@ -12,6 +12,7 @@ from pathlib import Path
 
 import cv2
 
+from vla_project.output_paths import resolve_managed_output, validate_run_name
 from vla_project.vlm.collect_vlm_eval_samples import VALID_DIRECTIONS, read_jsonl
 from vla_project.simulation.control_arm import CONFIG_PATH, load_config
 from vla_project.simulation.stage3_probe import (
@@ -122,9 +123,21 @@ def load_existing_predictions(path):
     return {row["sample_id"]: row for row in read_jsonl(path)}
 
 
-def evaluate_offline(config, limit=None):
+def evaluate_offline(config, limit=None, project_root_override=None):
     """评估固定样本并返回运行目录与最新汇总。"""
     evaluation = config["vlm_evaluation"]
+    run_name = validate_run_name(evaluation["offline_run_name"])
+    run_root = resolve_managed_output(
+        evaluation["run_output_dir"],
+        allowed_root="outputs/vlm_evaluations",
+        project_root_override=project_root_override,
+        require_child=False,
+    )
+    run_dir = resolve_managed_output(
+        run_root / run_name,
+        allowed_root="outputs/vlm_evaluations",
+        project_root_override=project_root_override,
+    )
     sample_dir = Path(evaluation["sample_output_dir"])
     samples = read_jsonl(sample_dir / "samples.jsonl")
     if limit is not None:
@@ -132,7 +145,6 @@ def evaluate_offline(config, limit=None):
             raise ValueError("--limit 必须大于 0")
         samples = samples[:limit]
 
-    run_dir = Path(evaluation["run_output_dir"]) / evaluation["offline_run_name"]
     run_dir.mkdir(parents=True, exist_ok=True)
     predictions_path = run_dir / "predictions.jsonl"
     summary_path = run_dir / "summary.json"

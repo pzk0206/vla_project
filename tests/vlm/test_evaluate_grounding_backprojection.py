@@ -1,14 +1,32 @@
 """测试 grounding 框反投影的离线连接、错误隔离和指标统计。"""
 
+import tempfile
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
 from vla_project.simulation.camera_geometry import compute_camera_matrices, world_to_pixel
 from vla_project.vlm.evaluate_grounding_backprojection import (
     evaluate_rows,
+    run_backprojection,
     summarize_results,
 )
+
+
+class OutputBoundaryTests(unittest.TestCase):
+    def test_rejects_output_escape_before_reading_inputs(self):
+        with tempfile.TemporaryDirectory() as temp_dir, patch(
+            "vla_project.vlm.evaluate_grounding_backprojection.read_jsonl"
+        ) as read:
+            with self.assertRaisesRegex(ValueError, "parent traversal"):
+                run_backprojection(
+                    "predictions.jsonl",
+                    "diagnostics.jsonl",
+                    "outputs/vlm_evaluations/../../src",
+                    project_root_override=temp_dir,
+                )
+            read.assert_not_called()
 
 
 class GroundingBackprojectionEvaluationTests(unittest.TestCase):

@@ -5,13 +5,30 @@ import math
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from vla_project.vlm.validate_grounding_calibration import (
     apply_frozen_calibration,
     fit_clear_calibration,
+    run_validation,
     summarize_validation,
     write_outputs,
 )
+
+
+class OutputBoundaryTests(unittest.TestCase):
+    def test_rejects_output_escape_before_reading_inputs(self):
+        with tempfile.TemporaryDirectory() as temp_dir, patch(
+            "vla_project.vlm.validate_grounding_calibration.read_jsonl"
+        ) as read:
+            with self.assertRaisesRegex(ValueError, "parent traversal"):
+                run_validation(
+                    "calibration.jsonl",
+                    "validation.jsonl",
+                    "outputs/vlm_evaluations/../../src",
+                    project_root_override=temp_dir,
+                )
+            read.assert_not_called()
 
 
 def result_row(

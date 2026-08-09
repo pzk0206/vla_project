@@ -14,6 +14,8 @@ import torch
 import torch.nn as nn
 import yaml
 
+from vla_project.output_paths import resolve_new_output_directory
+
 _DEFAULT_DATASET = "outputs/dataset/expert_scaling_v1"
 _DEFAULT_OUTPUT = "outputs/training"
 
@@ -133,8 +135,22 @@ def run_training(
     batch_size=32,
     lr=1e-4,
     overfit_episodes=None,
+    project_root_override=None,
 ):
     """执行 BC 训练，返回输出目录和训练摘要。"""
+    if output_dir is None:
+        tag = (
+            f"bc_{action_representation}"
+            + (f"_overfit_{overfit_episodes}" if overfit_episodes else "")
+            + "_v1"
+        )
+        output_dir = Path(_DEFAULT_OUTPUT) / tag
+    output_dir = resolve_new_output_directory(
+        output_dir,
+        allowed_root="outputs/training",
+        project_root_override=project_root_override,
+    )
+
     from .dataset import BCDataset, compute_action_stats
     from .model import BCModel
 
@@ -227,17 +243,6 @@ def run_training(
 
     optimizer = _make_optimizer(model, lr=lr)
     scheduler = _make_scheduler(optimizer)
-
-    # 输出目录
-    if output_dir is None:
-        tag = (
-            f"bc_{action_representation}"
-            + (f"_overfit_{overfit_episodes}" if overfit_episodes else "")
-            + "_v1"
-        )
-        output_dir = Path(_DEFAULT_OUTPUT) / tag
-    else:
-        output_dir = Path(output_dir)
 
     run_id = datetime.now(timezone.utc).isoformat(timespec="seconds")
     output_dir.mkdir(parents=True, exist_ok=True)

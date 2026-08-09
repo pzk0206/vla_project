@@ -28,6 +28,8 @@ import numpy as np
 import pybullet as p
 import torch
 import yaml
+
+from vla_project.output_paths import resolve_new_output_directory
 from PIL import Image
 
 from vla_project.simulation.control_arm import (
@@ -324,8 +326,19 @@ def run_rollout_evaluation(
     max_episodes=None,
     max_steps=200,
     gui=False,
+    project_root_override=None,
 ):
     """迭代 val episodes 做闭环评估，保存 per_episode.jsonl + summary.json。"""
+    if output_dir is None:
+        checkpoint = Path(checkpoint_path)
+        tag = checkpoint.parent.name or checkpoint.stem
+        output_dir = Path("outputs/rollout") / tag
+    output_dir = resolve_new_output_directory(
+        output_dir,
+        allowed_root="outputs/rollout",
+        project_root_override=project_root_override,
+    )
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"设备: {device}")
 
@@ -371,9 +384,6 @@ def run_rollout_evaluation(
         val_episodes = val_episodes[:max_episodes]
     print(f"评估 episodes: {len(val_episodes)} 个 (val 共 {len(split_doc['val'])})")
 
-    if output_dir is None:
-        output_dir = "outputs/rollouts/" + Path(checkpoint_path).parent.name
-    output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     per_episode_path = output_dir / "per_episode.jsonl"
     summary_path = output_dir / "summary.json"

@@ -5,8 +5,10 @@
 """
 
 import io
+import tempfile
 import unittest
 import urllib.error
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -24,9 +26,25 @@ from vla_project.simulation.stage3_probe import (
     map_screen_to_world,
     parse_direction,
     parse_screen_direction,
+    run_probe_episode,
     sync_end_effector_marker,
     summarize_probe_trace,
 )
+
+
+class OutputBoundaryTests(unittest.TestCase):
+    def test_rejects_output_escape_before_connecting_physics(self):
+        with tempfile.TemporaryDirectory() as temp_dir, patch(
+            "vla_project.simulation.stage3_probe.connect_physics"
+        ) as connect:
+            with self.assertRaisesRegex(ValueError, "parent traversal"):
+                run_probe_episode(
+                    {},
+                    0,
+                    "outputs/probe/../../src",
+                    project_root_override=Path(temp_dir),
+                )
+            connect.assert_not_called()
 
 
 class EndEffectorMarkerTests(unittest.TestCase):

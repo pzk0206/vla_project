@@ -111,6 +111,38 @@ class ValidateRunNameTests(unittest.TestCase):
                     output_paths.validate_run_name(value)
 
 
+class NewOutputDirectoryTests(unittest.TestCase):
+    def test_can_explicitly_accept_empty_managed_root(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            managed_root = root / "outputs/probe"
+
+            resolved = output_paths.resolve_new_output_directory(
+                managed_root,
+                allowed_root="outputs/probe",
+                project_root_override=root,
+                require_child=False,
+            )
+
+            self.assertEqual(resolved, managed_root)
+
+    def test_rejects_nonempty_managed_root_even_when_root_is_allowed(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            managed_root = root / "outputs/probe"
+            managed_root.mkdir(parents=True)
+            (managed_root / "probe_trace.jsonl").write_text(
+                "evidence", encoding="utf-8"
+            )
+
+            with self.assertRaisesRegex(FileExistsError, "not empty"):
+                output_paths.resolve_new_output_directory(
+                    managed_root,
+                    allowed_root="outputs/probe",
+                    project_root_override=root,
+                    require_child=False,
+                )
+
 class AtomicPublishTests(unittest.TestCase):
     """目录发布失败时必须保留旧证据，且不能移动根外目录。"""
 

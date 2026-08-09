@@ -17,6 +17,26 @@ from vla_project.vlm.diagnose_vlm_grounding import (
 )
 
 
+class OutputBoundaryTests(unittest.TestCase):
+    def test_rejects_unsafe_run_name_before_reading_samples(self):
+        with tempfile.TemporaryDirectory() as temp_dir, patch(
+            "vla_project.vlm.diagnose_vlm_grounding.read_jsonl"
+        ) as read:
+            config = {
+                "vlm_evaluation": {
+                    "sample_output_dir": "outputs/vlm_samples/samples",
+                    "run_output_dir": "outputs/vlm_evaluations",
+                    "grounding_run_name": "../escape",
+                }
+            }
+            with self.assertRaisesRegex(ValueError, "one directory component"):
+                diagnose_grounding(
+                    config,
+                    project_root_override=temp_dir,
+                )
+            read.assert_not_called()
+
+
 class GroundingPromptTests(unittest.TestCase):
     def test_prompt_requests_structure_based_boxes_without_truth_leakage(self):
         prompt = build_grounding_prompt("悬停在红色积木上方")
@@ -93,7 +113,7 @@ class GroundingResumeTests(unittest.TestCase):
             config = {
                 "vlm_evaluation": {
                     "sample_output_dir": str(sample_dir),
-                    "run_output_dir": str(root / "runs"),
+                    "run_output_dir": str(root / "outputs/vlm_evaluations"),
                     "grounding_run_name": "grounding_test",
                 },
                 "probe": {"api": {}},
@@ -106,8 +126,16 @@ class GroundingResumeTests(unittest.TestCase):
                 "vla_project.vlm.diagnose_vlm_grounding.call_openai_compatible_api",
                 return_value=(boxes, "{}"),
             ) as api_mock:
-                first_dir, first_results = diagnose_grounding(config, limit=1)
-                second_dir, second_results = diagnose_grounding(config, limit=1)
+                first_dir, first_results = diagnose_grounding(
+                    config,
+                    limit=1,
+                    project_root_override=root,
+                )
+                second_dir, second_results = diagnose_grounding(
+                    config,
+                    limit=1,
+                    project_root_override=root,
+                )
 
             self.assertEqual(api_mock.call_count, 1)
             self.assertEqual(first_dir, second_dir)

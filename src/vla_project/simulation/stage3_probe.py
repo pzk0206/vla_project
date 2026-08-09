@@ -18,6 +18,8 @@ from collections import Counter
 import cv2
 import pybullet as p
 
+from vla_project.output_paths import resolve_new_output_directory
+
 # 这里复用 control_arm.py 里的基础能力：
 # - 加载配置、初始化 PyBullet 世界
 # - 采集相机图像
@@ -501,7 +503,14 @@ def summarize_probe_trace(rows, episode_idx, random_seed, trace_path):
     }
 
 
-def run_probe_episode(config, episode_idx, episode_dir, random_seed=None):
+def run_probe_episode(
+    config,
+    episode_idx,
+    episode_dir,
+    random_seed=None,
+    project_root_override=None,
+    managed_output_root="outputs/probe",
+):
     """运行一次可复现的 Stage 3 闭环并返回 episode 摘要。
 
     Args:
@@ -521,6 +530,14 @@ def run_probe_episode(config, episode_idx, episode_dir, random_seed=None):
     5. 推进若干物理仿真 step。
     6. 写 probe_trace.jsonl 方便复盘。
     """
+    output_path = resolve_new_output_directory(
+        episode_dir,
+        allowed_root=managed_output_root,
+        project_root_override=project_root_override,
+        require_child=False,
+    )
+    output_path.mkdir(parents=True, exist_ok=True)
+
     # 固定种子后，相同 episode 可以在不同参数下复现，形成公平对照实验。
     if random_seed is not None:
         random.seed(random_seed)
@@ -541,13 +558,9 @@ def run_probe_episode(config, episode_idx, episode_dir, random_seed=None):
     block_id = load_block(task_config)
     settle_object(config, task_config["initial_settle_steps"])
 
-    # outputs/probe/ 是阶段三探路输出，不进入 Git 仓库。
-    # 每次运行会覆盖旧 trace，图片文件名按 step 编号重写。
-    output_dir = str(episode_dir)
-    ensure_dir(output_dir)
+    # 输出目录已经在连接仿真前通过受管根校验，旧证据不会被覆盖。
+    output_dir = str(output_path)
     trace_jsonl_path = os.path.join(output_dir, "probe_trace.jsonl")
-    if os.path.exists(trace_jsonl_path):
-        os.remove(trace_jsonl_path)
 
     # 一次 probe 内相机固定，避免画面变化来自相机抖动。
     # 不同运行之间仍然可以有轻微随机视角，保持后续泛化空间。

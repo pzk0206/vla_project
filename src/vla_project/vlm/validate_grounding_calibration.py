@@ -6,6 +6,8 @@ import math
 import statistics
 from pathlib import Path
 
+from vla_project.output_paths import resolve_new_output_directory
+
 
 VALID_VISIBILITY_GROUPS = {"clear", "partial", "severe"}
 PASS_THRESHOLD_METERS = 0.03
@@ -287,17 +289,37 @@ def parse_args():
     return parser.parse_args()
 
 
-def main():
-    args = parse_args()
-    calibration_rows = read_jsonl(args.calibration_results)
-    validation_rows = read_jsonl(args.validation_results)
+def run_validation(
+    calibration_results,
+    validation_results,
+    output_dir,
+    project_root_override=None,
+):
+    """验证输出边界后拟合、应用并保存冻结校准。"""
+    output_dir = resolve_new_output_directory(
+        output_dir,
+        allowed_root="outputs/vlm_evaluations",
+        project_root_override=project_root_override,
+    )
+    calibration_rows = read_jsonl(calibration_results)
+    validation_rows = read_jsonl(validation_results)
     calibration = fit_clear_calibration(
         calibration_rows,
-        args.calibration_results,
+        calibration_results,
     )
     corrected = apply_frozen_calibration(calibration, validation_rows)
     summary = summarize_validation(corrected, calibration)
-    write_outputs(args.output_dir, calibration, corrected, summary)
+    write_outputs(output_dir, calibration, corrected, summary)
+    return output_dir, summary
+
+
+def main():
+    args = parse_args()
+    _, summary = run_validation(
+        args.calibration_results,
+        args.validation_results,
+        args.output_dir,
+    )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 
 

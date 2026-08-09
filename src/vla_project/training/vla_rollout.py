@@ -17,6 +17,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 import torch
+
+from vla_project.output_paths import resolve_new_output_directory
 from PIL import Image
 
 from vla_project.simulation.control_arm import (
@@ -57,9 +59,23 @@ def _load_vla_model(checkpoint_path, device):
     return model, ckpt.get("metadata", {})
 
 
-def run_vla_rollout(checkpoint_path, config_path, dataset_dir,
-                    output_dir, max_episodes=None, max_steps=200, gui=False):
+def run_vla_rollout(
+    checkpoint_path,
+    config_path,
+    dataset_dir,
+    output_dir,
+    max_episodes=None,
+    max_steps=200,
+    gui=False,
+    project_root_override=None,
+):
     """VLA rollout: 对每个 val episode 用原始指令评估。"""
+    output_dir = resolve_new_output_directory(
+        output_dir,
+        allowed_root="outputs/rollout",
+        project_root_override=project_root_override,
+    )
+
     from vla_project.training.dataset import compute_action_stats
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -101,7 +117,6 @@ def run_vla_rollout(checkpoint_path, config_path, dataset_dir,
     robot_cfg = config["robot"]
     task_cfg = config["task"]
 
-    output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     results = []

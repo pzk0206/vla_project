@@ -76,6 +76,29 @@ def validate_run_name(run_name: str) -> str:
     return run_name
 
 
+def resolve_new_output_directory(
+    requested_path: str | Path,
+    *,
+    allowed_root: str | Path,
+    project_root_override: str | Path | None = None,
+    require_child: bool = True,
+) -> Path:
+    """解析新运行目录，并拒绝复用文件或已有证据的目录。"""
+    resolved = resolve_managed_output(
+        requested_path,
+        allowed_root=allowed_root,
+        project_root_override=project_root_override,
+        require_child=require_child,
+    )
+    if resolved.exists() and (
+        not resolved.is_dir() or any(resolved.iterdir())
+    ):
+        raise FileExistsError(
+            f"output directory already exists and is not empty: {resolved}"
+        )
+    return resolved
+
+
 def publish_directory_atomically(
     staging_dir: str | Path,
     destination_dir: str | Path,

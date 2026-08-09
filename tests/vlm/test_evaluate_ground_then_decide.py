@@ -1,12 +1,35 @@
 """测试结构化 grounding 后方向决策的解析和一致性判断。"""
 
+import tempfile
 import unittest
+from unittest.mock import patch
 
 from vla_project.vlm.evaluate_ground_then_decide import (
     build_ground_then_decide_prompt,
     direction_from_grounding_boxes,
+    evaluate_ground_then_decide,
     parse_ground_then_decide,
 )
+
+
+class OutputBoundaryTests(unittest.TestCase):
+    def test_rejects_unsafe_run_name_before_reading_samples(self):
+        with tempfile.TemporaryDirectory() as temp_dir, patch(
+            "vla_project.vlm.evaluate_ground_then_decide.read_jsonl"
+        ) as read:
+            config = {
+                "vlm_evaluation": {
+                    "sample_output_dir": "outputs/vlm_samples/samples",
+                    "run_output_dir": "outputs/vlm_evaluations",
+                    "ground_then_decide_run_name": "/tmp/escape",
+                }
+            }
+            with self.assertRaisesRegex(ValueError, "one directory component"):
+                evaluate_ground_then_decide(
+                    config,
+                    project_root_override=temp_dir,
+                )
+            read.assert_not_called()
 
 
 class GroundThenDecidePromptTests(unittest.TestCase):

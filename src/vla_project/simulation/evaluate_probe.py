@@ -147,7 +147,14 @@ def run_batch(
         episode_dir = batch_dir / f"episode_{episode_idx:03d}"
         trace_path = episode_dir / "probe_trace.jsonl"
         try:
-            summary = run_probe_episode(config, episode_idx, episode_dir, seed)
+            summary = run_probe_episode(
+                config,
+                episode_idx,
+                episode_dir,
+                seed,
+                project_root_override=project_root_override,
+                managed_output_root="outputs/probe_evaluations",
+            )
         except Exception as exc:
             # 错误被记录而不是继续抛出，保证后续 episode 仍能完成。
             summary = make_error_summary(episode_idx, seed, trace_path, exc)

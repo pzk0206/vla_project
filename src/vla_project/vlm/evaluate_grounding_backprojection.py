@@ -7,6 +7,7 @@ import statistics
 from collections import Counter
 from pathlib import Path
 
+from vla_project.output_paths import resolve_new_output_directory
 from vla_project.simulation.camera_geometry import (
     normalized_box_center_to_pixel,
     pixel_to_world_on_plane,
@@ -255,19 +256,40 @@ def parse_args():
     return parser.parse_args()
 
 
-def main():
-    args = parse_args()
-    predictions = read_jsonl(args.predictions)
-    diagnostics = read_jsonl(args.diagnostics)
-    results = evaluate_rows(predictions, diagnostics, plane_z=args.plane_z)
+def run_backprojection(
+    predictions_path,
+    diagnostics_path,
+    output_dir,
+    plane_z=0.0,
+    project_root_override=None,
+):
+    """验证输出边界后运行反投影并保存完整结果。"""
+    output_dir = resolve_new_output_directory(
+        output_dir,
+        allowed_root="outputs/vlm_evaluations",
+        project_root_override=project_root_override,
+    )
+    predictions = read_jsonl(predictions_path)
+    diagnostics = read_jsonl(diagnostics_path)
+    results = evaluate_rows(predictions, diagnostics, plane_z=plane_z)
     summary = summarize_results(results)
-    output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     write_jsonl(output_dir / "backprojection_results.jsonl", results)
     with (output_dir / "backprojection_summary.json").open(
         "w", encoding="utf-8"
     ) as handle:
         json.dump(summary, handle, ensure_ascii=False, indent=2)
+    return output_dir, summary
+
+
+def main():
+    args = parse_args()
+    _, summary = run_backprojection(
+        args.predictions,
+        args.diagnostics,
+        args.output_dir,
+        plane_z=args.plane_z,
+    )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 
 

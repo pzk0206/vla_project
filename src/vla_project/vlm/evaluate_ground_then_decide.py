@@ -7,6 +7,7 @@ from pathlib import Path
 
 import cv2
 
+from vla_project.output_paths import resolve_managed_output, validate_run_name
 from vla_project.vlm.collect_vlm_eval_samples import read_jsonl
 from vla_project.simulation.control_arm import CONFIG_PATH, load_config
 from vla_project.vlm.diagnose_vlm_grounding import (
@@ -73,13 +74,28 @@ def direction_from_grounding_boxes(boxes):
     return "screen_down" if dy > 0 else "screen_up"
 
 
-def evaluate_ground_then_decide(config, limit=4):
+def evaluate_ground_then_decide(
+    config,
+    limit=4,
+    project_root_override=None,
+):
     """运行结构化对照并保存模型方向、框推导方向和一致性。"""
     evaluation = config["vlm_evaluation"]
+    run_name = validate_run_name(
+        evaluation["ground_then_decide_run_name"]
+    )
+    run_root = resolve_managed_output(
+        evaluation["run_output_dir"],
+        allowed_root="outputs/vlm_evaluations",
+        project_root_override=project_root_override,
+        require_child=False,
+    )
+    run_dir = resolve_managed_output(
+        run_root / run_name,
+        allowed_root="outputs/vlm_evaluations",
+        project_root_override=project_root_override,
+    )
     samples = read_jsonl(Path(evaluation["sample_output_dir"]) / "samples.jsonl")[:limit]
-    run_dir = Path(evaluation["run_output_dir"]) / evaluation[
-        "ground_then_decide_run_name"
-    ]
     annotated_dir = run_dir / "annotated"
     annotated_dir.mkdir(parents=True, exist_ok=True)
     results_path = run_dir / "predictions.jsonl"
