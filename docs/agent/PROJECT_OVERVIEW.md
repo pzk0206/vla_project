@@ -20,10 +20,10 @@
   、无 API 动态案例筛选、整批初始动态预检和最多4步的最近可靠目标保持状态机、
   视觉输入策略决策（斜视主基线）、episode 级训练/验证划分、action tokenization
   只读审计、BC 训练管线（ResNet-18 + 3组动作表示对照）、BC rollout 评估。
-- 已完成：BC regression 为92%（46/50），absolute_q_32 为66%（33/50）。旧
-  delta_q_64 的0%结果因训练标签实际编码了 absolute_q 而无效，保留为 Bug 证据，不能
-  参与动作表示比较。多任务 VLA 旧设置的 rollout 成功率为24.5%。
-- 已完成修复后的 delta v2 overfit/full 重训；正在推进双积木 v2 数据修复与重新采集，
+- 已完成：BC regression 为92%（46/50），absolute_q_32 为66%（33/50），修复语义后的
+  delta_q_64 v2 在同口径 rollout 中仍为0%（0/50）。旧 delta v1 的0%因标签错误而无效；
+  新 v2 的0%是当前执行协议下的有效结果。多任务 VLA 旧设置成功率为24.5%。
+- 已完成修复后的 delta v2 overfit/full 重训与 rollout；正在推进双积木 v2 数据修复与重新采集，
   随后建立确定性成对反事实评估。旧“70%语言跟随率”缺少成对确定性审计证据，当前
   暂停作为成立结论。
 - 暂不覆盖：大型端到端 VLA 训练（7B+）、真实机械臂部署、severe 遮挡恢复。
@@ -156,8 +156,11 @@ PyBullet 红块真值只能用于离线评分、场景资格检查和受控 smok
 19. BC 中 regression（连续回归）rollout 成功率92%（46/50），absolute_q_32（32箱
     离散分类）66%（33/50），这两个结果仍有效。旧 delta_q_64 的训练数据集只删除了
     episode 首帧，却把后续 `action[:7]` 绝对目标直接送入 delta tokenizer；其0% rollout
-    被标记为 `invalid_reason=absolute_labels_encoded_as_delta`，不能证明 delta 不可行，
-    也不能支持“三组中 regression 最优”的完整排序。
+    被标记为 `invalid_reason=absolute_labels_encoded_as_delta`。修复后的 delta v2 在相同
+    50个验证 episode、最多200步协议下仍为0/50，平均/中位最终距离为0.9454/0.9665m，
+    50条均以 `max_steps` 结束。因此当前工程对照可排序为 regression > absolute > delta；
+    该结论只适用于当前单帧视觉、saved-frame delta、60仿真步执行协议，不外推为 delta
+    动作表示普遍不可行。
 20. 多任务 VLA 旧设置在241ep双任务训练后的 rollout 成功率为24.5%，这是可保留的观察
     结果。旧反事实运行报告70%切换，但没有按相同 episode seed 和保存的双积木位姿做
     确定性成对复现，也没有逐对排除系统错误，因此当前不能据此声称语言信号已经驱动

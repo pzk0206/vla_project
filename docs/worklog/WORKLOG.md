@@ -1669,3 +1669,18 @@ episode 拟合。只读预检确认 tokenizer 为7个关节、每关节64箱，�
 边界和7×64个审计重建值。overfit 证明正确 delta 标签可学习；full 的训练/验证损失只
 证明优化过程完成，不能替代新 checkpoint 的闭环 rollout 成功率，当前仍不评价 delta
 是否优于 regression 或 absolute。
+
+## 47. Delta v2 同口径 Rollout 对照 (2026-08-09)
+
+按旧 BC 对照协议，用 `bc_delta_q_64_full_v2/checkpoint_best.pt` 在同一冻结 val split 的
+50个 episode 上运行，每条最多200个动作、每个动作推进60个仿真 step。checkpoint 在连接
+仿真前通过 v2 语义、split 哈希和内嵌 tokenizer 校验；整批没有 episode 异常。
+
+结果为0/50成功，平均/中位最终距离0.945378/0.966493m，范围0.397442–1.151299m；50条
+全部执行200步并以 `max_steps` 终止。证据位于
+`outputs/rollout/bc_delta_q_64_full_v2/`。因此按此前工程口径，三组闭环结果为 regression
+92%（46/50）> absolute_q_32 66%（33/50）> delta_q_64 v2 0%（0/50）。
+
+这次0%与旧 v1 的0%性质不同：旧结果因绝对标签被当作 delta 而无效；v2 是语义修复后
+在当前单帧视觉、相邻保存目标差和60仿真步执行协议下的有效失败。它支持“当前项目选择
+regression 作为主基线”，但不支持“delta 动作表示在所有设计中都不可行”。
