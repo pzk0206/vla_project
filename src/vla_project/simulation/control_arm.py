@@ -295,6 +295,22 @@ def load_block(task_config):
     return block_id
 
 
+def load_block_at_position(
+    task_config,
+    position,
+    color_rgba,
+    global_scaling,
+):
+    """在联合采样器给出的显式位置加载积木，不在加载器内重新采样。"""
+    block_id = p.loadURDF(
+        task_config["block_urdf_path"],
+        basePosition=list(position),
+        globalScaling=global_scaling,
+    )
+    p.changeVisualShape(block_id, -1, rgbaColor=color_rgba)
+    return block_id
+
+
 def load_second_block(task_cfg):
     """加载蓝色积木（第二目标物）并设置视觉颜色。
 
@@ -390,6 +406,25 @@ def capture_scene_state(
         },
         "camera_eye": list(camera_eye),
     }
+
+
+def _validate_settled_pair(sampled_positions, scene_state, pair_config):
+    """验证 settle 没有让任一积木漂移或重新发生重叠。"""
+    settled = {
+        color: scene_state["blocks"][color]["position"]
+        for color in ("red", "blue")
+    }
+    minimum = float(pair_config["min_axis_separation_xy"])
+    if not _pair_is_separated(settled["red"], settled["blue"], minimum):
+        raise ValueError("settled block pair overlaps")
+    maximum_drift = float(pair_config["max_settle_drift_xy"])
+    for color in ("red", "blue"):
+        drift = np.linalg.norm(
+            np.asarray(settled[color][:2], dtype=float)
+            - np.asarray(sampled_positions[color][:2], dtype=float)
+        )
+        if drift > maximum_drift:
+            raise ValueError(f"{color} block settle drift exceeds limit")
 
 
 def get_hover_target(block_id, hover_height):

@@ -592,6 +592,65 @@ class SceneStateTests(unittest.TestCase):
             self.assertEqual(row["final_scene_state"], final)
 
 
+class SettledBlockPairTests(unittest.TestCase):
+    """阻止加载器重新采样位置，并在采集前拒绝物理漂移。"""
+
+    @patch("vla_project.simulation.control_arm.p.changeVisualShape")
+    @patch("vla_project.simulation.control_arm.p.loadURDF", return_value=12)
+    def test_loader_uses_explicit_position(self, load_urdf, _change_visual):
+        block_id = control_arm.load_block_at_position(
+            task_config={"block_urdf_path": "cube.urdf"},
+            position=[-0.15, 0.40, 0.10],
+            color_rgba=[1, 0, 0, 1],
+            global_scaling=0.1,
+        )
+
+        self.assertEqual(block_id, 12)
+        self.assertEqual(
+            load_urdf.call_args.kwargs["basePosition"],
+            [-0.15, 0.40, 0.10],
+        )
+
+    def test_settled_pair_rejects_excessive_xy_drift(self):
+        sampled = {
+            "red": [-0.15, 0.40, 0.10],
+            "blue": [0.15, 0.40, 0.10],
+        }
+        scene_state = {
+            "blocks": {
+                "red": {"position": [-0.14, 0.40, 0.05]},
+                "blue": {"position": [0.15, 0.40, 0.05]},
+            }
+        }
+        with self.assertRaisesRegex(ValueError, "settle drift"):
+            control_arm._validate_settled_pair(
+                sampled,
+                scene_state,
+                {
+                    "min_axis_separation_xy": 0.12,
+                    "max_settle_drift_xy": 0.005,
+                },
+            )
+
+    def test_settled_pair_accepts_small_drift_and_safe_separation(self):
+        control_arm._validate_settled_pair(
+            {
+                "red": [-0.15, 0.40, 0.10],
+                "blue": [0.15, 0.40, 0.10],
+            },
+            {
+                "blocks": {
+                    "red": {"position": [-0.148, 0.401, 0.05]},
+                    "blue": {"position": [0.149, 0.399, 0.05]},
+                }
+            },
+            {
+                "min_axis_separation_xy": 0.12,
+                "max_settle_drift_xy": 0.005,
+            },
+        )
+
+
 class EpisodeReproducibilityTests(unittest.TestCase):
     """保护独立复位、确定性 seed 和 expert_v1 写入契约。"""
 
