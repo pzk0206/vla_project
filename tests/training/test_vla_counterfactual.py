@@ -2,6 +2,8 @@
 
 import unittest
 
+import torch
+
 from vla_project.training import vla_counterfactual
 
 
@@ -69,6 +71,30 @@ class PairedSummaryTests(unittest.TestCase):
             0.5,
         )
         self.assertTrue(summary["supports_red_blue_instruction_recognition"])
+
+
+class InstructionEncodingAuditTests(unittest.TestCase):
+    def test_reports_identical_tokens_and_embeddings(self):
+        class FakeTextEncoder:
+            def tokenize(self, texts):
+                return {
+                    "input_ids": torch.tensor([[101, 100, 102], [101, 100, 102]]),
+                    "attention_mask": torch.ones((2, 3), dtype=torch.int64),
+                }
+
+        class FakeModel:
+            text_encoder = FakeTextEncoder()
+
+            def encode_texts(self, texts):
+                return torch.tensor([[1.0, 2.0], [1.0, 2.0]])
+
+        actual = vla_counterfactual.audit_instruction_encoding(FakeModel())
+
+        self.assertTrue(actual["token_ids_equal"])
+        self.assertTrue(actual["embeddings_equal"])
+        self.assertEqual(actual["embedding_l2"], 0.0)
+        self.assertEqual(actual["input_ids"][0], [101, 100, 102])
+        self.assertEqual(len(actual["embedding_sha256"]), 2)
 
 
 if __name__ == "__main__":

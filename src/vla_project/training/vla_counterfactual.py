@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 from pathlib import Path
 
+import numpy as np
 import torch
 
 from vla_project.output_paths import resolve_new_output_directory
@@ -33,7 +35,41 @@ def wilson_interval(successes, total, z=1.959963984540054):
         )
         / denominator
     )
-    return {"lower": center - margin, "upper": center + margin}
+    return {
+        "lower": max(0.0, center - margin),
+        "upper": min(1.0, center + margin),
+    }
+
+
+def audit_instruction_encoding(model):
+    """记录红蓝指令在冻结文本编码器中的 token 与向量可区分性。"""
+    texts = ["悬停在红色积木上方", "悬停在蓝色积木上方"]
+    tokenized = model.text_encoder.tokenize(texts)
+    input_ids = tokenized["input_ids"].detach().cpu().tolist()
+    attention_mask = tokenized["attention_mask"].detach().cpu().tolist()
+    embeddings = (
+        model.encode_texts(texts).detach().cpu().numpy().astype(np.float32)
+    )
+    difference = embeddings[0] - embeddings[1]
+    denominator = float(np.linalg.norm(embeddings[0]) * np.linalg.norm(embeddings[1]))
+    cosine = (
+        float(np.dot(embeddings[0], embeddings[1]) / denominator)
+        if denominator > 0
+        else None
+    )
+    return {
+        "texts": texts,
+        "input_ids": input_ids,
+        "attention_mask": attention_mask,
+        "token_ids_equal": input_ids[0] == input_ids[1],
+        "embeddings_equal": bool(np.array_equal(embeddings[0], embeddings[1])),
+        "embedding_l2": float(np.linalg.norm(difference)),
+        "embedding_max_abs_diff": float(np.max(np.abs(difference))),
+        "embedding_cosine": cosine,
+        "embedding_sha256": [
+            hashlib.sha256(row.tobytes()).hexdigest() for row in embeddings
+        ],
+    }
 
 
 def _pair_metrics(pair):
@@ -136,6 +172,7 @@ def run_paired_counterfactual(
     model, metadata, action_mean, action_std = load_bound_vla_model(
         checkpoint_path, dataset_dir, device
     )
+    instruction_encoding = audit_instruction_encoding(model)
     config = load_config(config_path)
     summaries = load_validation_summaries(dataset_dir, max_pairs)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -185,6 +222,12 @@ def run_paired_counterfactual(
         )
 
     summary = summarize_pairs(pairs)
+    summary["instruction_encoding_audit"] = instruction_encoding
+    summary["recognition_rule"]["requires_distinct_instruction_embeddings"] = True
+    summary["supports_red_blue_instruction_recognition"] = bool(
+        summary["supports_red_blue_instruction_recognition"]
+        and not instruction_encoding["embeddings_equal"]
+    )
     summary.update(
         {
             "checkpoint": str(checkpoint_path),
