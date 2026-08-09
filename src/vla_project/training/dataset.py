@@ -194,6 +194,29 @@ def compute_action_stats(trajectory_rows):
     return arr.mean(axis=0).tolist(), arr.std(axis=0).tolist()
 
 
+_VLA_INSTRUCTION_BY_TARGET = {
+    "red": "悬停在红色积木上方",
+    "blue": "悬停在蓝色积木上方",
+}
+
+
+def _validate_vla_v2_rows(rows):
+    """拒绝训练标签中的颜色指令与保存目标语义不一致。"""
+    for row in rows:
+        if row.get("schema_version") != "expert_multi_v2":
+            raise ValueError("VLA v2 training requires expert_multi_v2 rows")
+        scene_state = row.get("scene_state")
+        target_block = (
+            scene_state.get("target_block") if isinstance(scene_state, dict) else None
+        )
+        expected_instruction = _VLA_INSTRUCTION_BY_TARGET.get(target_block)
+        if expected_instruction is None or row.get("instruction") != expected_instruction:
+            raise ValueError(
+                "VLA instruction does not match scene target_block: "
+                f"episode={row.get('episode_idx')} step={row.get('step_idx')}"
+            )
+
+
 class VLADataset(Dataset):
     """VLA 数据集：返回 (image, instruction_text, action, aux)。
 
@@ -219,6 +242,7 @@ class VLADataset(Dataset):
 
         trajectory_path = dataset_dir / "trajectory_expert.jsonl"
         self.rows = _load_trajectory_rows(trajectory_path, episode_set)
+        _validate_vla_v2_rows(self.rows)
 
         if action_stats is None:
             raise ValueError("VLADataset 需要 action_stats=(mean, std)")

@@ -127,5 +127,35 @@ class BCDatasetDeltaTests(unittest.TestCase):
         self.assertEqual(auxiliary.tolist(), [1.0, 0.0])
 
 
+class VlaV2SemanticTests(unittest.TestCase):
+    def test_rejects_instruction_that_disagrees_with_scene_target(self):
+        row = trajectory_row(0, 0, 0.1)
+        row.update(
+            {
+                "schema_version": "expert_multi_v2",
+                "instruction": "悬停在蓝色积木上方",
+                "scene_state": {"target_block": "red"},
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "instruction.*target_block"):
+            dataset._validate_vla_v2_rows([row])
+
+    def test_accepts_exact_red_and_blue_instruction_mapping(self):
+        rows = []
+        for episode_idx, color in enumerate(("red", "blue")):
+            row = trajectory_row(episode_idx, 0, 0.1)
+            row.update(
+                {
+                    "schema_version": "expert_multi_v2",
+                    "instruction": f"悬停在{'红' if color == 'red' else '蓝'}色积木上方",
+                    "scene_state": {"target_block": color},
+                }
+            )
+            rows.append(row)
+
+        dataset._validate_vla_v2_rows(rows)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import random
 import sys
 import time
 from datetime import datetime, timezone
@@ -16,8 +18,11 @@ import yaml
 
 from vla_project.output_paths import resolve_new_output_directory
 
-_DEFAULT_DATASET = "outputs/dataset/expert_multi_v1"
+_DEFAULT_DATASET = "outputs/dataset/expert_multi_v2"
 _DEFAULT_OUTPUT = "outputs/training"
+_TRAINING_SEED = 42
+_TEXT_ENCODER_ID = "sentence-transformers/all-MiniLM-L6-v2"
+_MODEL_ARCHITECTURE = "resnet18_minilm_fusion_regression_v1"
 
 
 def _make_optimizer(model, lr=1e-4, weight_decay=1e-4):
@@ -74,7 +79,14 @@ def _run_epoch(model, dataloader, optimizer, device, is_train):
     return total_loss / max(total_samples, 1)
 
 
-def _save_checkpoint(model, optimizer, epoch, path, metadata=None):
+def _save_checkpoint(
+    model,
+    optimizer,
+    epoch,
+    path,
+    common_metadata=None,
+    epoch_metrics=None,
+):
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     state = {
         "epoch": epoch,
@@ -82,6 +94,8 @@ def _save_checkpoint(model, optimizer, epoch, path, metadata=None):
         "optimizer_state_dict": optimizer.state_dict(),
         "action_representation": model.action_representation,
     }
+    metadata = dict(common_metadata or {})
+    metadata.update(epoch_metrics or {})
     if metadata:
         state["metadata"] = metadata
     torch.save(state, path)
@@ -106,6 +120,116 @@ def _load_all_rows(dataset_dir):
     return rows
 
 
+def _file_sha256(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def _default_training_output(overfit_episodes):
+    scope = (
+        f"overfit_{overfit_episodes}"
+        if overfit_episodes is not None
+        else "full"
+    )
+    return Path(_DEFAULT_OUTPUT) / f"vla_regression_{scope}_v2"
+
+
+def _validate_training_output_version(output_dir):
+    output_dir = Path(output_dir)
+    if not output_dir.name.endswith("_v2"):
+        raise ValueError("VLA v2 training output directory must end with _v2")
+    return output_dir
+
+
+def _validate_v2_split(split_doc):
+    if split_doc.get("schema_version") != "episode_split_v2":
+        raise ValueError("VLA v2 training requires episode_split_v2")
+    train_ids = split_doc.get("train")
+    val_ids = split_doc.get("val")
+    if (
+        not isinstance(train_ids, list)
+        or not isinstance(val_ids, list)
+        or len(train_ids) != 250
+        or len(val_ids) != 50
+        or len(set(train_ids)) != 250
+        or len(set(val_ids)) != 50
+        or set(train_ids) & set(val_ids)
+        or set(train_ids) | set(val_ids) != set(range(300))
+    ):
+        raise ValueError("invalid VLA v2 train/val episode split")
+    expected_counts = {
+        "train": {"red": 125, "blue": 125},
+        "val": {"red": 25, "blue": 25},
+    }
+    if split_doc.get("task_counts") != expected_counts:
+        raise ValueError("invalid VLA v2 split task_counts")
+
+
+def _load_v2_contract(dataset_dir):
+    dataset_dir = Path(dataset_dir)
+    manifest_path = dataset_dir / "dataset_manifest.json"
+    split_path = dataset_dir / "episode_split.json"
+    summary_path = dataset_dir / "episode_summary.jsonl"
+    for path in (manifest_path, split_path, summary_path):
+        if not path.is_file():
+            raise FileNotFoundError(f"missing VLA v2 training input: {path}")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    split_doc = json.loads(split_path.read_text(encoding="utf-8"))
+    if manifest.get("schema_version") != "expert_multi_v2":
+        raise ValueError("VLA v2 training requires expert_multi_v2 manifest")
+    _validate_v2_split(split_doc)
+    provenance = split_doc.get("provenance", {})
+    if provenance.get("source_sha256") != _file_sha256(summary_path):
+        raise ValueError("episode split source summary SHA-256 mismatch")
+    if provenance.get("manifest_sha256") != _file_sha256(manifest_path):
+        raise ValueError("episode split manifest SHA-256 mismatch")
+    return manifest, split_doc
+
+
+def _build_checkpoint_metadata(
+    dataset_dir,
+    *,
+    train_episode_ids,
+    action_stats,
+    training_seed,
+):
+    dataset_dir = Path(dataset_dir)
+    file_names = {
+        "dataset_manifest": "dataset_manifest.json",
+        "trajectory_expert": "trajectory_expert.jsonl",
+        "episode_summary": "episode_summary.jsonl",
+        "episode_split": "episode_split.json",
+    }
+    manifest = json.loads((dataset_dir / file_names["dataset_manifest"]).read_text())
+    split_doc = json.loads((dataset_dir / file_names["episode_split"]).read_text())
+    return {
+        "action_semantics": "absolute_joint_target_v1",
+        "dataset_schema_version": manifest.get("schema_version"),
+        "split_schema_version": split_doc.get("schema_version"),
+        **{
+            f"{key}_sha256": _file_sha256(dataset_dir / file_name)
+            for key, file_name in file_names.items()
+        },
+        "train_episode_ids": [int(value) for value in train_episode_ids],
+        "action_stats": {
+            "mean": [float(value) for value in action_stats[0]],
+            "std": [float(value) for value in action_stats[1]],
+        },
+        "training_seed": int(training_seed),
+        "model_architecture": _MODEL_ARCHITECTURE,
+        "text_encoder": _TEXT_ENCODER_ID,
+    }
+
+
+def _set_reproducible_seed(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+
 def run_training(
     dataset_dir=_DEFAULT_DATASET,
     output_dir=None,
@@ -117,10 +241,8 @@ def run_training(
 ):
     """执行 VLA 训练，返回输出目录和训练摘要。"""
     if output_dir is None:
-        tag = "vla_regression" + (
-            f"_overfit_{overfit_episodes}" if overfit_episodes else "_full"
-        ) + "_v1"
-        output_dir = Path(_DEFAULT_OUTPUT) / tag
+        output_dir = _default_training_output(overfit_episodes)
+    output_dir = _validate_training_output_version(output_dir)
     output_dir = resolve_new_output_directory(
         output_dir,
         allowed_root="outputs/training",
@@ -132,24 +254,22 @@ def run_training(
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"设备: {device}")
+    _set_reproducible_seed(_TRAINING_SEED)
 
     dataset_dir = Path(dataset_dir)
     split_path = dataset_dir / "episode_split.json"
+    _, split_doc = _load_v2_contract(dataset_dir)
 
     # 计算 action_stats
     all_rows = _load_all_rows(dataset_dir)
     subset_ids = None
 
     if overfit_episodes is not None:
-        with open(split_path, encoding="utf-8") as fh:
-            split_doc = json.load(fh)
         train_ids = list(split_doc["train"])
         subset_ids = list(train_ids[:overfit_episodes])
         subset_rows = [r for r in all_rows if r["episode_idx"] in set(subset_ids)]
         action_stats = compute_action_stats(subset_rows)
     else:
-        with open(split_path, encoding="utf-8") as fh:
-            split_doc = json.load(fh)
         train_ids = set(split_doc["train"])
         train_rows = [r for r in all_rows if r["episode_idx"] in train_ids]
         action_stats = compute_action_stats(train_rows)
@@ -190,6 +310,12 @@ def run_training(
 
     run_id = datetime.now(timezone.utc).isoformat(timespec="seconds")
     output_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_metadata = _build_checkpoint_metadata(
+        dataset_dir,
+        train_episode_ids=sorted(subset_ids or split_doc["train"]),
+        action_stats=action_stats,
+        training_seed=_TRAINING_SEED,
+    )
 
     config = {
         "run_id": run_id,
@@ -202,6 +328,10 @@ def run_training(
         "device": str(device),
         "train_samples": len(train_dataset),
         "val_samples": len(val_dataset),
+        "training_seed": _TRAINING_SEED,
+        "action_stats": checkpoint_metadata["action_stats"],
+        "episode_split_sha256": checkpoint_metadata["episode_split_sha256"],
+        "dataset_manifest_sha256": checkpoint_metadata["dataset_manifest_sha256"],
     }
     (output_dir / "config.yaml").write_text(
         yaml.dump(config, allow_unicode=True), encoding="utf-8"
@@ -225,7 +355,8 @@ def run_training(
             _save_checkpoint(
                 model, optimizer, epoch,
                 output_dir / "checkpoint_best.pt",
-                metadata={"val_loss": val_loss, "train_loss": train_loss},
+                common_metadata=checkpoint_metadata,
+                epoch_metrics={"val_loss": val_loss, "train_loss": train_loss},
             )
 
         if epoch % 5 == 0 or epoch == 1 or epoch == epochs:
@@ -239,7 +370,8 @@ def run_training(
     _save_checkpoint(
         model, optimizer, epochs,
         output_dir / "checkpoint_last.pt",
-        metadata={"val_loss": val_loss, "train_loss": train_loss},
+        common_metadata=checkpoint_metadata,
+        epoch_metrics={"val_loss": val_loss, "train_loss": train_loss},
     )
 
     _write_jsonl(output_dir / "train_loss.jsonl", train_losses)
@@ -254,6 +386,9 @@ def run_training(
         "final_val_loss": round(val_losses[-1]["loss"], 6),
         "elapsed_seconds": round(elapsed, 1),
         "device": str(device),
+        "training_seed": _TRAINING_SEED,
+        "episode_split_sha256": checkpoint_metadata["episode_split_sha256"],
+        "dataset_manifest_sha256": checkpoint_metadata["dataset_manifest_sha256"],
     }
     (output_dir / "summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2) + "\n",
