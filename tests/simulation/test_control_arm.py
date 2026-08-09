@@ -6,7 +6,6 @@ episode 编号的计算。外部仿真接口使用 mock，文件测试使用临�
 """
 
 import json
-import os
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -250,17 +249,46 @@ class DatasetRunContractTests(unittest.TestCase):
         }
 
     def test_rejects_dataset_root_as_clean_target(self):
-        with self.assertRaises(ValueError):
-            control_arm.validate_versioned_dataset_dir("outputs/dataset")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaises(ValueError):
+                control_arm.validate_versioned_dataset_dir(
+                    "outputs/dataset",
+                    project_root_override=temp_dir,
+                )
 
     def test_accepts_versioned_child_directory(self):
-        path = control_arm.validate_versioned_dataset_dir(
-            "outputs/dataset/expert_scaling_v1"
-        )
-        self.assertEqual(
-            path.as_posix(),
-            "outputs/dataset/expert_scaling_v1",
-        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = control_arm.validate_versioned_dataset_dir(
+                "outputs/dataset/expert_scaling_v1",
+                project_root_override=temp_dir,
+            )
+            self.assertEqual(
+                path,
+                Path(temp_dir).resolve()
+                / "outputs/dataset/expert_scaling_v1",
+            )
+
+    def test_accepts_absolute_versioned_child_directory(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            requested = (
+                Path(temp_dir).resolve()
+                / "outputs/dataset/expert_scaling_v1"
+            )
+
+            path = control_arm.validate_versioned_dataset_dir(
+                requested,
+                project_root_override=temp_dir,
+            )
+
+            self.assertEqual(path, requested)
+
+    def test_rejects_parent_traversal_before_it_reaches_source_tree(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaisesRegex(ValueError, "parent traversal"):
+                control_arm.validate_versioned_dataset_dir(
+                    "outputs/dataset/../../src",
+                    project_root_override=temp_dir,
+                )
 
     def test_builds_expert_v1_manifest(self):
         manifest = control_arm.build_dataset_manifest(self.make_config())
@@ -278,40 +306,72 @@ class DatasetRunContractTests(unittest.TestCase):
     def test_prepare_dataset_writes_manifest_and_config_snapshot(self):
         config = self.make_config()
         with tempfile.TemporaryDirectory() as temp_dir:
-            previous_cwd = os.getcwd()
-            try:
-                os.chdir(temp_dir)
-                dataset_dir, _, _ = control_arm.prepare_dataset(
+            dataset_dir, _, _ = control_arm.prepare_dataset(
+                config["dataset"],
+                full_config=config,
+                project_root_override=temp_dir,
+            )
+            run_dir = Path(dataset_dir)
+            self.assertTrue((run_dir / "dataset_manifest.json").is_file())
+            self.assertTrue((run_dir / "config_snapshot.yaml").is_file())
+
+    def test_clean_before_run_refuses_nonempty_version_directory(self):
+        config = self.make_config(clean_before_run=True)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dataset = (
+                Path(temp_dir)
+                / "outputs/dataset/expert_scaling_v1"
+            )
+            dataset.mkdir(parents=True)
+            evidence = dataset / "trajectory_expert.jsonl"
+            evidence.write_text("evidence\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(FileExistsError, "new dataset version"):
+                control_arm.prepare_dataset(
                     config["dataset"],
                     full_config=config,
+                    project_root_override=temp_dir,
                 )
-                run_dir = Path(dataset_dir)
-                self.assertTrue(
-                    (run_dir / "dataset_manifest.json").is_file()
-                )
-                self.assertTrue((run_dir / "config_snapshot.yaml").is_file())
-            finally:
-                os.chdir(previous_cwd)
+
+            self.assertEqual(
+                evidence.read_text(encoding="utf-8"),
+                "evidence\n",
+            )
+
+    def test_clean_before_run_allows_empty_version_directory(self):
+        config = self.make_config(clean_before_run=True)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dataset = (
+                Path(temp_dir)
+                / "outputs/dataset/expert_scaling_v1"
+            )
+            dataset.mkdir(parents=True)
+
+            dataset_dir, _, _ = control_arm.prepare_dataset(
+                config["dataset"],
+                full_config=config,
+                project_root_override=temp_dir,
+            )
+
+            self.assertEqual(Path(dataset_dir), dataset)
+            self.assertTrue((dataset / "dataset_manifest.json").is_file())
 
     def test_append_rejects_incompatible_manifest(self):
         config = self.make_config()
         with tempfile.TemporaryDirectory() as temp_dir:
-            previous_cwd = os.getcwd()
-            try:
-                os.chdir(temp_dir)
+            control_arm.prepare_dataset(
+                config["dataset"],
+                full_config=config,
+                project_root_override=temp_dir,
+            )
+            incompatible = self.make_config(clean_before_run=False)
+            incompatible["dataset"]["schema_version"] = "expert_v2"
+            with self.assertRaises(ValueError):
                 control_arm.prepare_dataset(
-                    config["dataset"],
-                    full_config=config,
+                    incompatible["dataset"],
+                    full_config=incompatible,
+                    project_root_override=temp_dir,
                 )
-                incompatible = self.make_config(clean_before_run=False)
-                incompatible["dataset"]["schema_version"] = "expert_v2"
-                with self.assertRaises(ValueError):
-                    control_arm.prepare_dataset(
-                        incompatible["dataset"],
-                        full_config=incompatible,
-                    )
-            finally:
-                os.chdir(previous_cwd)
 
 
 class EpisodeReproducibilityTests(unittest.TestCase):

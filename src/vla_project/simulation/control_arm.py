@@ -2,7 +2,6 @@ import json
 import math
 import os
 import random
-import shutil
 import time
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +13,7 @@ import pybullet_data
 import yaml
 
 from vla_project.simulation.camera_geometry import compute_camera_matrices
+from vla_project.output_paths import resolve_managed_output
 
 
 # =====================================================================
@@ -74,15 +74,13 @@ def connect_physics(connection_mode):
     raise ValueError(f"connection_mode 只能是 GUI 或 DIRECT，当前值: {connection_mode}")
 
 
-def validate_versioned_dataset_dir(output_dir):
+def validate_versioned_dataset_dir(output_dir, project_root_override=None):
     """只接受 outputs/dataset 下的版本化子目录。"""
-    path = Path(output_dir)
-    root = Path("outputs/dataset")
-    if path == root or root not in path.parents:
-        raise ValueError(
-            "dataset.output_dir 必须是 outputs/dataset/ 下的版本化子目录"
-        )
-    return path
+    return resolve_managed_output(
+        output_dir,
+        allowed_root="outputs/dataset",
+        project_root_override=project_root_override,
+    )
 
 
 def build_dataset_manifest(config):
@@ -125,7 +123,11 @@ def _validate_append_compatibility(existing_manifest, current_manifest):
         )
 
 
-def prepare_dataset(dataset_config, full_config=None):
+def prepare_dataset(
+    dataset_config,
+    full_config=None,
+    project_root_override=None,
+):
     """按配置初始化数据集目录与 JSONL 文件路径。
 
     数据集结构采用：
@@ -137,14 +139,19 @@ def prepare_dataset(dataset_config, full_config=None):
 
     JSONL 是“一行一个 JSON 对象”的格式，适合大规模训练数据逐行读取。
     """
-    dataset_path = validate_versioned_dataset_dir(dataset_config["output_dir"])
+    dataset_path = validate_versioned_dataset_dir(
+        dataset_config["output_dir"],
+        project_root_override=project_root_override,
+    )
     dataset_dir = str(dataset_path)
     clean_before_run = dataset_config.get("clean_before_run", True)
-    if clean_before_run and os.path.exists(dataset_dir):
-        print(f"🗑️ 检测到旧数据，正在清空 {dataset_dir} 目录...")
-        shutil.rmtree(dataset_dir)
+    if clean_before_run and dataset_path.exists():
+        if not dataset_path.is_dir() or any(dataset_path.iterdir()):
+            raise FileExistsError(
+                "existing dataset contains evidence; use a new dataset version"
+            )
 
-    os.makedirs(dataset_dir, exist_ok=True)
+    dataset_path.mkdir(parents=True, exist_ok=True)
     if full_config is not None:
         manifest = build_dataset_manifest(full_config)
         manifest_path = dataset_path / DATASET_MANIFEST_NAME
