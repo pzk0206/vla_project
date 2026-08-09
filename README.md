@@ -12,15 +12,15 @@
 
 ## 当前阶段
 
-当前主线已经完成 `expert_v1` 的300条规模化采集、质量门禁、逐帧可见性重放审计、
-action tokenization 只读审计，以及同一批轨迹的固定垂直俯视视觉派生。派生数据位于
-`outputs/dataset/expert_topdown_v1/`，包含300条 episode、9,894张448×448图片，状态、
-动作和终止标签与原数据逐项一致，质量门禁通过，原斜视图片保持不变。
+当前主线已经完成单任务 `expert_v1` 的300条规模化采集、质量门禁、逐帧可见性重放审计、
+action tokenization 只读审计，以及同一批轨迹的固定垂直俯视视觉派生。当前正在构建斜视
+双积木 `expert_multi_v2`：红蓝位置同分布并保持最小轴向间距，每帧保存两块积木、机器人、
+末端与相机状态，先采10条 pilot，通过门禁后才追加到300条。旧 `expert_multi_v1` 缺少
+完整双积木位姿，不能用于控制位置混杂的正式红蓝反事实结论。
 
 真实可见性审计同时给出了重要限制：原斜视图 clear/partial/severe 为
 95.81%/4.15%/0.04%，垂直俯视图则为70.99%/4.82%/24.19%，且300个终止帧全部 severe。
-因此下次不会直接把俯视图当作唯一训练视角，而是先确定“斜视主基线、俯视对照或双视角”
-的实验方案，再继续 episode 级划分和轻量行为克隆训练。
+因此后续正式多任务采集与训练使用斜视图，俯视数据仅保留为对照。
 
 在线侧 Stage 3 heuristic 在50个固定随机种子下稳定运行；固定 grounding smoke 案例
 任务到达3/3，但自主停止仍为1/3。该能力边界与动作表示实验保持分离，当前不阻塞进入
@@ -153,16 +153,24 @@ pip install -e .
 
 - 想看窗口调试：`connection_mode: "GUI"`，`enable_time_sleep: true`
 - 想快速批量采集：`connection_mode: "DIRECT"`，`enable_time_sleep: false`
-- 想覆盖旧数据：`dataset.clean_before_run: true`
-- 想追加数据：`dataset.clean_before_run: false`
+- 新版本首次采集前确保目标目录不存在；非空版本目录会被拒绝，不能覆盖旧证据
+- 想在通过 pilot 后追加数据：`dataset.clean_before_run: false`
 
-运行：
+当前双积木 v2 先运行10条 pilot：
 
 ```bash
-vla-collect
+vla-collect --num-episodes 10
+vla-evaluate-dataset --dataset-dir outputs/dataset/expert_multi_v2
 ```
 
-当前配置的采集结果会写入 `outputs/dataset/expert_scaling_v1/`：
+只有报告显示 `active_gate=pilot` 且 `passed=true` 后，才追加剩余290条并运行最终门禁：
+
+```bash
+vla-collect --num-episodes 290
+vla-evaluate-dataset --dataset-dir outputs/dataset/expert_multi_v2
+```
+
+当前配置的采集结果写入 `outputs/dataset/expert_multi_v2/`：
 
 - `dataset_manifest.json`：固定 schema、seed、图片尺寸和数据文件名等契约。
 - `config_snapshot.yaml`：本次采集使用的完整配置快照。
@@ -176,14 +184,13 @@ vla-collect
 vla-evaluate-dataset
 ```
 
-报告写入同一目录的 `dataset_quality_report.json`。10条 pilot 必须全部成功且
-schema、seed、动作维度和图片完整性错误均为0；达到300条后，命令会自动切换到
-scale gate，要求有效 episode 至少300、总体成功率不低于99%、完整性错误为0，并且
-红块 X/Y 五个位置分箱均非空。顶层 `passed` 是能否进入 action tokenization 的机器
-判断字段；门禁失败时命令以非零状态退出。
+报告写入同一目录的 `dataset_quality_report.json`。v2 的10条 pilot 必须10/10成功、
+红蓝任务5/5，并且 scene state、目标一致性、积木间距和积木漂移错误均为0；300条
+scale gate 要求红蓝150/150、总体成功率不低于99%，最小轴向间距不低于0.12m，最大
+XY漂移不超过0.005m。顶层 `passed` 是能否进入后续训练的机器判断；失败时命令以非零
+状态退出，并保留失败目录供审计。
 
-当前 `expert_v1` 已达到300条并通过 scale gate；不要直接重复运行配置中的290条追加
-批次，否则会继续增加数据。
+历史单任务 `expert_scaling_v1` 已达到300条并通过 scale gate，不要对该目录继续追加。
 
 保留原斜视图片并生成固定垂直俯视派生集：
 
