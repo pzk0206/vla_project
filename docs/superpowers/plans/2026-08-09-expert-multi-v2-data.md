@@ -8,8 +8,9 @@
 
 **Tech Stack:** Python 3.10、PyBullet、NumPy、OpenCV、PyYAML、`unittest`、JSON/JSONL
 
-**当前进度（2026-08-09）：** Task 1–6 已完成；真实采集尚未启动。下一执行点为 Task 7
-运行前只读检查。全量343项测试中342项通过，唯一失败为既有的安装态 CLI 元数据不一致。
+**当前进度（2026-08-09）：** Task 1–7 已完成；10条真实 pilot 门禁通过。下一执行点为
+Task 8 追加前只读检查。全量343项测试中342项通过，唯一失败为既有的安装态 CLI 元数据
+不一致。
 
 ## Global Constraints
 

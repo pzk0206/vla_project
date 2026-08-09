@@ -1700,3 +1700,15 @@ regression 作为主基线”，但不支持“delta 动作表示在所有设计
 distribution 的 console scripts 不一致，属于后续已计划的 CLI 元数据补齐，不是 v2 数据
 语义回归。`compileall -q src tests` 和 `git diff --check` 通过。此时
 `outputs/dataset/expert_multi_v2/` 尚未创建，未预写 pilot 或 scale 成功指标。
+
+## 49. expert_multi_v2 真实10条 Pilot (2026-08-09)
+
+运行前确认目标目录不存在，提交为 `5b6f5c4`，配置 SHA-256 为
+`daf841b2a259f5d73318a45595d2ebacd6fc80428c4ffdd9e0de4cfbc5925f36`；配置使用
+DIRECT、斜视相机、schema `expert_multi_v2`、计划300条和基础 seed 1000。
+
+episode 0–9（seeds 1000–1009）全部成功，红蓝任务5/5，共330帧和330张一一对应 JPEG。
+质量报告 `active_gate=pilot`、`passed=true`，scene state、目标一致性、初始重叠和漂移
+错误均为0。初始积木最小轴向间距 min/mean/median/max 为
+0.120001/0.214267/0.234666/0.304340m；逐帧XY漂移最大值为0.000042354m，远低于0.005m
+上限。下一步只在该 manifest 与10条摘要哈希复核通过后追加 episode 10–299。
