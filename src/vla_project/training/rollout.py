@@ -65,6 +65,93 @@ _world_setup = False
 _robot_id = None
 
 
+def _valid_sha256(value):
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(char in "0123456789abcdef" for char in value)
+    )
+
+
+def _validate_checkpoint_tokenizer(tokenizer, representation, num_bins):
+    if (
+        not isinstance(tokenizer, dict)
+        or tokenizer.get("representation") != representation
+        or tokenizer.get("binning") != "quantile"
+        or tokenizer.get("requested_num_bins") != num_bins
+    ):
+        raise ValueError("invalid delta checkpoint tokenizer")
+    edges_list = tokenizer.get("edges")
+    reconstruction_values = tokenizer.get("reconstruction_values")
+    if (
+        not isinstance(edges_list, list)
+        or len(edges_list) != 7
+        or not isinstance(reconstruction_values, list)
+        or len(reconstruction_values) != 7
+    ):
+        raise ValueError("invalid delta checkpoint tokenizer")
+    for edges, reconstruction in zip(edges_list, reconstruction_values):
+        edge_array = np.asarray(edges, dtype=np.float64)
+        reconstruction_array = np.asarray(
+            reconstruction,
+            dtype=np.float64,
+        )
+        if (
+            edge_array.shape != (num_bins + 1,)
+            or reconstruction_array.shape != (num_bins,)
+            or not np.isfinite(edge_array).all()
+            or not np.isfinite(reconstruction_array).all()
+            or not np.all(np.diff(edge_array) > 0)
+        ):
+            raise ValueError("invalid delta checkpoint tokenizer")
+    return tokenizer
+
+
+def _load_checkpoint_action_assets(metadata, action_representation):
+    """验证并返回 checkpoint 内冻结的分类动作资产。"""
+    if action_representation == "regression":
+        return None
+    if action_representation == "delta_q_64":
+        if metadata.get("action_semantics") != (
+            "same_episode_saved_target_delta_v2"
+        ):
+            raise ValueError(
+                "invalid_reason=absolute_labels_encoded_as_delta"
+            )
+        if not _valid_sha256(metadata.get("training_split_sha256")):
+            raise ValueError("invalid delta checkpoint training split hash")
+        return _validate_checkpoint_tokenizer(
+            metadata.get("tokenizer"),
+            "delta_q",
+            64,
+        )
+    tokenizer = metadata.get("tokenizer")
+    if tokenizer is None:
+        return None
+    return _validate_checkpoint_tokenizer(tokenizer, "absolute_q", 32)
+
+
+def _classification_joint_targets(
+    action_representation,
+    token_ids,
+    tokenizer,
+    current_q=None,
+):
+    decoded = np.asarray(
+        decode_tokens_to_action(
+            token_ids,
+            tokenizer["reconstruction_values"],
+        ),
+        dtype=np.float64,
+    )
+    if action_representation != "delta_q_64":
+        return decoded
+    current = np.asarray(current_q, dtype=np.float64)
+    if current.shape != decoded.shape or not np.isfinite(current).all():
+        raise ValueError("delta rollout requires current joint state")
+    return current + decoded
+
+
 def _ensure_physics_world(config, gui):
     """确保仿真世界已连接并初始化（幂等）。"""
     global _world_setup, _robot_id
@@ -116,13 +203,14 @@ def load_model_for_rollout(checkpoint_path, device):
         str(checkpoint_path), map_location=device, weights_only=False
     )
     action_representation = ckpt["action_representation"]
+    metadata = dict(ckpt.get("metadata") or {})
+    metadata["action_representation"] = action_representation
+    _load_checkpoint_action_assets(metadata, action_representation)
+
     model = BCModel(action_representation=action_representation)
     model.load_state_dict(ckpt["model_state_dict"])
     model.to(device)
     model.eval()
-
-    metadata = dict(ckpt.get("metadata") or {})
-    metadata["action_representation"] = action_representation
 
     # 只读同级 config.yaml，注入训练口径参数（不影响其他文件）。
     config_yaml = checkpoint_path.parent / "config.yaml"
@@ -257,15 +345,8 @@ def run_rollout_episode(
                 joint_targets = pred * action_std + action_mean
             else:
                 token_ids = action_pred.argmax(dim=-1)[0].cpu().numpy()
-                decoded = np.asarray(
-                    decode_tokens_to_action(
-                        token_ids,
-                        action_tokenizer["reconstruction_values"],
-                    ),
-                    dtype=np.float32,
-                )
+                current_q = None
                 if action_representation == "delta_q_64":
-                    # delta_q_64 预测的是角度变化，需要加到当前关节角上
                     current_q = np.array(
                         [
                             p.getJointState(_robot_id, j)[0]
@@ -273,9 +354,12 @@ def run_rollout_episode(
                         ],
                         dtype=np.float32,
                     )
-                    joint_targets = current_q + decoded
-                else:
-                    joint_targets = decoded
+                joint_targets = _classification_joint_targets(
+                    action_representation,
+                    token_ids,
+                    action_tokenizer,
+                    current_q=current_q,
+                )
 
             early_terminate = aux_pred[0, 1].sigmoid().item() > 0.5
 
@@ -355,12 +439,15 @@ def run_rollout_evaluation(
 
     # 与训练口径一致的预处理参数。
     action_stats = None
-    action_tokenizer = None
+    action_tokenizer = _load_checkpoint_action_assets(
+        metadata,
+        action_representation,
+    )
     if action_representation == "regression":
         action_stats = _compute_action_stats_for_checkpoint(
             dataset_dir, overfit_episodes
         )
-    else:
+    elif action_tokenizer is None:
         action_tokenizer = _load_tokenizer_for_checkpoint(
             dataset_dir,
             action_representation,

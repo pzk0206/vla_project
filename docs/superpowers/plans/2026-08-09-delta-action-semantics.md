@@ -194,12 +194,15 @@ git commit -m "feat: version delta checkpoints with frozen semantics"
 
 **Interfaces:**
 - Produces: `_load_checkpoint_action_assets(metadata, action_representation) -> dict`
+- Produces: `_classification_joint_targets(action_representation, token_ids, tokenizer, current_q=None) -> np.ndarray`
 - Consumes: Task 2 tokenizer dict、Task 3 checkpoint metadata
 
 - [ ] **Step 1: 写并运行 RED 测试**
 
 测试旧 delta metadata 缺少 `action_semantics` 时拒绝并包含
-`absolute_labels_encoded_as_delta`；新 metadata 使用保存的 `reconstruction_values` 解码，且一次执行目标严格等于 mock 当前关节角加 decoded delta。patch 模型、相机与 PyBullet，不启动真实仿真。
+`absolute_labels_encoded_as_delta`，且在 `BCModel` 构造前停止；新 metadata 使用保存的
+`reconstruction_values` 解码，`_classification_joint_targets` 的输出严格等于给定当前
+关节角加 decoded delta。不启动真实仿真。
 
 Run: `env PYTHONPATH=src conda run -n vla_env python -m unittest tests.training.test_rollout_delta -v`
 
