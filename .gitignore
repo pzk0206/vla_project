@@ -41,6 +41,10 @@ outputs/
 *.tar.gz
 *.7z
 
+# Internal development documentation and agent config (local only)
+docs/
+AGENTS.md
+
 # OS metadata
 .DS_Store
 Thumbs.db
