@@ -186,7 +186,7 @@
   7,024（70.99%）、partial 477（4.82%）、severe 2,393（24.19%）；300/300 episode
   出现 severe，300个首帧 clear，300个终止帧 severe。原斜视数据仍有95.81% clear、
   0.04% severe，因此两套图像均保留，尚未选择唯一训练视角。
-- 当前完整自动测试为253/253通过；`compileall` 和 `git diff --check` 在本轮收尾时通过。
+- 当前完整自动测试为362/362通过；`compileall` 和 `git diff --check` 在本轮收尾时通过。
 
 ## 未解决问题
 
@@ -259,6 +259,60 @@
 - 可见性审计设计：[2026-07-27-expert-dataset-visibility-audit-design.md](../superpowers/specs/2026-07-27-expert-dataset-visibility-audit-design.md)
 - 专家数据规模化设计：[2026-07-26-expert-dataset-scaling-design.md](../superpowers/specs/2026-07-26-expert-dataset-scaling-design.md)
 - 专家数据规模化计划：[2026-07-26-expert-dataset-scaling.md](../superpowers/plans/2026-07-26-expert-dataset-scaling.md)
+
+## 对外表述参考（2026-08-10 审计）
+
+以下为经项目证据核对的对外表述，可直接用于简历或面试。每个数据点均已在本文件中找到
+对应审计来源。
+
+### 仿真环境与专家数据采集
+
+在 PyBullet 中搭建 KUKA iiwa 七轴机械臂交互环境，实现 IK/FK 关节控制与多视角虚拟
+相机采集。构建 300 条（9,826 帧）双积木悬停轨迹数据集，红/蓝目标各 150 条，成功率
+100%，X/Y 五区均衡采样。建立逐帧质量门禁、可见性审计（95.8% clear）和动作
+tokenization 量化分析（等频/等宽分箱评估），全部数据经 SHA-256 绑定与原子发布。
+
+### 动作表示与模仿学习
+
+以 ResNet-18 为骨干训练行为克隆基线，经动作量化审计筛选后对比连续回归（regression）
+与离散分类（absolute_q_32、delta_q_64）三种动作表示。连续回归以 92%（46/50）Rollout
+成功率胜出，验证了连续控制在具身操作任务中的优势；delta_q_64 在当前数据规模下不可行
+（0/50），为小样本下的动作表示选择提供消融证据。
+
+### 端到端 VLA 与语言信号分析
+
+构建 ResNet-18 + 多语言 MiniLM 融合 VLA 策略（~129M 参数），实现「RGB + 中文指令 →
+7 维关节动作」的端到端映射。建立成对反事实评估协议：固定场景状态与随机种子，仅切换
+指令颜色，确定性复现（重放误差 = 0）以严格检验语言信号利用。审计发现旧英文 MiniLM
+将中文"红色"/"蓝色"编码为相同 token（embedding L2 = 0），已替换编码器并增加训练前
+token 区分度门禁，后续规划 Qwen2-VL QLoRA 增强语言理解。
+
+### VLM 感知与模块化闭环
+
+以 Qwen3-VL-Flash 为开放词汇感知前端，结合 PyBullet 相机反投影几何与冻结 XY 补偿
+（标定集 15 样本拟合，验证集 19/20 校正后 ≤ 3cm，达 95%），配合确定性 IK 控制器实现
+模块化闭环。3 个未见场景全部成功，末端定位精度 0.30–0.79 cm，借助目标保持策略将 API
+调用压缩至 3 个 episode 合计 4 次。按遮挡程度（Clear/Partial/Severe）分层统计误差，
+标定与验证严格隔离。
+
+### 工程规范与可复现性
+
+362 项自动化测试，单一 YAML 管理全链路参数。建立完整审计链：数据完整性（9 个 SHA-256
+绑定、路径逃逸拒绝）、动作量化评估、可见性分层统计、checkpoint 与数据集哈希绑定。
+成对反事实评估中 episode 级确定性复现，重放误差为 0。
+
+---
+
+### 常见错误与纠正
+
+| 错误表述 | 真实数据 | 证据 |
+|---------|---------|------|
+| 70% 指令跟随率 | 0/50，旧结论已被 v2 审计推翻 | 成对反事实、token 审计 |
+| 34M 参数 | ~129M，文本编码器未冻结 | `VLAModel().parameters()` |
+| 单 Episode API 4 次 | 3 episode 合计 4 次 | smoke_summary total_api_calls |
+| Qwen2-VL 感知前端 | Qwen3-VL-Flash（API 调用） | 输出目录名 qwen3_vl_flash |
+| 9,894 帧 | 9,826 帧（expert_multi_v2） | dataset_manifest.json |
+| 独立验证 15/15 ≤3cm | 19/20 ≤3cm（95%），clear 15/15 | calibration_validation_summary |
 
 ## 更新规则
 
