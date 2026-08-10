@@ -21,8 +21,53 @@ from vla_project.output_paths import resolve_new_output_directory
 _DEFAULT_DATASET = "outputs/dataset/expert_multi_v2"
 _DEFAULT_OUTPUT = "outputs/training"
 _TRAINING_SEED = 42
-_TEXT_ENCODER_ID = "sentence-transformers/all-MiniLM-L6-v2"
-_MODEL_ARCHITECTURE = "resnet18_minilm_fusion_regression_v1"
+_TEXT_ENCODER_ID = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+_MODEL_ARCHITECTURE = "resnet18_multilingual_minilm_fusion_regression_v1"
+
+
+def _validate_text_encoder_distinguishes_chinese():
+    """训练前门禁：验证文本编码器能区分红/蓝中文指令。
+
+    如果红/蓝 token 或 embedding 完全相同，训练没有任何语言信号，
+    VLA 退化为 BC——必须在此处硬失败，不允许继续。
+    """
+    from sentence_transformers import SentenceTransformer
+
+    encoder = SentenceTransformer(_TEXT_ENCODER_ID)
+    tokenizer = encoder.tokenizer
+
+    red_text = "悬停在红色积木上方"
+    blue_text = "悬停在蓝色积木上方"
+
+    # 门禁 A：token 序列必须不同
+    red_ids = tokenizer.encode(red_text, add_special_tokens=False)
+    blue_ids = tokenizer.encode(blue_text, add_special_tokens=False)
+    if red_ids == blue_ids:
+        raise ValueError(
+            f"文本编码器 {_TEXT_ENCODER_ID} 将红/蓝指令编码为相同 token 序列: "
+            f"{red_ids}"
+        )
+
+    # 门禁 B：embedding 必须可区分且数值有效
+    import torch
+    emb = encoder.encode(
+        [red_text, blue_text], convert_to_tensor=True, show_progress_bar=False
+    )
+    if emb.shape != (2, 384):
+        raise ValueError(f"embedding 形状异常: {emb.shape}，预期 (2, 384)")
+    if not torch.isfinite(emb).all():
+        raise ValueError("embedding 包含 NaN 或 Inf")
+    sim = torch.nn.functional.cosine_similarity(
+        emb[0:1], emb[1:2], dim=1
+    ).item()
+    if sim > 0.99:
+        raise ValueError(
+            f"红/蓝 embedding 无法区分: cosine_sim={sim:.6f}（必须 < 0.99）"
+        )
+    print(
+        f"✅ 编码预检通过: 红/蓝 token 不同, embedding cosine_sim={sim:.4f}"
+    )
+    return True
 
 
 def _make_optimizer(model, lr=1e-4, weight_decay=1e-4):
@@ -130,13 +175,13 @@ def _default_training_output(overfit_episodes):
         if overfit_episodes is not None
         else "full"
     )
-    return Path(_DEFAULT_OUTPUT) / f"vla_regression_{scope}_v2"
+    return Path(_DEFAULT_OUTPUT) / f"vla_regression_{scope}_v3"
 
 
 def _validate_training_output_version(output_dir):
     output_dir = Path(output_dir)
-    if not output_dir.name.endswith("_v2"):
-        raise ValueError("VLA v2 training output directory must end with _v2")
+    if not output_dir.name.endswith("_v3"):
+        raise ValueError("VLA v3 training output directory must end with _v3")
     return output_dir
 
 
@@ -254,6 +299,10 @@ def run_training(
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"设备: {device}")
+
+    # 训练前门禁：编码器必须能区分中文红/蓝指令
+    _validate_text_encoder_distinguishes_chinese()
+
     _set_reproducible_seed(_TRAINING_SEED)
 
     dataset_dir = Path(dataset_dir)

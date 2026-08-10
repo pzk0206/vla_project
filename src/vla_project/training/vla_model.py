@@ -9,14 +9,22 @@ from .model import RegressionHead, _make_resnet_backbone
 
 
 def _make_text_encoder():
-    """加载 all-MiniLM-L6-v2，返回 (encoder, embedding_dim)。"""
+    """加载 paraphrase-multilingual-MiniLM-L12-v2，返回 (encoder, embedding_dim)。
+
+    all-MiniLM-L6-v2 是纯英文模型，会把中文"红色"/"蓝色"都映射为 [UNK]，
+    两条指令的文本嵌入完全一致。multilingual 版本支持中文，可区分。
+    """
     from sentence_transformers import SentenceTransformer
 
     encoder = SentenceTransformer(
-        "all-MiniLM-L6-v2",
+        "paraphrase-multilingual-MiniLM-L12-v2",
         local_files_only=True,
     )
-    return encoder, encoder.get_sentence_embedding_dimension()  # 384
+    try:
+        dim = encoder.get_embedding_dimension()
+    except AttributeError:
+        dim = encoder.get_sentence_embedding_dimension()
+    return encoder, dim  # 384
 
 
 class VLAModel(nn.Module):
