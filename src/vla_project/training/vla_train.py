@@ -22,7 +22,7 @@ _DEFAULT_DATASET = "outputs/dataset/expert_multi_v2"
 _DEFAULT_OUTPUT = "outputs/training"
 _TRAINING_SEED = 42
 _TEXT_ENCODER_ID = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-_MODEL_ARCHITECTURE = "resnet18_multilingual_minilm_fusion_regression_v1"
+_MODEL_ARCHITECTURE = "resnet18_multilingual_minilm_fusion_coloraux_v1"
 
 
 def _validate_text_encoder_distinguishes_chinese():
@@ -78,24 +78,42 @@ def _make_scheduler(optimizer, T_0=10):
     return torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=T_0)
 
 
-def _regression_loss(action_pred, aux_pred, action_target, aux_target):
+def _vla_loss(
+    action_pred,
+    aux_pred,
+    color_logits,
+    action_target,
+    aux_target,
+    color_target,
+    color_weight=1.0,
+):
+    """动作回归 + aux(gripper/terminate) + 目标色分类 三路损失。
+
+    color_weight 放大目标色监督，强制模型利用语言区分红/蓝（P1）。
+    """
     action_loss = nn.functional.smooth_l1_loss(action_pred, action_target)
     aux_loss = nn.functional.binary_cross_entropy_with_logits(aux_pred, aux_target)
-    return action_loss + aux_loss
+    color_loss = nn.functional.cross_entropy(color_logits, color_target)
+    return action_loss + aux_loss + color_weight * color_loss
 
 
 def _collate_vla(batch, model, device):
-    """将 VLADataset batch 整理为模型输入。"""
+    """将 VLADataset batch 整理为模型输入。
+
+    text_emb 使用 encode_texts_grad()（带梯度），使语言分支参与反向传播；
+    该输出与 encode_texts() 逐位一致，不影响推理时的一致性。
+    """
     images = torch.stack([item[0] for item in batch]).to(device)
     texts = [item[1] for item in batch]
-    text_emb = model.encode_texts(texts).to(device)
+    text_emb = model.encode_texts_grad(texts).to(device)
     action_target = torch.stack([item[2] for item in batch]).to(device)
     aux_target = torch.stack([item[3] for item in batch]).to(device)
-    return images, text_emb, action_target, aux_target
+    color_target = torch.stack([item[4] for item in batch]).to(device)
+    return images, text_emb, action_target, aux_target, color_target
 
 
-def _run_epoch(model, dataloader, optimizer, device, is_train):
-    """跑一个 epoch，返回平均 loss。"""
+def _run_epoch(model, dataloader, optimizer, device, is_train, color_weight=1.0):
+    """跑一个 epoch，返回 (平均 loss, 目标色分类准确率)。"""
     if is_train:
         model.train()
     else:
@@ -103,15 +121,27 @@ def _run_epoch(model, dataloader, optimizer, device, is_train):
 
     total_loss = 0.0
     total_samples = 0
+    color_correct = 0
 
     with torch.set_grad_enabled(is_train):
         for batch in dataloader:
-            images, text_emb, action_target, aux_target = _collate_vla(
+            images, text_emb, action_target, aux_target, color_target = _collate_vla(
                 batch, model, device
             )
 
-            action_pred, aux_pred = model(images, text_emb)
-            loss = _regression_loss(action_pred, aux_pred, action_target, aux_target)
+            action_pred, aux_pred, color_logits = model(images, text_emb)
+            loss = _vla_loss(
+                action_pred,
+                aux_pred,
+                color_logits,
+                action_target,
+                aux_target,
+                color_target,
+                color_weight=color_weight,
+            )
+            color_correct += (
+                color_logits.argmax(dim=1) == color_target
+            ).sum().item()
 
             if is_train:
                 optimizer.zero_grad()
@@ -121,7 +151,8 @@ def _run_epoch(model, dataloader, optimizer, device, is_train):
             total_loss += loss.item() * images.size(0)
             total_samples += images.size(0)
 
-    return total_loss / max(total_samples, 1)
+    color_acc = color_correct / max(total_samples, 1)
+    return total_loss / max(total_samples, 1), color_acc
 
 
 def _save_checkpoint(
@@ -175,13 +206,13 @@ def _default_training_output(overfit_episodes):
         if overfit_episodes is not None
         else "full"
     )
-    return Path(_DEFAULT_OUTPUT) / f"vla_regression_{scope}_v3"
+    return Path(_DEFAULT_OUTPUT) / f"vla_regression_{scope}_v4"
 
 
 def _validate_training_output_version(output_dir):
     output_dir = Path(output_dir)
-    if not output_dir.name.endswith("_v3"):
-        raise ValueError("VLA v3 training output directory must end with _v3")
+    if not output_dir.name.endswith("_v4"):
+        raise ValueError("VLA v4 training output directory must end with _v4")
     return output_dir
 
 
@@ -209,6 +240,31 @@ def _validate_v2_split(split_doc):
         raise ValueError("invalid VLA v2 split task_counts")
 
 
+def _validate_paired_split(split_doc):
+    """成对数据 split 契约：episode_split_v3，train 500 / val 100。"""
+    if split_doc.get("schema_version") != "episode_split_v3":
+        raise ValueError("paired VLA training requires episode_split_v3")
+    train_ids = split_doc.get("train")
+    val_ids = split_doc.get("val")
+    if (
+        not isinstance(train_ids, list)
+        or not isinstance(val_ids, list)
+        or len(train_ids) != 500
+        or len(val_ids) != 100
+        or len(set(train_ids)) != 500
+        or len(set(val_ids)) != 100
+        or set(train_ids) & set(val_ids)
+        or set(train_ids) | set(val_ids) != set(range(600))
+    ):
+        raise ValueError("invalid paired VLA train/val episode split")
+    expected_counts = {
+        "train": {"red": 250, "blue": 250},
+        "val": {"red": 50, "blue": 50},
+    }
+    if split_doc.get("task_counts") != expected_counts:
+        raise ValueError("invalid paired VLA split task_counts")
+
+
 def _load_v2_contract(dataset_dir):
     dataset_dir = Path(dataset_dir)
     manifest_path = dataset_dir / "dataset_manifest.json"
@@ -216,12 +272,16 @@ def _load_v2_contract(dataset_dir):
     summary_path = dataset_dir / "episode_summary.jsonl"
     for path in (manifest_path, split_path, summary_path):
         if not path.is_file():
-            raise FileNotFoundError(f"missing VLA v2 training input: {path}")
+            raise FileNotFoundError(f"missing VLA training input: {path}")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     split_doc = json.loads(split_path.read_text(encoding="utf-8"))
     if manifest.get("schema_version") != "expert_multi_v2":
-        raise ValueError("VLA v2 training requires expert_multi_v2 manifest")
-    _validate_v2_split(split_doc)
+        raise ValueError("VLA training requires expert_multi_v2 manifest")
+    is_paired = bool(manifest.get("paired_source_dir"))
+    if is_paired:
+        _validate_paired_split(split_doc)
+    else:
+        _validate_v2_split(split_doc)
     provenance = split_doc.get("provenance", {})
     if provenance.get("source_sha256") != _file_sha256(summary_path):
         raise ValueError("episode split source summary SHA-256 mismatch")
@@ -282,6 +342,7 @@ def run_training(
     batch_size=32,
     lr=1e-4,
     overfit_episodes=None,
+    color_weight=1.0,
     project_root_override=None,
 ):
     """执行 VLA 训练，返回输出目录和训练摘要。"""
@@ -374,6 +435,7 @@ def run_training(
         "batch_size": batch_size,
         "lr": lr,
         "overfit_episodes": overfit_episodes,
+        "color_weight": color_weight,
         "device": str(device),
         "train_samples": len(train_dataset),
         "val_samples": len(val_dataset),
@@ -392,8 +454,12 @@ def run_training(
     t_start = time.time()
 
     for epoch in range(1, epochs + 1):
-        train_loss = _run_epoch(model, train_loader, optimizer, device, True)
-        val_loss = _run_epoch(model, val_loader, optimizer, device, False)
+        train_loss, train_color_acc = _run_epoch(
+            model, train_loader, optimizer, device, True, color_weight=color_weight
+        )
+        val_loss, val_color_acc = _run_epoch(
+            model, val_loader, optimizer, device, False, color_weight=color_weight
+        )
         scheduler.step()
 
         train_losses.append({"epoch": epoch, "loss": round(train_loss, 6)})
@@ -411,7 +477,8 @@ def run_training(
         if epoch % 5 == 0 or epoch == 1 or epoch == epochs:
             print(
                 f"  epoch {epoch:3d}/{epochs}  "
-                f"train_loss={train_loss:.4f}  val_loss={val_loss:.4f}"
+                f"train_loss={train_loss:.4f}(color {train_color_acc:.3f})  "
+                f"val_loss={val_loss:.4f}(color {val_color_acc:.3f})"
             )
 
     elapsed = time.time() - t_start
@@ -458,6 +525,8 @@ def main():
     parser.add_argument("--batch-size", type=int, default=32, help="Batch size（默认: 32）")
     parser.add_argument("--lr", type=float, default=1e-4, help="学习率（默认: 1e-4）")
     parser.add_argument("--overfit", type=int, default=None, help="Overfit 模式：只用前 N 个训练 episode")
+    parser.add_argument("--color-weight", type=float, default=1.0,
+                        help="目标色分类损失权重（默认: 1.0；调小可减少对目标选择的强调、加大动作精度占比）")
     args = parser.parse_args()
 
     try:
@@ -468,6 +537,7 @@ def main():
             batch_size=args.batch_size,
             lr=args.lr,
             overfit_episodes=args.overfit,
+            color_weight=args.color_weight,
         )
     except Exception as exc:
         print(f"训练失败: {exc}", file=sys.stderr)

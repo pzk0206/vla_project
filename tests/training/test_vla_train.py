@@ -10,20 +10,20 @@ from vla_project.training import vla_train
 
 
 class VlaTrainingMetadataTests(unittest.TestCase):
-    def test_default_outputs_are_new_v2_directories(self):
+    def test_default_outputs_are_new_v4_directories(self):
         self.assertEqual(
             vla_train._default_training_output(None),
-            Path("outputs/training/vla_regression_full_v2"),
+            Path("outputs/training/vla_regression_full_v4"),
         )
         self.assertEqual(
             vla_train._default_training_output(10),
-            Path("outputs/training/vla_regression_overfit_10_v2"),
+            Path("outputs/training/vla_regression_overfit_10_v4"),
         )
 
-    def test_rejects_explicit_v1_output_name(self):
-        with self.assertRaisesRegex(ValueError, "VLA v2"):
+    def test_rejects_non_v4_output_name(self):
+        with self.assertRaisesRegex(ValueError, "VLA v4"):
             vla_train._validate_training_output_version(
-                Path("outputs/training/vla_custom_v1")
+                Path("outputs/training/vla_custom_v3")
             )
 
     def test_checkpoint_metadata_hashes_exact_v2_inputs_and_stats(self):
@@ -83,6 +83,33 @@ class VlaInputContractTests(unittest.TestCase):
         }
 
         vla_train._validate_v2_split(split_doc)
+
+    def test_accepts_exact_balanced_paired_split(self):
+        split_doc = {
+            "schema_version": "episode_split_v3",
+            "train": list(range(500)),
+            "val": list(range(500, 600)),
+            "task_counts": {
+                "train": {"red": 250, "blue": 250},
+                "val": {"red": 50, "blue": 50},
+            },
+        }
+
+        vla_train._validate_paired_split(split_doc)
+
+    def test_rejects_paired_split_with_wrong_balance(self):
+        split_doc = {
+            "schema_version": "episode_split_v3",
+            "train": list(range(500)),
+            "val": list(range(500, 600)),
+            "task_counts": {
+                "train": {"red": 251, "blue": 249},
+                "val": {"red": 49, "blue": 51},
+            },
+        }
+
+        with self.assertRaisesRegex(ValueError, "task_counts"):
+            vla_train._validate_paired_split(split_doc)
 
 
 if __name__ == "__main__":

@@ -682,8 +682,13 @@ def write_episode_summary(
     target_block=None,
     initial_scene_state=None,
     final_scene_state=None,
+    extra_fields=None,
 ):
-    """为每条轨迹写一行摘要，方便快速审计数据集质量。"""
+    """为每条轨迹写一行摘要，方便快速审计数据集质量。
+
+    extra_fields 供调用方补充附加审计字段（如成对补录的 paired_with），
+    默认 None 时行为与历史一致。
+    """
     if schema_version == "expert_multi_v2" and (
         not isinstance(initial_scene_state, dict)
         or not isinstance(final_scene_state, dict)
@@ -710,6 +715,8 @@ def write_episode_summary(
         summary["initial_scene_state"] = initial_scene_state
     if final_scene_state is not None:
         summary["final_scene_state"] = final_scene_state
+    if extra_fields is not None:
+        summary.update(extra_fields)
     with open(summary_jsonl_path, "a", encoding="utf-8") as summary_file:
         summary_file.write(json.dumps(summary, ensure_ascii=False) + "\n")
 
@@ -814,7 +821,7 @@ def run_episode(
     is_multi_v2 = dataset_cfg["schema_version"] == "expert_multi_v2"
     instruction, target_block = select_task(
         config,
-        episode_idx if is_multi_v2 else None,
+        episode_idx if is_multi_v2 else None,                              
     )
     sampled_positions = None
     if is_multi_v2:

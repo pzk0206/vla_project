@@ -64,8 +64,14 @@ def validate_checkpoint_dataset_binding(metadata, dataset_dir):
     dataset_dir = Path(dataset_dir)
     if metadata.get("dataset_schema_version") != "expert_multi_v2":
         raise ValueError("checkpoint is not bound to expert_multi_v2")
-    if metadata.get("split_schema_version") != "episode_split_v2":
-        raise ValueError("checkpoint is not bound to episode_split_v2")
+    if metadata.get("split_schema_version") not in {
+        "episode_split_v2",
+        "episode_split_v3",
+    }:
+        raise ValueError(
+            "checkpoint is not bound to a supported episode split "
+            "(v2 or paired v3)"
+        )
     for key, file_name in _DATASET_FILES.items():
         path = dataset_dir / file_name
         if not path.is_file():
@@ -158,9 +164,20 @@ def _load_vla_model(*_args, **_kwargs):
 def load_validation_summaries(dataset_dir, max_episodes=None):
     dataset_dir = Path(dataset_dir)
     split_doc = json.loads((dataset_dir / "episode_split.json").read_text())
-    val_ids = split_doc.get("val")
-    if not isinstance(val_ids, list) or len(val_ids) != 50:
-        raise ValueError("deterministic rollout requires exactly 50 val episodes")
+    strat = split_doc.get("stratification", {})
+    paired = strat.get("paired")
+    if paired is not None:
+        # 成对数据：反事实以 50 个 val 场景为单位（原始轨迹），每个场景
+        # 再分别执行红/蓝指令分支。补录伴侣不重复评估，避免场景重复。
+        val_ids = paired.get("scene_val")
+        if not isinstance(val_ids, list) or len(val_ids) != 50:
+            raise ValueError(
+                "paired rollout requires exactly 50 val scenes"
+            )
+    else:
+        val_ids = split_doc.get("val")
+        if not isinstance(val_ids, list) or len(val_ids) != 50:
+            raise ValueError("deterministic rollout requires exactly 50 val episodes")
     by_id = {}
     with (dataset_dir / "episode_summary.jsonl").open(encoding="utf-8") as handle:
         for line in handle:
@@ -335,7 +352,9 @@ def run_saved_scene_branch(
             image = capture_rgb(config["camera"], scene_spec["camera_eye"])
             image_tensor = _preprocess_image(image).to(device)
             with torch.no_grad():
-                action_pred, aux_pred = model(image_tensor, text_embedding)
+                action_pred, aux_pred, _color_logits = model(
+                    image_tensor, text_embedding
+                )
             normalized_action = action_pred[0].detach().cpu().numpy()
             joint_targets = normalized_action * action_std + action_mean
             terminate_score = float(torch.sigmoid(aux_pred[0, 1]).item())

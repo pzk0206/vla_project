@@ -24,6 +24,7 @@ _NUM_Y_BINS = 5
 _SPLIT_SEED = 42
 _V1_SCHEMA_VERSION = "episode_split_v1"
 _V2_SCHEMA_VERSION = "episode_split_v2"
+_V3_SCHEMA_VERSION = "episode_split_v3"
 
 
 def _compute_quantile_edges(values, num_bins):
@@ -45,8 +46,11 @@ def _assign_bin(value, edges):
     return len(edges) - 2
 
 
-def _read_episode_summaries(episode_summary_path):
-    """读取 episode_summary.jsonl，返回 list[dict]（按 episode_idx 排序）。"""
+def _read_episode_summaries(episode_summary_path, expected_count=300):
+    """读取 episode_summary.jsonl，返回 list[dict]（按 episode_idx 排序）。
+
+    expected_count：v1/v2 单任务数据为 300；成对数据为 600。
+    """
     rows = []
     with open(episode_summary_path, encoding="utf-8") as fh:
         for line in fh:
@@ -55,11 +59,11 @@ def _read_episode_summaries(episode_summary_path):
                 continue
             rows.append(json.loads(line))
     # 校验
-    if len(rows) != 300:
-        raise ValueError(f"预期 300 条 episode 摘要，实际 {len(rows)} 条")
+    if len(rows) != expected_count:
+        raise ValueError(f"预期 {expected_count} 条 episode 摘要，实际 {len(rows)} 条")
     episode_indices = {r["episode_idx"] for r in rows}
-    if episode_indices != set(range(300)):
-        missing = sorted(set(range(300)) - episode_indices)
+    if episode_indices != set(range(expected_count)):
+        missing = sorted(set(range(expected_count)) - episode_indices)
         if missing:
             raise ValueError(f"缺失 episode: {missing}")
     rows.sort(key=lambda r: r["episode_idx"])
@@ -253,7 +257,82 @@ def _stratified_split_v2(rows):
     return {"train": train, "val": val, "per_task_edges": per_task_edges}
 
 
-def _stratified_split(rows):
+def _detect_paired_dataset(rows):
+    """成对数据：补录轨迹带 is_paired_copy=True / paired_with 字段。"""
+    return any(row.get("is_paired_copy") is True for row in rows)
+
+
+def _group_paired_scenes(rows):
+    """把成对数据按场景分组：以非补录轨迹为场景锚点，补录轨迹归入伴侣场景。
+
+    返回 (scenes, paired_map)：
+    - scenes: list[dict]，每个是原始（非补录）轨迹，作为场景代表。
+    - paired_map: dict[原始 episode_idx -> list[补录 row]]。
+    """
+    original = [row for row in rows if row.get("is_paired_copy") is not True]
+    paired = [row for row in rows if row.get("is_paired_copy") is True]
+    paired_map = {}
+    for row in paired:
+        anchor = row.get("paired_with")
+        if anchor is None:
+            raise ValueError(f"补录轨迹缺少 paired_with: episode {row['episode_idx']}")
+        paired_map.setdefault(anchor, []).append(row)
+    return original, paired_map
+
+
+def _stratified_split_paired(rows):
+    """成对数据（600 条）以场景对为单位分层。
+
+    对 300 个原始场景按目标块位置做 5×5 箱分层（红蓝各 150 → 125/25），
+    再把每个场景的补录伴侣放入同一 split，保证「同场景双指令」不跨划分。
+    返回的 train/val 各含 500/100 条（含补录）。
+    """
+    original, paired_map = _group_paired_scenes(rows)
+    if len(original) != 300:
+        raise ValueError(f"成对数据必须包含 300 个原始场景，实际 {len(original)}")
+    if {color: sum(1 for r in original if r["target_block"] == color) for color in ("red", "blue")} != {
+        "red": 150,
+        "blue": 150,
+    }:
+        raise ValueError("成对数据原始场景必须红蓝各 150")
+
+    # 复用 v2 的按目标块位置分层逻辑，得到场景级 train/val
+    scene_result = _stratified_split_v2(original)
+    scene_train = scene_result["train"]
+    scene_val = scene_result["val"]
+
+    train = []
+    val = []
+    for scene_index in scene_train:
+        train.append(scene_index)
+        train.extend(row["episode_idx"] for row in paired_map.get(scene_index, []))
+    for scene_index in scene_val:
+        val.append(scene_index)
+        val.extend(row["episode_idx"] for row in paired_map.get(scene_index, []))
+
+    # 校验：所有补录都归入了 train 或 val
+    all_episodes = {row["episode_idx"] for row in rows}
+    split_episodes = set(train) | set(val)
+    if all_episodes != split_episodes or set(train) & set(val):
+        raise AssertionError("成对分层未严格覆盖且未重叠")
+
+    train.sort()
+    val.sort()
+    if len(train) != 500 or len(val) != 100:
+        raise AssertionError(f"paired split size invalid: train={len(train)} val={len(val)}")
+    # 每场景补录伴侣应与场景同 split（已由上述归组保证）
+    return {
+        "train": train,
+        "val": val,
+        "per_task_edges": scene_result["per_task_edges"],
+        "scene_train": scene_train,
+        "scene_val": scene_val,
+    }
+
+
+def _stratified_split(rows, is_paired=False):
+    if is_paired:
+        return _stratified_split_paired(rows)
     if rows and rows[0].get("schema_version") == "expert_multi_v2":
         return _stratified_split_v2(rows)
     return _stratified_split_v1(rows)
@@ -271,12 +350,19 @@ def run_split(dataset_dir):
     if not summary_path.is_file():
         raise FileNotFoundError(f"找不到 episode 摘要: {summary_path}")
 
-    rows = _read_episode_summaries(summary_path)
-    result = _stratified_split(rows)
-    is_multi_v2 = rows[0].get("schema_version") == "expert_multi_v2"
     manifest_path = dataset_dir / "dataset_manifest.json"
-    if is_multi_v2 and not manifest_path.is_file():
+    if not manifest_path.is_file():
         raise FileNotFoundError(f"找不到数据 manifest: {manifest_path}")
+    with manifest_path.open("r", encoding="utf-8") as manifest_handle:
+        manifest = json.load(manifest_handle)
+
+    # 成对数据 manifest 由 collect_paired 写入 paired_source_dir，目标规模翻倍。
+    is_paired = bool(manifest.get("paired_source_dir"))
+    expected_count = 600 if is_paired else 300
+    rows = _read_episode_summaries(summary_path, expected_count=expected_count)
+    is_paired = is_paired or _detect_paired_dataset(rows)
+    result = _stratified_split(rows, is_paired=is_paired)
+    is_multi_v2 = rows[0].get("schema_version") == "expert_multi_v2"
 
     if is_multi_v2:
         by_id = {row["episode_idx"]: row for row in rows}
@@ -291,7 +377,11 @@ def run_split(dataset_dir):
             for split_name in ("train", "val")
         }
         stratification = {
-            "method": "target_block_then_quantile_5_bin_xy",
+            "method": (
+                "paired_scene_then_target_block_then_quantile_5_bin_xy"
+                if is_paired
+                else "target_block_then_quantile_5_bin_xy"
+            ),
             "fields": [
                 "target_block",
                 "initial_scene_state.blocks[target_block].position.x/y",
@@ -304,6 +394,11 @@ def run_split(dataset_dir):
                 for color in ("red", "blue")
             },
         }
+        if is_paired:
+            stratification["paired"] = {
+                "scene_train": result["scene_train"],
+                "scene_val": result["scene_val"],
+            }
     else:
         task_counts = None
         stratification = {
@@ -314,8 +409,16 @@ def run_split(dataset_dir):
         }
 
     split_doc = {
-        "schema_version": _V2_SCHEMA_VERSION if is_multi_v2 else _V1_SCHEMA_VERSION,
-        "generator_version": "split_episodes_v2" if is_multi_v2 else "split_episodes_v1",
+        "schema_version": (
+            _V3_SCHEMA_VERSION
+            if is_paired
+            else (_V2_SCHEMA_VERSION if is_multi_v2 else _V1_SCHEMA_VERSION)
+        ),
+        "generator_version": (
+            "split_episodes_v3"
+            if is_paired
+            else ("split_episodes_v2" if is_multi_v2 else "split_episodes_v1")
+        ),
         "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "dataset_dir": str(dataset_dir),
         "split_seed": _SPLIT_SEED,

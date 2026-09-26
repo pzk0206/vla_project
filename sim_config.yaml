@@ -77,27 +77,30 @@ task:
   stuck_window_steps: 120            # 最近多少个 step 用来判断机械臂是否卡住。
   stuck_min_improvement: 0.0005      # 在窗口期内如果总改善小于该值，就认为基本没有继续靠近目标。
 
+  # 双积木配对采样：红蓝两块从同一范围联合采样，保证不重叠、可区分。
   pair_sampling:
-    enabled: true
-    x_range: [-0.2, 0.2]
-    y_range: [0.38, 0.5]
-    z: 0.1
-    min_axis_separation_xy: 0.12
-    max_attempts: 100
-    max_settle_drift_xy: 0.005
-    max_episode_drift_xy: 0.005
+    enabled: true                    # true 启用配对采样；false 回退到各块独立范围。
+    x_range: [-0.2, 0.2]             # 红蓝两块共用的 x 轴随机范围。
+    y_range: [0.38, 0.5]             # 红蓝两块共用的 y 轴随机范围。
+    z: 0.1                           # 积木初始高度，与 task.block_position.z 一致。
+    min_axis_separation_xy: 0.12     # 红蓝在 x 或 y 轴至少相隔 12cm，避免重叠分不清。
+    max_attempts: 100                # 联合采样最多重试次数；试不出分离对则报错。
+    max_settle_drift_xy: 0.005       # 积木落地稳定后 xy 漂移上限（5mm），超限重采。
+    max_episode_drift_xy: 0.005      # 整个 episode 期间积木 xy 漂移上限，防止滑走。
 
+  # 第二目标物（蓝块）：与红块成对出现，让红/蓝指令指向不同位置。
   second_block:
-    enabled: true
-    color_rgba: [0, 0, 1, 1]
-    x_range: [0.05, 0.2]
-    y_range: [0.40, 0.50]
-    z: 0.1
-    global_scaling: 0.1
+    enabled: true                    # true 加载蓝色积木，形成双积木场景。
+    color_rgba: [0, 0, 1, 1]         # 纯蓝色，对照红块 [1,0,0,1]。
+    x_range: [0.05, 0.2]             # 蓝块 x 范围；pair_sampling 开启时由配对采样决定。
+    y_range: [0.40, 0.50]            # 蓝块 y 范围；独立采样时的兜底范围。
+    z: 0.1                           # 蓝块初始高度。
+    global_scaling: 0.1              # 蓝块缩放，与红块一致保持视觉对称。
 
+  # 任务清单：每条 episode 从红/蓝两个任务中确定性二选一，保证红蓝数量平衡。
   tasks:
-    - instruction: "悬停在红色积木上方"
-      target_block: "red"
+    - instruction: "悬停在红色积木上方"   # 中文指令文本。
+      target_block: "red"                # 该指令对应的目标块颜色。
     - instruction: "悬停在蓝色积木上方"
       target_block: "blue"
 
@@ -225,6 +228,14 @@ grounding_smoke:
     seed_range: [55, 100]            # 与既有校准、验证及首轮失败 seeds 隔离。
     directions: ["left", "right", "front"]
     max_pose_error: 0.005            # 起点姿态误差最多允许 5mm。
+
+# —— 成对数据补录 ——
+# 对 expert_multi_v2 每条冻结场景补录反色指令专家轨迹，得到「同场景双指令」数据，
+# 让 VLA 训练时被迫利用语言区分红/蓝。schema 仍写 expert_multi_v2（可复用全部悬停契约校验）。
+paired_dataset:
+  source_dir: "outputs/dataset/expert_multi_v2"
+  output_dir: "outputs/dataset/expert_paired_v1"
+  paired_offset: 300                # 补录轨迹 episode_idx 从该值起（source 300 条后）。
 
 # —— BC 训练 ——
 training:

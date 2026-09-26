@@ -269,9 +269,23 @@ class VLADataset(Dataset):
         terminate = np.float32(action[8])
 
         q_norm = (q_target - self._action_mean) / (self._action_std + 1e-8)
+        # P1：目标色标签（0=red, 1=blue），来自 scene_state.target_block。
+        # _validate_vla_v2_rows 已保证该字段与 instruction 一致，训练时强制
+        # 模型利用语言区分红/蓝。
+        target_block = row.get("scene_state", {}).get("target_block")
+        if target_block == "red":
+            color_label = 0
+        elif target_block == "blue":
+            color_label = 1
+        else:
+            raise ValueError(
+                f"unexpected target_block: {target_block!r} "
+                f"(episode={row.get('episode_idx')} step={row.get('step_idx')})"
+            )
         return (
             image_tensor,
             instruction,
             torch.from_numpy(q_norm).float(),
             torch.tensor([gripper, terminate], dtype=torch.float32),
+            torch.tensor(color_label, dtype=torch.long),
         )

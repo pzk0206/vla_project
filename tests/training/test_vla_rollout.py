@@ -63,6 +63,34 @@ class CheckpointBindingTests(unittest.TestCase):
         self.assertEqual(mean.tolist(), [0.0] * 7)
         self.assertEqual(std.tolist(), [1.0] * 7)
 
+    def test_accepts_paired_v3_split_schema(self):
+        """成对数据 checkpoint 绑定 episode_split_v3，校验必须放行。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            files = {
+                "dataset_manifest.json": b"manifest\n",
+                "trajectory_expert.jsonl": b"trajectory\n",
+                "episode_summary.jsonl": b"summary\n",
+                "episode_split.json": b"split\n",
+            }
+            for name, content in files.items():
+                (root / name).write_bytes(content)
+            metadata = {
+                "dataset_schema_version": "expert_multi_v2",
+                "split_schema_version": "episode_split_v3",
+                "action_stats": {"mean": [0.0] * 7, "std": [1.0] * 7},
+                **{
+                    f"{name.replace('.jsonl', '').replace('.json', '')}_sha256":
+                    hashlib.sha256(content).hexdigest()
+                    for name, content in files.items()
+                },
+            }
+
+            mean, std = vla_rollout.validate_checkpoint_dataset_binding(metadata, root)
+
+        self.assertEqual(mean.tolist(), [0.0] * 7)
+        self.assertEqual(std.tolist(), [1.0] * 7)
+
 
 class SavedSceneSpecTests(unittest.TestCase):
     def test_extracts_only_saved_scene_pose_robot_and_camera(self):

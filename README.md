@@ -9,7 +9,7 @@
 | 路线 | 关键指标 | 说明 |
 |------|---------|------|
 | BC 行为克隆 | **92%** rollout 成功率（46/50） | ResNet-18 + 连续回归，对比 regression / absolute_q_32 / delta_q_64 |
-| VLA 端到端 | 反事实 0/50，编码器故障已定位 | ResNet-18 + 多语言 MiniLM（~129M），旧英文 MiniLM 无法区分中文红/蓝 |
+| VLA 端到端 | **74%** 成对指令跟随（37/50） | ResNet-18 + 多语言 MiniLM（~129M），成对数据逼模型用语言 |
 | VLM 模块化 | **3/3** 任务到达，**19/20** 定位 ≤3cm | Qwen3-VL-Flash + 相机反投影 + 冻结 XY 补偿 + IK 控制器 |
 
 详细结果与审计链见下方各节。
@@ -132,12 +132,17 @@ vla-rollout --checkpoint outputs/training/bc_regression_full_v1/checkpoint_best.
 
 ResNet-18 + 多语言 MiniLM 后融合，输入 RGB + 中文指令，输出 7 维关节目标（~129M 参数）。
 
-**成对反事实评估**：对每个验证 episode 恢复相同 seed、积木位姿和机器人状态（重放误差 = 0），分别用红/蓝指令执行。50 对结果：
-- 指令跟随：0/50
-- 偏好切换：0/50
-- 红/蓝单分支成功：11/50 和 12/50
+**成对反事实评估**：对每个验证 episode 恢复相同 seed、积木位姿和机器人状态（重放误差 = 0），分别用红/蓝指令执行。
 
-**根因定位**：旧 `all-MiniLM-L6-v2` 是纯英文模型，将"红色"/"蓝色"都映射为 `[UNK]`（token IDs 相同，embedding L2 = 0）。已切换为 `paraphrase-multilingual-MiniLM-L12-v2` 并增加训练前区分度门禁（L2 = 2.82），但后融合模型仍未有效利用语言信号。后续规划 Qwen2-VL QLoRA。
+- 早期（`all-MiniLM-L6-v2` 英文模型）：指令跟随 0/50、偏好切换 0/50、红/蓝单分支 11/50 和 12/50。
+- 修复后（multilingual MiniLM + 成对数据）：**指令跟随 37/50（74%）、偏好切换 50/50（100%）、红 82% / 蓝 90%**，`supports_red_blue_instruction_recognition = true`。
+
+**根因定位与修复**（两层问题，分别修）：
+
+1. **编码层**：旧 `all-MiniLM-L6-v2` 是纯英文模型，将"红色"/"蓝色"都映射为 `[UNK]`（token IDs 相同，embedding L2 = 0）。→ 换成 `paraphrase-multilingual-MiniLM-L12-v2` + 训练前区分度门禁。
+2. **数据层**：红/蓝指令出现在不同随机场景，模型可只靠视觉布局得分、语言成噪声。→ 用成对数据（`expert_paired_v1`：同场景反色指令 600 条）堵死捷径，逼模型用语言。
+
+后续规划：分拣环境（expert_sort_v1）与 Qwen2-VL QLoRA。
 
 ```bash
 vla-train --dataset-dir outputs/dataset/expert_multi_v2

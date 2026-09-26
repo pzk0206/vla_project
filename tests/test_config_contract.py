@@ -237,6 +237,21 @@ class ConfigContractTests(unittest.TestCase):
         evaluation = self.config["vlm_evaluation"]
         self.assertGreater(evaluation["balanced_pose_offset_xy"], 0)
 
+    def test_paired_dataset_config_is_frozen_and_safe(self):
+        """成对补录必须锁定源目录、输出目录和映射起点。"""
+        paired = self.config["paired_dataset"]
+        self.assertEqual(
+            paired["source_dir"],
+            "outputs/dataset/expert_multi_v2",
+        )
+        self.assertEqual(
+            paired["output_dir"],
+            "outputs/dataset/expert_paired_v1",
+        )
+        self.assertEqual(paired["paired_offset"], 300)
+        self.assertTrue(str(paired["output_dir"]).startswith("outputs/dataset/"))
+        self.assertGreater(paired["paired_offset"], 0)
+
 
 if __name__ == "__main__":
     # 既支持测试发现，也支持直接执行：python tests/test_config_contract.py

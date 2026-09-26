@@ -14,6 +14,7 @@ vla-audit-dataset-visibility = "vla_project.simulation.audit_dataset_visibility:
 vla-render-expert-dataset-view = "vla_project.simulation.render_expert_dataset_view:main"
 vla-evaluate-dataset = "vla_project.simulation.evaluate_dataset:main"
 vla-split-episodes = "vla_project.simulation.split_episodes:main"
+vla-collect-paired = "vla_project.simulation.collect_paired:main"
 vla-probe = "vla_project.simulation.stage3_probe:main"
 vla-evaluate-probe = "vla_project.simulation.evaluate_probe:main"
 vla-collect-vlm-samples = "vla_project.vlm.collect_vlm_eval_samples:main"
